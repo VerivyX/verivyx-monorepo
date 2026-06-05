@@ -1,0 +1,290 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-paywall_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${POSTGRES_DB:-paywall_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paywall_user} -d ${POSTGRES_DB:-paywall_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    command: >
+      sh -c "redis-server /usr/local/etc/redis/redis.conf
+      ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    volumes:
+      - ./services/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  auth-service:
+    image: paywall-ai-auth-service:local
+    build:
+      context: ./services/auth-service
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-paywall_db}?schema=public
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET is required}
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      - POW_DIFFICULTY=${POW_DIFFICULTY:-18}
+      - POW_SALT=${POW_SALT:?POW_SALT is required}
+      - POW_MIN_SOLVE_MS=${POW_MIN_SOLVE_MS:-50}
+      - BCRYPT_ROUNDS=${BCRYPT_ROUNDS:-12}
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - PORT=8083
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - PLATFORM_STELLAR_ADDRESS=${PLATFORM_STELLAR_ADDRESS:?PLATFORM_STELLAR_ADDRESS is required}
+      - PAYMENT_RELAYER_URL=${PAYMENT_RELAYER_URL:-http://payment-relayer:8084}
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp-server:8088}
+      # Login/register captcha (same Turnstile widget as the playground). Empty → dev bypass.
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      # Resend transactional email for verification links. Empty key → link logged to stdout (dev).
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - RESEND_FROM=${RESEND_FROM:-Verivyx <noreply@verivyx.com>}
+      # Reply-to a real inbox (deliverability). Empty → falls back to ADMIN_EMAIL.
+      - RESEND_REPLY_TO=${RESEND_REPLY_TO:-}
+      # Public base URL (frontend) used to build the email verification link.
+      - APP_BASE_URL=${APP_BASE_URL:-${PUBLIC_DOMAIN:?PUBLIC_DOMAIN or APP_BASE_URL is required}}
+    ports:
+      - "127.0.0.1:8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.50'
+
+  x402-gateway:
+    image: paywall-ai-x402-gateway:local
+    build:
+      context: ./services/x402-gateway
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - AUTH_SERVICE_URL=http://auth-service:8083
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      # Public API host advertised to X402 clients in /requirements (hydrate URL).
+      - API_PUBLIC_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
+      - STELLAR_NETWORK=${STELLAR_NETWORK:-testnet}
+      - FACILITATOR_MODE=${FACILITATOR_MODE:-proxy}
+      - FACILITATOR_URL=http://payment-relayer:8084
+      - FACILITATOR_API_KEY=${FACILITATOR_API_KEY:-}
+      - ALLOW_STUB_MODE=${ALLOW_STUB_MODE:-false}
+      - GIN_MODE=${GIN_MODE:-release}
+      - USDC_CONTRACT_ID=${USDC_CONTRACT_ID:-CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA}
+      - USDC_ISSUER=${USDC_ISSUER:-}
+      - SOROBAN_PAYWALL_CONTRACT_ID=${SOROBAN_PAYWALL_CONTRACT_ID:-}
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.50'
+
+  payment-relayer:
+    image: paywall-ai-payment-relayer:local
+    build:
+      context: ./services/payment-relayer
+    environment:
+      - STELLAR_NETWORK=${STELLAR_NETWORK:-testnet}
+      - PORT=8084
+      - NODE_ENV=production
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      - HORIZON_URL=${HORIZON_URL:-}
+      - SOROBAN_URL=${SOROBAN_URL:-}
+      - USDC_ISSUER=${USDC_ISSUER:-}
+      - FACILITATOR_STELLAR_SECRET=${FACILITATOR_STELLAR_SECRET:-}
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  hydration-service:
+    image: paywall-ai-hydration-service:local
+    build:
+      context: ./services/hydration-service
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:8083
+      - GATEWAY_URL=http://x402-gateway:8081
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET is required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - GIN_MODE=${GIN_MODE:-release}
+    ports:
+      - "127.0.0.1:8082:8082"
+    depends_on:
+      - auth-service
+      - x402-gateway
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.50'
+
+  edge-embed:
+    image: paywall-ai-edge-embed:local
+    build:
+      context: ./services/embed-script
+    ports:
+      - "127.0.0.1:8085:80"
+    networks:
+      - paywall_net
+    restart: unless-stopped
+
+  # Frontend (Next.js). Served at verivyx.com; talks to the backend over the
+  # public API host, so it can run on its own host in production.
+  dashboard-ui:
+    image: verivyx-web:local
+    build:
+      context: ./web
+      args:
+        # All API calls and the embed script are served from the backend API host.
+        - NEXT_PUBLIC_API_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
+        - NEXT_PUBLIC_EMBED_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
+        # Turnstile site key (public, browser-safe) for the /playground gate.
+        - NEXT_PUBLIC_TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+        # Playground API origin. Empty → same-origin (nginx proxies /api/v1/playground/*).
+        - NEXT_PUBLIC_PLAYGROUND_API=${PLAYGROUND_PUBLIC_API:-}
+    environment:
+      - NEXT_PUBLIC_API_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
+      - NEXT_PUBLIC_EMBED_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.50'
+
+  playground-agent:
+    image: paywall-ai-playground-agent:local
+    build:
+      context: ./services/playground-agent
+    environment:
+      - PORT=8087
+      - NODE_ENV=production
+      - STELLAR_NETWORK=${STELLAR_NETWORK:-testnet}
+      - STELLAR_RPC_URL=${STELLAR_RPC_URL:-}
+      - HORIZON_URL=${HORIZON_URL:-}
+      - USDC_ISSUER=${USDC_ISSUER:-}
+      - HYDRATION_URL=http://hydration-service:8082
+      - MCP_SERVER_URL=${MCP_SERVER_URL_PLAYGROUND:-http://mcp-server:8088/mcp}
+      - MCP_API_KEYS=${MCP_API_KEYS:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-oss-120b:free}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      - PLAYGROUND_FAUCET_SECRET=${PLAYGROUND_FAUCET_SECRET:?PLAYGROUND_FAUCET_SECRET is required}
+      - PLAYGROUND_FAUCET_USDC_PER_WALLET=${PLAYGROUND_FAUCET_USDC_PER_WALLET:-0.5}
+      - PLAYGROUND_FAUCET_DAILY_CAP=${PLAYGROUND_FAUCET_DAILY_CAP:-50}
+      - PLAYGROUND_DEMO_DOMAIN=${PLAYGROUND_DEMO_DOMAIN:-playground.verivyx.com}
+      - PLAYGROUND_DEMO_SLUG=${PLAYGROUND_DEMO_SLUG:-article}
+      - PLAYGROUND_POOL_SIZE=${PLAYGROUND_POOL_SIZE:-6}
+      - PLAYGROUND_MAX_SESSIONS=${PLAYGROUND_MAX_SESSIONS:-10}
+      - PLAYGROUND_SESSION_TTL_MIN=${PLAYGROUND_SESSION_TTL_MIN:-15}
+      - ALLOWED_PAYMENT_PREFIXES=${ALLOWED_PAYMENT_PREFIXES:-http://playground-agent:8087/api/v1/playground/demo,http://127.0.0.1:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo}
+    ports:
+      - "127.0.0.1:8087:8087"
+    depends_on:
+      - x402-gateway
+      - hydration-service
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+          cpus: '1.0'
+
+  mcp-server:
+    image: paywall-ai-mcp-server:local
+    build:
+      context: ./services/mcp-server
+    environment:
+      - MCP_PORT=8088
+      - NODE_ENV=production
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      - MCP_API_KEYS=${MCP_API_KEYS:-}
+      - MCP_FEE_USDC=${MCP_FEE_USDC:-0.001}
+      - MCP_STELLAR_SECRET=${MCP_STELLAR_SECRET:?MCP_STELLAR_SECRET is required}
+      - MCP_FEE_TREASURY_STELLAR=${MCP_FEE_TREASURY_STELLAR:-}
+      - PLATFORM_STELLAR_ADDRESS=${PLATFORM_STELLAR_ADDRESS:?PLATFORM_STELLAR_ADDRESS is required}
+      - MCP_MAINNET_ENABLED=${MCP_MAINNET_ENABLED:-false}
+      - MCP_ALLOWED_PAYMENT_PREFIXES=${MCP_ALLOWED_PAYMENT_PREFIXES:-}
+      - MCP_EVM_PRIVATE_KEY=${MCP_EVM_PRIVATE_KEY:-}
+      - EVM_NETWORK=${EVM_NETWORK:-base-sepolia}
+      - MCP_FEE_TREASURY_EVM=${MCP_FEE_TREASURY_EVM:-}
+      - EVM_RPC_URL=${EVM_RPC_URL:-}
+      - EVM_USDC_ADDRESS=${EVM_USDC_ADDRESS:-}
+      - MCP_SOLANA_SECRET=${MCP_SOLANA_SECRET:-}
+      - SOLANA_NETWORK=${SOLANA_NETWORK:-devnet}
+      - MCP_FEE_TREASURY_SOLANA=${MCP_FEE_TREASURY_SOLANA:-}
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
+      - SOLANA_USDC_MINT=${SOLANA_USDC_MINT:-}
+      - STELLAR_NETWORK=${STELLAR_NETWORK:-testnet}
+      - STELLAR_RPC_URL=${STELLAR_RPC_URL:-}
+      - HORIZON_URL=${HORIZON_URL:-}
+      - USDC_ISSUER=${USDC_ISSUER:-}
+      - USDC_CONTRACT_ID=${USDC_CONTRACT_ID:-}
+      - X402_FACILITATOR_URL=${X402_FACILITATOR_URL:-}
+      - X402_FACILITATOR_API_KEY=${X402_FACILITATOR_API_KEY:-}
+    ports:
+      - "127.0.0.1:8088:8088"
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+volumes:
+  postgres_data:
+
+networks:
+  paywall_net:
+    driver: bridge

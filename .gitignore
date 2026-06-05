@@ -1,0 +1,43 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+**/mcp-wallets.txt
+**/.faucet-secret
+*.bak
+*.bak.*
+
+# internal docs & notes — only READMEs are published
+# (note: web/src/app/docs is app route code, not markdown — only root /docs/ is ignored)
+*.md
+!README.md
+!**/README.md
+/docs/
+*.pdf
+
+# build artifacts
+node_modules/
+**/node_modules/
+**/dist/
+**/.next/
+**/out/
+**/target/
+**/*.tsbuildinfo
+web/next-env.d.ts
+services/x402-gateway/x402-gateway
+services/x402-gateway/gateway
+services/hydration-service/hydration-service
+services/hydration-service/hydration
+
+# docker volumes
+postgres_data/
+clickhouse_data/
+
+# dev test scaffolding — not published
+**/harness/
+**/seed-test.*
+scripts/test-*
+
+# OS
+.DS_Store
+Thumbs.db

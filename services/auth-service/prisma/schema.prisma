@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CREATOR
+}
+
+model User {
+  id              Int        @id @default(autoincrement())
+  email           String     @unique
+  password        String
+  // Wallet + domain are collected during onboarding AFTER email verification,
+  // so they are nullable until the creator completes the setup wizard.
+  stellar_address String?
+  domain          String?    @unique
+  emailVerified   Boolean    @default(false)
+  apiKey          String?    @unique @default(uuid())
+  pricePerRequest Decimal    @default(0.005)
+  platformFee     Decimal?   @default(0.001) // Your revenue cut per request
+  paywallEnabled  Boolean    @default(true)
+  role            Role       @default(CREATOR)
+  createdAt       DateTime   @default(now())
+  events          Event[]
+  contents        Content[]
+  adminLogs       AdminLog[]
+  emailTokens     EmailToken[]
+}
+
+// Single-use tokens emailed to the creator (email verification, etc.). Only the
+// SHA-256 hash of the token is stored — the raw token lives only in the link.
+model EmailToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  type      String   @default("VERIFY")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Early-access waitlist for the Verivyx x402 MCP (mcp.verivyx.com).
+model McpWaitlist {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  source    String   @default("mcp-coming-soon")
+  invited   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Content {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug      String
+  title     String?
+  body      String
+  mimeType  String   @default("text/html")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, slug])
+  @@index([userId])
+  @@index([slug])
+}
+
+model Event {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          String
+  agent         String?
+  category      String?
+  amountUsdc    Decimal  @default(0)
+  sessionId     String?
+  txHash        String?
+  // On-chain proof — Soroban x402 path. txHash above is the USDC transfer to the
+  // paywall contract; distributeTransaction is the contract.distribute() split tx.
+  distributeTransaction String?
+  // Actual split recorded per transaction (creatorAmount = price - platformFee).
+  creatorAmountUsdc  Decimal?
+  platformAmountUsdc Decimal?
+  network       String?
+  asset         String?
+  payer         String?
+  status        String?
+  ip            String?
+  powDurationMs Int?
+  ja4           String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, agent])
+}
+
+model AdminLog {
+  id        Int      @id @default(autoincrement())
+  adminId   Int
+  admin     User     @relation(fields: [adminId], references: [id])
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([createdAt])
+}

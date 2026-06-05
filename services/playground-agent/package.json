@@ -1,0 +1,29 @@
+{
+  "name": "playground-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Verivyx x402 playground — sandboxed AI agent (OpenRouter) that pays a demo paywall via the MCP server.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@stellar/stellar-sdk": "^14.6.1",
+    "@x402/core": "^2.5.0",
+    "@x402/fetch": "^2.5.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.5.0",
+    "express": "^5.2.1",
+    "pino": "^9.5.0",
+    "tsx": "^4.20.6",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.3"
+  }
+}

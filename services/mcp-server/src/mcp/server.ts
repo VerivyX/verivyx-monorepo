@@ -1,0 +1,93 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+import { getConfig } from "../config.js";
+import type { PaymentService } from "../chains/payments.js";
+import { logger } from "../logger.js";
+
+const fetchInputShape = {
+  url: z.string().url().describe("Full URL of the x402-protected resource to fetch"),
+  method: z.enum(["GET", "POST"]).default("GET").describe("HTTP method"),
+  body: z.string().optional().describe("Optional raw body for POST requests"),
+  headers: z.record(z.string()).optional().describe("Optional additional HTTP headers"),
+};
+
+function asText(payload: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+}
+
+function asError(message: string) {
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify({ error: message }, null, 2) }],
+  };
+}
+
+/** Build a fresh McpServer wired to the shared multi-chain payment service. */
+export function buildMcpServer(payments: PaymentService): McpServer {
+  const cfg = getConfig();
+  const server = new McpServer({ name: "verivyx-x402-mcp", version: "0.1.0" });
+
+  server.registerTool(
+    "list_supported_chains",
+    {
+      title: "List supported chains",
+      description: "List the chains/assets this Verivyx MCP can pay on, plus the flat service fee.",
+      inputSchema: {},
+    },
+    async () => asText({ serviceFee: cfg.feeUsdc, chains: payments.supportedChains() }),
+  );
+
+  server.registerTool(
+    "wallet_info",
+    {
+      title: "Wallet info",
+      description: "Show the active paying wallet(s) and network configuration for each chain.",
+      inputSchema: {},
+    },
+    async () => asText(payments.info()),
+  );
+
+  server.registerTool(
+    "quote_payment",
+    {
+      title: "Quote payment",
+      description:
+        "Preview the cost to fetch an x402 resource (resource price + Verivyx service fee) WITHOUT paying.",
+      inputSchema: fetchInputShape,
+    },
+    async ({ url, method, body, headers }) => {
+      try {
+        return asText(await payments.quote({ url, method, body, headers }));
+      } catch (error) {
+        logger.warn({ err: String(error) }, "quote_payment failed");
+        return asError(error instanceof Error ? error.message : "quote failed");
+      }
+    },
+  );
+
+  server.registerTool(
+    "pay_for_resource",
+    {
+      title: "Pay for resource",
+      description:
+        "Fetch an x402-protected URL and automatically pay the required micropayment (plus the flat Verivyx service fee). Auto-selects the chain the resource advertises. Returns the content and a payment receipt.",
+      inputSchema: fetchInputShape,
+    },
+    async ({ url, method, body, headers }) => {
+      try {
+        const result = await payments.pay({ url, method, body, headers });
+        logger.info(
+          { url, status: result.status, paymentMade: result.paymentMade, chain: result.chain },
+          "pay_for_resource",
+        );
+        return asText(result);
+      } catch (error) {
+        logger.warn({ err: String(error), url }, "pay_for_resource failed");
+        return asError(error instanceof Error ? error.message : "payment failed");
+      }
+    },
+  );
+
+  return server;
+}
