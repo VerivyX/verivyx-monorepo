@@ -27,7 +27,9 @@ class Verivyx_Gate {
         // Cookie fallback: embed script may set vx_session cookie after PoW so
         // the plugin can verify returning human sessions server-side.
         if (!$bearer) {
-            $cookie_token = isset($_COOKIE['vx_session']) ? (string) $_COOKIE['vx_session'] : '';
+            $cookie_token = isset($_COOKIE['vx_session'])
+                ? sanitize_text_field(wp_unslash($_COOKIE['vx_session']))
+                : '';
             if ($cookie_token !== '') {
                 $bearer = 'Bearer ' . $cookie_token;
             }
@@ -39,7 +41,12 @@ class Verivyx_Gate {
         // Let the browser load the page so the embed script can run PoW and issue
         // a human session. The embed script handles detection + overlay for bots.
         if (!$x_payment && !$bearer) {
-            if (self::get_header('HTTP_SEC_FETCH_MODE') === 'navigate') {
+            $ua = self::get_header('HTTP_USER_AGENT') ?? '';
+            // Browsers cannot forge Sec-Fetch-Mode from JS, but raw HTTP clients
+            // can. Only let genuine navigation pass through; identifiable agents
+            // must still pay regardless of the header.
+            if (self::get_header('HTTP_SEC_FETCH_MODE') === 'navigate'
+                && !Verivyx_Detect::is_known_agent($ua)) {
                 return;
             }
         }
@@ -154,7 +161,10 @@ class Verivyx_Gate {
      * Safe server variable accessor.
      */
     private static function get_header(string $server_key): ?string {
-        $val = isset($_SERVER[$server_key]) ? (string) $_SERVER[$server_key] : null;
-        return ($val !== null && $val !== '') ? $val : null;
+        if (!isset($_SERVER[$server_key])) {
+            return null;
+        }
+        $val = sanitize_text_field(wp_unslash($_SERVER[$server_key]));
+        return ($val !== '') ? $val : null;
     }
 }
