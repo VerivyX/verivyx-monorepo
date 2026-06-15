@@ -7,7 +7,10 @@ OUT="$SCRIPT_DIR/verivyx-paywall.zip"
 
 cd "$SCRIPT_DIR"
 rm -f "$OUT"
-zip -r "$OUT" verivyx-paywall/ --exclude "*.DS_Store" --exclude "__MACOSX/*"
+zip -r "$OUT" verivyx-paywall/ \
+  --exclude "*.DS_Store" \
+  --exclude "__MACOSX/*" \
+  --exclude "verivyx-paywall/tests/*"
 
 # Keep the dashboard download in sync so creators always get the latest plugin.
 DASHBOARD_PUBLIC="$SCRIPT_DIR/../dashboard-ui/public/verivyx-paywall.zip"
