@@ -16,6 +16,7 @@ define('VERIVYX_PLUGIN_DIR', plugin_dir_path(__FILE__));
 
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-settings.php';
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-api.php';
+require_once VERIVYX_PLUGIN_DIR . 'includes/class-detect.php';
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-gate.php';
 
 // Boot on init — before template_redirect fires
