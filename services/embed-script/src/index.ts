@@ -113,7 +113,8 @@
     // Also set a cookie so the WordPress plugin can verify the session server-side.
     // SameSite=Lax: sent on same-site navigation, not cross-site requests.
     try {
-      document.cookie = `vx_session=${token}; path=/; SameSite=Lax; max-age=${ttlSeconds}`;
+      const secure = location.protocol === 'https:' ? '; Secure' : '';
+      document.cookie = `vx_session=${token}; path=/; SameSite=Lax${secure}; max-age=${ttlSeconds}`;
     } catch {
       /* cookie mungkin diblokir (iframe sandboxed) — tidak fatal */
     }
