@@ -6,7 +6,8 @@
   "description": "Verivyx x402 playground — sandboxed AI agent (OpenRouter) that pays a demo paywall via the MCP server.",
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

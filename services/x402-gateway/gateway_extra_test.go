@@ -1,0 +1,102 @@
+package main
+
+import (
+	"os"
+	"testing"
+)
+
+func TestPaymentSplit(t *testing.T) {
+	// default platform fee (0.001) when PlatformFee is unset
+	if creator, fee := paymentSplit(&DomainConfig{PricePerRequest: 0.005}); creator != 0.004 || fee != 0.001 {
+		t.Errorf("default split = (%v, %v); want (0.004, 0.001)", creator, fee)
+	}
+	// explicit platform fee
+	if creator, fee := paymentSplit(&DomainConfig{PricePerRequest: 0.01, PlatformFee: 0.002}); creator != 0.008 || fee != 0.002 {
+		t.Errorf("explicit split = (%v, %v); want (0.008, 0.002)", creator, fee)
+	}
+	// price below fee → creator share floored at 0 (platform never overdraws creator)
+	if creator, fee := paymentSplit(&DomainConfig{PricePerRequest: 0.0005, PlatformFee: 0.001}); creator != 0 || fee != 0.001 {
+		t.Errorf("underwater split = (%v, %v); want (0, 0.001)", creator, fee)
+	}
+	// nil config is safe
+	if creator, fee := paymentSplit(nil); creator != 0 || fee != 0 {
+		t.Errorf("nil split = (%v, %v); want (0, 0)", creator, fee)
+	}
+}
+
+func TestUsdcToAtomicNonPositive(t *testing.T) {
+	if usdcToAtomic(0) != "0" || usdcToAtomic(-1) != "0" {
+		t.Errorf("non-positive amounts must produce 0")
+	}
+}
+
+func TestBuildRequirementsDualAccepts(t *testing.T) {
+	os.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	os.Setenv("STELLAR_NETWORK", "testnet")
+	os.Setenv("SOROBAN_PAYWALL_CONTRACT_ID", "CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH")
+	t.Cleanup(func() { os.Unsetenv("SOROBAN_PAYWALL_CONTRACT_ID") })
+
+	cfg := &DomainConfig{
+		Domain:          "demo.com",
+		StellarAddress:  "GABCDEF1234567890DEMO",
+		PlatformAddress: "GPLATFORM1234567890",
+		PricePerRequest: 0.005,
+		PaywallEnabled:  true,
+	}
+	got := buildRequirements(cfg)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 accepts (Soroban + classic); got %d", len(got))
+	}
+
+	// Entry 0 — Soroban spec-compliant: payTo = contract, fees sponsored, no splitPayments.
+	soroban := got[0]
+	if soroban.PayTo != "CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH" {
+		t.Errorf("soroban payTo should be the paywall contract; got %s", soroban.PayTo)
+	}
+	if soroban.Asset != "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA" {
+		t.Errorf("soroban asset should be the SEP-41 USDC contract; got %s", soroban.Asset)
+	}
+	if v, _ := soroban.Extra["areFeesSponsored"].(bool); !v {
+		t.Errorf("soroban areFeesSponsored must be true")
+	}
+	if _, hasSplit := soroban.Extra["splitPayments"]; hasSplit {
+		t.Errorf("soroban entry must NOT carry splitPayments (triggers 2-op check in relayer)")
+	}
+	if _, hasDist := soroban.Extra["distribution"]; !hasDist {
+		t.Errorf("soroban entry must carry informational distribution")
+	}
+	if soroban.Amount != "50000" {
+		t.Errorf("soroban amount should be full price (50000); got %s", soroban.Amount)
+	}
+
+	// Entry 1 — classic: payTo = creator, splitPayments present, not sponsored.
+	classic := got[1]
+	if classic.PayTo != cfg.StellarAddress {
+		t.Errorf("classic payTo should be the creator; got %s", classic.PayTo)
+	}
+	if v, _ := classic.Extra["areFeesSponsored"].(bool); v {
+		t.Errorf("classic areFeesSponsored must be false")
+	}
+	splits, ok := classic.Extra["splitPayments"].([]map[string]interface{})
+	if !ok || len(splits) != 2 {
+		t.Errorf("classic entry must carry 2 splitPayments; got %v", classic.Extra["splitPayments"])
+	}
+}
+
+func TestIdempotencyAndDigestHelpers(t *testing.T) {
+	if idempotencyKey("abc") != "idem:settle:abc" {
+		t.Errorf("idempotencyKey format wrong: %s", idempotencyKey("abc"))
+	}
+	a := bodyDigest([]byte(`{"x":1}`))
+	b := bodyDigest([]byte(`{"x":1}`))
+	c := bodyDigest([]byte(`{"x":2}`))
+	if a != b {
+		t.Errorf("bodyDigest must be deterministic")
+	}
+	if a == c {
+		t.Errorf("different bodies must produce different digests")
+	}
+	if len(a) != 64 {
+		t.Errorf("sha256 hex digest must be 64 chars; got %d", len(a))
+	}
+}
