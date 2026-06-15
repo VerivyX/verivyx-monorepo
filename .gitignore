@@ -33,6 +33,9 @@ services/hydration-service/hydration
 postgres_data/
 clickhouse_data/
 
+# host nginx vhosts — managed on the VM, not published (internal routing/IPs)
+infra/nginx/conf.d/
+
 # dev test scaffolding — not published
 **/harness/
 **/seed-test.*
