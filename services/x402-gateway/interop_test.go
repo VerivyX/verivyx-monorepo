@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -144,6 +146,20 @@ func TestDeriveResource(t *testing.T) {
 	d, s = deriveResource(PaymentPayload{}, PaymentRequirement{}, "", "")
 	if d != "" || s != "" {
 		t.Errorf("empty: got (%q,%q), want empty", d, s)
+	}
+}
+
+func TestHTTPStatusForResolveErr(t *testing.T) {
+	cases := map[error]int{
+		errDomainRequired:        http.StatusBadRequest,          // 400
+		errDomainNotRegistered:   http.StatusNotFound,            // 404
+		errNoMatchingRequirement: http.StatusUnprocessableEntity, // 422
+		fmt.Errorf("other"):      http.StatusBadGateway,         // 502
+	}
+	for err, want := range cases {
+		if got := httpStatusForResolveErr(err); got != want {
+			t.Errorf("err %v: got %d, want %d", err, got, want)
+		}
 	}
 }
 

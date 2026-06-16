@@ -626,6 +626,20 @@ func resolveRequirement(payload PaymentPayload, clientReq PaymentRequirement, hd
 	return req, domain, slug, nil
 }
 
+// httpStatusForResolveErr maps resolveRequirement sentinel errors to HTTP status codes.
+func httpStatusForResolveErr(err error) int {
+	switch err {
+	case errDomainRequired:
+		return http.StatusBadRequest
+	case errDomainNotRegistered:
+		return http.StatusNotFound
+	case errNoMatchingRequirement:
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusBadGateway
+	}
+}
+
 func sessionKey(domain, slug string) string {
 	return fmt.Sprintf("paid:%s:%s", domain, slug)
 }
