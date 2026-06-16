@@ -81,6 +81,28 @@ class Verivyx_Content_Gate {
             . '<div id="vx-article" class="vx-paywalled" data-vx-gated="1"></div>';
     }
 
+    /**
+     * Google paywalled-content structured data (anti-cloaking signal). Declares the
+     * page carries a paywalled part identified by the .vx-paywalled cssSelector, so
+     * serving the snippet to every client (including Googlebot) is not cloaking.
+     * Ref: https://developers.google.com/search/docs/appearance/structured-data/paywalled-content
+     */
+    public static function build_paywall_jsonld(string $title, string $description, string $url): string {
+        return wp_json_encode([
+            '@context'            => 'https://schema.org',
+            '@type'               => 'NewsArticle',
+            'headline'            => $title,
+            'description'         => $description,
+            'url'                 => $url,
+            'isAccessibleForFree' => false,
+            'hasPart'             => [
+                '@type'               => 'WebPageElement',
+                'isAccessibleForFree' => false,
+                'cssSelector'         => '.vx-paywalled',
+            ],
+        ]);
+    }
+
     /** Reentrancy guard: get_the_excerpt() may re-fire the_content internally. */
     private static $building = false;
 

@@ -28,5 +28,16 @@ check(strpos($stub, 'id="vx-article"') !== false, 'stub has #vx-article containe
 check(strpos($stub, 'class="vx-paywalled"') !== false, 'stub container has vx-paywalled class (matches cssSelector)');
 check(strpos($stub, '<p>This is your first post') === false, 'stub contains NO article body');
 
+// build_paywall_jsonld(title, description, url) → valid Google paywalled-content JSON-LD.
+$ld = Verivyx_Content_Gate::build_paywall_jsonld('My Title', 'My excerpt', 'https://demo.com/a');
+$data = json_decode($ld, true);
+check(is_array($data), 'json-ld is valid JSON');
+check(($data['@type'] ?? '') === 'NewsArticle', 'type NewsArticle');
+check(($data['isAccessibleForFree'] ?? null) === false, 'isAccessibleForFree false');
+check(($data['hasPart']['@type'] ?? '') === 'WebPageElement', 'hasPart WebPageElement');
+check(($data['hasPart']['cssSelector'] ?? '') === '.vx-paywalled', 'cssSelector matches container class');
+check(($data['hasPart']['isAccessibleForFree'] ?? null) === false, 'hasPart isAccessibleForFree false');
+check(($data['headline'] ?? '') === 'My Title', 'headline carried');
+
 echo $failures === 0 ? "\nOK\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);
