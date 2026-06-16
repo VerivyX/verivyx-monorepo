@@ -505,6 +505,24 @@ func withResource(reqs []PaymentRequirement, resource, mimeType string) []Paymen
 	return reqs
 }
 
+// isGenericRequirement reports whether a client-supplied PaymentRequirement lacks
+// the Verivyx settlement extras the relayer needs to settle (Soroban paywallContract
+// or classic splitPayments). Generic x402 v2 callers omit these; trusted Verivyx
+// callers (agent-sdk, /x-payment-settle) include them. Detection is structural —
+// never inferred from the User-Agent.
+func isGenericRequirement(r PaymentRequirement) bool {
+	if r.Extra == nil {
+		return true
+	}
+	if _, ok := r.Extra["paywallContract"]; ok {
+		return false
+	}
+	if _, ok := r.Extra["splitPayments"]; ok {
+		return false
+	}
+	return true
+}
+
 func sessionKey(domain, slug string) string {
 	return fmt.Sprintf("paid:%s:%s", domain, slug)
 }

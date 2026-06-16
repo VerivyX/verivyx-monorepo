@@ -77,3 +77,25 @@ func TestPaymentPayloadAdvertisesFlatSchemeNetwork(t *testing.T) {
 		t.Errorf("payload must still carry the accepted wrapper for backward compat; got %s", s)
 	}
 }
+
+func TestIsGenericRequirement(t *testing.T) {
+	// Trusted: classic Verivyx requirement carries splitPayments.
+	classic := PaymentRequirement{Extra: map[string]interface{}{"splitPayments": []interface{}{}}}
+	if isGenericRequirement(classic) {
+		t.Error("classic requirement with splitPayments must be trusted, not generic")
+	}
+	// Trusted: Soroban Verivyx requirement carries paywallContract.
+	soroban := PaymentRequirement{Extra: map[string]interface{}{"paywallContract": "CAERLWHD"}}
+	if isGenericRequirement(soroban) {
+		t.Error("Soroban requirement with paywallContract must be trusted, not generic")
+	}
+	// Generic: spec-shaped requirement with only areFeesSponsored.
+	generic := PaymentRequirement{Extra: map[string]interface{}{"areFeesSponsored": true}}
+	if !isGenericRequirement(generic) {
+		t.Error("requirement without Verivyx settlement extras must be generic")
+	}
+	// Generic: no extra at all.
+	if !isGenericRequirement(PaymentRequirement{}) {
+		t.Error("requirement with nil extra must be generic")
+	}
+}
