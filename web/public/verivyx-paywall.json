@@ -1,7 +1,7 @@
 {
   "name": "Verivyx Paywall",
   "slug": "verivyx-paywall",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
   "requires": "5.8",
   "tested": "6.5",
@@ -9,6 +9,6 @@
   "last_updated": "2026-06-16",
   "homepage": "https://verivyx.com",
   "sections": {
-    "changelog": "<h4>1.4.0</h4><ul><li>Phase 2 full withholding: article body no longer in page source for unverified clients; injected after PoW/payment via hydration; paywall structured data (isAccessibleForFree) for search; token-protected internal body endpoint.</li></ul>"
+    "changelog": "<h4>1.5.0</h4><ul><li>Zero-config Connect to Verivyx (one-click site link, no token to copy); embed refactor.</li></ul>"
   }
 }
