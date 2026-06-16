@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 )
@@ -13,8 +12,8 @@ import (
 // We add it ADDITIVELY (alongside the legacy `amount`) so generic v2 clients can
 // read it while the Verivyx agent-sdk / MCP server (which read `amount`) keep working.
 func TestBuildRequirementsAdvertisesMaxAmountRequired(t *testing.T) {
-	os.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
-	os.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
 	cfg := &DomainConfig{
 		Domain:          "demo.com",
 		StellarAddress:  "GABCDEF1234567890DEMO",

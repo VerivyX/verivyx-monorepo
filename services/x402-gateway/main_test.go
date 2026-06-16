@@ -3,15 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestUsdcToAtomic(t *testing.T) {
 	// Ensure a default for tests
-	os.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
-	os.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
 
 	cases := map[float64]string{
 		0.005:  "50000",
