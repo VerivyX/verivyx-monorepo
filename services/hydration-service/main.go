@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -217,6 +218,13 @@ func verifyHumanSession(token string) (*humanClaims, error) {
 
 func authURL() string { return env("AUTH_SERVICE_URL", "http://auth-service:8083") }
 func gwURL() string   { return env("GATEWAY_URL", "http://x402-gateway:8081") }
+
+// buildInternalContentURL is the token-protected WP endpoint that returns the real
+// article body for a (domain, slug). The hydration-service calls it only after the
+// caller is authorized (human session or paid x402 session).
+func buildInternalContentURL(domain, slug string) string {
+	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
+}
 
 func lookupDomain(domain string) (*DomainConfig, error) {
 	// Check cache first (read lock)
