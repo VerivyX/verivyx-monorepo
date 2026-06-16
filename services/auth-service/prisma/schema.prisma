@@ -25,12 +25,28 @@ model User {
   pricePerRequest Decimal    @default(0.005)
   platformFee     Decimal?   @default(0.001) // Your revenue cut per request
   paywallEnabled  Boolean    @default(true)
+  wpInternalToken  String?   // per-domain secret for the WP internal body endpoint (Phase 2 withholding)
+  domainVerified   Boolean   @default(false)
+  domainVerifiedAt DateTime?
   role            Role       @default(CREATOR)
   createdAt       DateTime   @default(now())
   events          Event[]
   contents        Content[]
   adminLogs       AdminLog[]
   emailTokens     EmailToken[]
+}
+
+// Ephemeral state for the zero-config "Connect to Verivyx" handshake (OAuth-code style).
+// Rows are short-lived (TTL enforced in code) and consumed on success.
+model ConnectPending {
+  id         Int      @id @default(autoincrement())
+  connectId  String   @unique
+  site       String
+  nonce      String
+  code       String?  @unique
+  codeUsed   Boolean  @default(false)
+  userId     Int?
+  createdAt  DateTime @default(now())
 }
 
 // Single-use tokens emailed to the creator (email verification, etc.). Only the
