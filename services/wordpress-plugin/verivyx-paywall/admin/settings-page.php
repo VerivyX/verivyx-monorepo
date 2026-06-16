@@ -3,6 +3,25 @@
     <h1>Verivyx Paywall Settings</h1>
     <p>Humans read free. AI agents pay USDC via <a href="https://verivyx.com" target="_blank">Verivyx</a>.</p>
 
+    <?php $vx_connected = Verivyx_Connect::is_connected(); ?>
+    <h2>Connection</h2>
+    <p>Status:
+        <?php if ($vx_connected): ?>
+            <strong style="color:#1a7f37;">&#9679; Connected to Verivyx</strong>
+        <?php else: ?>
+            <strong style="color:#b32d2e;">&#9679; Not connected</strong>
+        <?php endif; ?>
+    </p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('verivyx_connect_start'); ?>
+        <input type="hidden" name="action" value="verivyx_connect_start">
+        <p>
+            <input type="submit" class="button button-primary" value="<?php echo $vx_connected ? 'Reconnect' : 'Connect to Verivyx'; ?>">
+            <span class="description">One click &mdash; your site is verified automatically (no DNS, files, or tokens to copy).</span>
+        </p>
+    </form>
+    <hr>
+
     <form method="post">
         <?php wp_nonce_field('verivyx_save_settings'); ?>
 

@@ -79,6 +79,12 @@ class Verivyx_Settings {
     public static function render_admin_page(): void {
         if (!current_user_can('manage_options')) return;
 
+        $vx_connect_notice = Verivyx_Connect::take_notice();
+        if ($vx_connect_notice) {
+            echo '<div class="notice ' . esc_attr($vx_connect_notice['class']) . '"><p>'
+                . esc_html($vx_connect_notice['text']) . '</p></div>';
+        }
+
         if (isset($_POST['verivyx_save']) && check_admin_referer('verivyx_save_settings')) {
             update_option(self::OPTION_API_URL,    sanitize_url(wp_unslash($_POST['verivyx_api_url'] ?? '')));
             update_option(self::OPTION_DOMAIN,     sanitize_text_field(wp_unslash($_POST['verivyx_domain'] ?? '')));
