@@ -586,6 +586,46 @@ func pickRequirement(reqs []PaymentRequirement, asset string, preferSoroban bool
 	return reqs[len(reqs)-1], true
 }
 
+// Sentinel errors for resolveRequirement, mapped to HTTP status by httpStatusForResolveErr.
+var (
+	errDomainRequired        = fmt.Errorf("domain_required")
+	errDomainNotRegistered   = fmt.Errorf("domain_not_registered")
+	errNoMatchingRequirement = fmt.Errorf("no_matching_requirement")
+)
+
+// lookupDomainFn is the domain-config lookup, indirected through a package var so
+// tests can inject a stub without a live auth-service.
+var lookupDomainFn = lookupDomain
+
+// resolveRequirement returns the canonical PaymentRequirement to forward to the
+// facilitator, plus the derived domain/slug. Trusted callers (requirements carrying
+// Verivyx settlement extras) pass through unchanged. Generic x402 v2 callers are
+// reconstructed server-side from the domain config so the relayer can validate the
+// Soroban transfer and run distribute(). Generic callers are steered to the Soroban
+// requirement (preferSoroban=true).
+func resolveRequirement(payload PaymentPayload, clientReq PaymentRequirement, hdrDomain, hdrSlug string) (PaymentRequirement, string, string, error) {
+	domain, slug := deriveResource(payload, clientReq, hdrDomain, hdrSlug)
+	if !isGenericRequirement(clientReq) {
+		return clientReq, domain, slug, nil
+	}
+	if domain == "" {
+		return PaymentRequirement{}, "", "", errDomainRequired
+	}
+	cfg, err := lookupDomainFn(domain)
+	if err != nil || cfg == nil {
+		return PaymentRequirement{}, domain, slug, errDomainNotRegistered
+	}
+	asset := clientReq.Asset
+	if asset == "" {
+		asset = payload.Accepted.Asset
+	}
+	req, ok := pickRequirement(buildRequirements(cfg), asset, true)
+	if !ok {
+		return PaymentRequirement{}, domain, slug, errNoMatchingRequirement
+	}
+	return req, domain, slug, nil
+}
+
 func sessionKey(domain, slug string) string {
 	return fmt.Sprintf("paid:%s:%s", domain, slug)
 }

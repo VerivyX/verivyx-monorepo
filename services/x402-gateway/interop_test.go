@@ -146,3 +146,68 @@ func TestDeriveResource(t *testing.T) {
 		t.Errorf("empty: got (%q,%q), want empty", d, s)
 	}
 }
+
+func TestResolveRequirement(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("SOROBAN_PAYWALL_CONTRACT_ID", "CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+
+	orig := lookupDomainFn
+	defer func() { lookupDomainFn = orig }()
+	lookupDomainFn = func(domain string) (*DomainConfig, error) {
+		if domain != "demo.com" {
+			return nil, nil
+		}
+		return &DomainConfig{
+			Domain: "demo.com", StellarAddress: "GCREATOR", PlatformAddress: "GPLATFORM",
+			PricePerRequest: 0.005, PaywallEnabled: true,
+		}, nil
+	}
+
+	// Trusted requirement (carries splitPayments) is returned unchanged.
+	trusted := PaymentRequirement{Asset: "USDC:GBBD47", Amount: "50000",
+		Extra: map[string]interface{}{"splitPayments": []interface{}{}}}
+	got, tdomain, tslug, err := resolveRequirement(PaymentPayload{Resource: &ResourceInfo{URL: "https://demo.com/a"}}, trusted, "", "")
+	if err != nil {
+		t.Fatalf("trusted: unexpected err %v", err)
+	}
+	if got.Amount != "50000" || got.Asset != "USDC:GBBD47" {
+		t.Errorf("trusted requirement must pass through unmodified, got %+v", got)
+	}
+	if tdomain != "demo.com" || tslug != "a" {
+		t.Errorf("trusted: deriveResource must still run, got (%q,%q), want (demo.com, a)", tdomain, tslug)
+	}
+
+	// Generic Soroban requirement → reconstructed with Verivyx extras.
+	generic := PaymentRequirement{
+		Asset: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+		Extra: map[string]interface{}{"areFeesSponsored": true},
+	}
+	payload := PaymentPayload{Resource: &ResourceInfo{URL: "https://demo.com/article"}}
+	canon, domain, slug, err := resolveRequirement(payload, generic, "", "")
+	if err != nil {
+		t.Fatalf("generic: unexpected err %v", err)
+	}
+	if domain != "demo.com" || slug != "article" {
+		t.Errorf("generic: derived (%q,%q), want (demo.com, article)", domain, slug)
+	}
+	if canon.Amount == "" {
+		t.Error("generic: reconstructed requirement must carry amount")
+	}
+	if _, ok := canon.Extra["paywallContract"]; !ok {
+		t.Error("generic: reconstructed Soroban requirement must carry extra.paywallContract")
+	}
+	if _, ok := canon.Extra["domain"]; !ok {
+		t.Error("generic: reconstructed Soroban requirement must carry extra.domain")
+	}
+
+	// Generic but domain not derivable → errDomainRequired.
+	if _, _, _, err := resolveRequirement(PaymentPayload{}, generic, "", ""); err != errDomainRequired {
+		t.Errorf("missing domain: got err %v, want errDomainRequired", err)
+	}
+
+	// Generic, domain not registered → errDomainNotRegistered.
+	if _, _, _, err := resolveRequirement(PaymentPayload{Resource: &ResourceInfo{URL: "https://nope.com/x"}}, generic, "", ""); err != errDomainNotRegistered {
+		t.Errorf("unregistered domain: got err %v, want errDomainNotRegistered", err)
+	}
+}
