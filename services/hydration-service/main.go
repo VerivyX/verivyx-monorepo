@@ -182,6 +182,7 @@ type DomainConfig struct {
 	StellarAddress  string  `json:"stellar_address"`
 	PricePerRequest float64 `json:"pricePerRequest"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
+	WpInternalToken string  `json:"wpInternalToken"`
 }
 
 type EventPayload struct {
@@ -227,11 +228,21 @@ func buildInternalContentURL(domain, slug string) string {
 	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
 }
 
-// fetchArticleBody calls the WP internal content endpoint with the shared token and
+// wpTokenFor returns the per-domain WP internal token (provisioned via the zero-config
+// connect handshake and exposed through auth-service /lookup). Falls back to the global
+// WP_INTERNAL_TOKEN env during transition / single-tenant setups.
+func wpTokenFor(domain string) string {
+	if cfg, err := lookupDomain(domain); err == nil && cfg != nil && cfg.WpInternalToken != "" {
+		return cfg.WpInternalToken
+	}
+	return os.Getenv("WP_INTERNAL_TOKEN")
+}
+
+// fetchArticleBody calls the WP internal content endpoint with the per-domain token and
 // returns the rendered body HTML. Fail-closed: any error returns ("", err) so the
 // handler does NOT release a body.
 func fetchArticleBody(domain, slug string) (string, error) {
-	token := os.Getenv("WP_INTERNAL_TOKEN")
+	token := wpTokenFor(domain)
 	if token == "" {
 		return "", fmt.Errorf("wp_internal_token_unset")
 	}
