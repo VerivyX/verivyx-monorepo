@@ -85,6 +85,7 @@ class Verivyx_Connect {
             'connect_id'   => $connect_id,
             'state'        => $state,
             'redirect_uri' => $return,
+            'site'         => $site,
         ]);
         // External host (dashboard) → wp_redirect, not wp_safe_redirect.
         wp_redirect($url);
