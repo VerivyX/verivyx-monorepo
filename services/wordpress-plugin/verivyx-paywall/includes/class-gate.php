@@ -82,9 +82,9 @@ class Verivyx_Gate {
     }
 
     /**
-     * Emit a 402 response with X-Payment-Required header + PaymentRequired JSON body.
-     * The hydration 402 body already contains the full PaymentRequired payload,
-     * so we forward it directly when available.
+     * Emit a 402 response with the x402-standard PAYMENT-REQUIRED header + the
+     * PaymentRequired JSON body. The hydration 402 body already contains the full
+     * PaymentRequired payload, so we forward it directly when available.
      */
     private static function send_402(string $domain, string $slug, $hydration_resp): void {
         // Try to use the body from hydration's 402 (already has requirements inline)
@@ -108,18 +108,9 @@ class Verivyx_Gate {
         // Use WordPress's status_header() — http_response_code() does not reliably
         // override the 200 already set by WP::send_headers() before template_redirect.
         status_header(402);
-        header('Content-Type: application/json');
-        header('Cache-Control: no-store');
-
-        // Standard X402 header (both names for compatibility)
-        if ($encoded) {
-            header('X-Payment-Required: ' . $encoded);
-            header('Payment-Required: ' . $encoded);
+        foreach (self::response_headers_402($encoded) as $name => $value) {
+            header($name . ': ' . $value);
         }
-
-        // CORS headers so AI agents calling from non-browser contexts can read these
-        header('Access-Control-Allow-Origin: *');
-        header('Access-Control-Expose-Headers: X-Payment-Required, Payment-Required, X-Payment-Response, Payment-Response');
 
         if (is_array($body)) {
             echo wp_json_encode($body);
@@ -132,6 +123,32 @@ class Verivyx_Gate {
         }
 
         exit;
+    }
+
+    /**
+     * Pure: response headers for a 402, given the base64-encoded PaymentRequired.
+     *
+     * Emits only the x402-standard PAYMENT-REQUIRED header — official @x402 v2
+     * clients read it via getHeader("PAYMENT-REQUIRED"), and the same payload is
+     * also returned in the JSON body for x402 v1 / body-reading clients. The legacy
+     * X-Payment-Required duplicate is intentionally dropped: a multi-asset
+     * PAYMENT-REQUIRED header is ~2 KB, and emitting it twice (~4.2 KB) overran the
+     * default nginx->php-fpm fastcgi_buffer_size (4 KB), making the 402 path 502.
+     *
+     * @return array<string,string> header name => value
+     */
+    public static function response_headers_402(?string $encoded): array {
+        $headers = [
+            'Content-Type'                  => 'application/json',
+            'Cache-Control'                 => 'no-store',
+            // CORS so AI agents calling from non-browser contexts can read these.
+            'Access-Control-Allow-Origin'   => '*',
+            'Access-Control-Expose-Headers' => 'PAYMENT-REQUIRED, Payment-Response, X-Payment-Response',
+        ];
+        if ($encoded) {
+            $headers['PAYMENT-REQUIRED'] = $encoded;
+        }
+        return $headers;
     }
 
     /**
