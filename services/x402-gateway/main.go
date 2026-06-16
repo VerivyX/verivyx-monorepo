@@ -50,13 +50,22 @@ type ResourceInfo struct {
 }
 
 type PaymentRequirement struct {
-	Scheme            string                 `json:"scheme"`
-	Network           string                 `json:"network"`
+	Scheme string `json:"scheme"`
+	Network string `json:"network"`
+	// Amount is the legacy Verivyx field name (kept for backward compat with the
+	// agent-sdk and the MCP server's tolerant parser). MaxAmountRequired carries
+	// the same value under the canonical x402 v2 name so generic v2 clients interop.
 	Amount            string                 `json:"amount"`
+	MaxAmountRequired string                 `json:"maxAmountRequired"`
 	Asset             string                 `json:"asset"`
 	PayTo             string                 `json:"payTo"`
 	MaxTimeoutSeconds int                    `json:"maxTimeoutSeconds"`
-	Extra             map[string]interface{} `json:"extra,omitempty"`
+	// Per-entry resource/description/mimeType (x402 v2 puts these on each accepts
+	// entry). Emitted additively; the top-level PaymentRequired.Resource stays too.
+	Resource    string                 `json:"resource,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	MimeType    string                 `json:"mimeType,omitempty"`
+	Extra       map[string]interface{} `json:"extra,omitempty"`
 }
 
 type PaymentRequired struct {
@@ -68,11 +77,16 @@ type PaymentRequired struct {
 }
 
 type PaymentPayload struct {
-	X402Version int                    `json:"x402Version"`
-	Resource    *ResourceInfo          `json:"resource,omitempty"`
-	Accepted    PaymentRequirement     `json:"accepted"`
-	Payload     map[string]interface{} `json:"payload"`
-	Extensions  map[string]interface{} `json:"extensions,omitempty"`
+	X402Version int `json:"x402Version"`
+	// Scheme/Network are advertised flat for generic x402 v2 clients that read
+	// them at the top level. The Accepted wrapper is kept for the Verivyx relayer
+	// and agent-sdk, which read scheme/network/asset from inside `accepted`.
+	Scheme     string                 `json:"scheme,omitempty"`
+	Network    string                 `json:"network,omitempty"`
+	Resource   *ResourceInfo          `json:"resource,omitempty"`
+	Accepted   PaymentRequirement     `json:"accepted"`
+	Payload    map[string]interface{} `json:"payload"`
+	Extensions map[string]interface{} `json:"extensions,omitempty"`
 }
 
 type VerifyResponse struct {
@@ -444,6 +458,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 			Scheme:            SchemeExact,
 			Network:           network,
 			Amount:            usdcToAtomic(total),
+			MaxAmountRequired: usdcToAtomic(total),
 			Asset:             sorobanUSDC,
 			PayTo:             paywallContract, // agent transfers full amount to the contract
 			MaxTimeoutSeconds: MaxTimeoutSeconds,
@@ -466,6 +481,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 		Scheme:            SchemeExact,
 		Network:           network,
 		Amount:            usdcToAtomic(total),
+		MaxAmountRequired: usdcToAtomic(total),
 		Asset:             classicAsset,
 		PayTo:             cfg.StellarAddress,
 		MaxTimeoutSeconds: MaxTimeoutSeconds,
@@ -475,6 +491,17 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 		},
 	})
 
+	return reqs
+}
+
+// withResource stamps the x402 v2 per-entry resource URL + mimeType onto each
+// accepts entry, so generic v2 clients see resource/mimeType where the spec
+// expects them. Mutates and returns the slice.
+func withResource(reqs []PaymentRequirement, resource, mimeType string) []PaymentRequirement {
+	for i := range reqs {
+		reqs[i].Resource = resource
+		reqs[i].MimeType = mimeType
+	}
 	return reqs
 }
 
@@ -561,7 +588,7 @@ func main() {
 			X402Version: X402Version,
 			Error:       "X-PAYMENT header is required",
 			Resource:    ResourceInfo{URL: resourceURL, MimeType: "text/html"},
-			Accepts:     buildRequirements(cfg),
+			Accepts:     withResource(buildRequirements(cfg), resourceURL, "text/html"),
 			Extensions: map[string]interface{}{
 				// Advertise the hydrate endpoint so standard X402 clients know
 				// to retry POST /hydrate with X-PAYMENT header attached.
@@ -839,6 +866,8 @@ func main() {
 		resource := ResourceInfo{URL: resourceURL, MimeType: "text/html"}
 		payload := PaymentPayload{
 			X402Version: X402Version,
+			Scheme:      req.Scheme,
+			Network:     req.Network,
 			Resource:    &resource,
 			Accepted:    req,
 			Payload: map[string]interface{}{
