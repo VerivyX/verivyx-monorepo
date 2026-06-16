@@ -51,6 +51,11 @@ class Verivyx_Settings {
         return array_filter(array_map('trim', explode(',', $raw)));
     }
 
+    public static function get_internal_token(): string {
+        $v = get_option('verivyx_internal_token', '');
+        return is_string($v) ? trim($v) : '';
+    }
+
     private static function detect_domain(): string {
         $url = get_site_url();
         $host = wp_parse_url($url, PHP_URL_HOST);

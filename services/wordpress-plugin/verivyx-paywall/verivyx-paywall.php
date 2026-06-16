@@ -23,11 +23,13 @@ require_once VERIVYX_PLUGIN_DIR . 'includes/class-detect.php';
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-updater.php';
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-gate.php';
 require_once VERIVYX_PLUGIN_DIR . 'includes/class-content-gate.php';
+require_once VERIVYX_PLUGIN_DIR . 'includes/class-rest-content.php';
 
 // Boot on init — before template_redirect fires
 add_action('init', ['Verivyx_Gate', 'boot'], 1);
 add_action('init', ['Verivyx_Content_Gate', 'boot'], 1);
 add_action('init', ['Verivyx_Updater', 'boot'], 1);
+add_action('init', ['Verivyx_Rest_Content', 'boot'], 1);
 
 register_activation_hook(__FILE__,   ['Verivyx_Settings', 'activate']);
 register_deactivation_hook(__FILE__, ['Verivyx_Settings', 'deactivate']);
