@@ -44,5 +44,12 @@ check(Verivyx_Updater::sanitize_meta(['download_url'=>'https://verivyx.com/x.zip
 check(Verivyx_Updater::sanitize_meta(['version'=>'not-a-version','download_url'=>'https://verivyx.com/x.zip']) === null, 'reject bad version string');
 check(Verivyx_Updater::sanitize_meta('nope') === null, 'reject non-array');
 
+// --- status_text (force-check notice; pure) ---
+check(strpos(Verivyx_Updater::status_text('1.3.0', '1.2.0'), '1.3.0') !== false, 'status: update available mentions remote version');
+check(stripos(Verivyx_Updater::status_text('1.3.0', '1.2.0'), 'update available') !== false, 'status: update available phrasing');
+check(stripos(Verivyx_Updater::status_text('1.2.0', '1.2.0'), 'up to date') !== false, 'status: equal version = up to date');
+check(stripos(Verivyx_Updater::status_text('1.1.0', '1.2.0'), 'up to date') !== false, 'status: older remote = up to date');
+check(stripos(Verivyx_Updater::status_text('', '1.2.0'), 'could not reach') !== false, 'status: empty remote = unreachable');
+
 echo $failures === 0 ? "\nOK\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);

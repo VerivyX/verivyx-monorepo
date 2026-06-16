@@ -80,6 +80,19 @@ class Verivyx_Settings {
             echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
         }
 
+        if (isset($_POST['verivyx_check_updates']) && check_admin_referer('verivyx_check_updates')) {
+            $meta   = Verivyx_Updater::force_check();
+            $remote = is_array($meta) ? (string) ($meta['version'] ?? '') : '';
+            $class  = 'notice-success';
+            if ($remote === '') {
+                $class = 'notice-error';
+            } elseif (Verivyx_Updater::is_newer($remote, VERIVYX_VERSION)) {
+                $class = 'notice-warning';
+            }
+            echo '<div class="notice ' . esc_attr($class) . '"><p>'
+                . esc_html(Verivyx_Updater::status_text($remote, VERIVYX_VERSION)) . '</p></div>';
+        }
+
         require_once VERIVYX_PLUGIN_DIR . 'admin/settings-page.php';
     }
 }

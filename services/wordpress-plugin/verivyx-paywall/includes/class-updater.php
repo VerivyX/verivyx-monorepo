@@ -21,6 +21,35 @@ class Verivyx_Updater {
     }
 
     /**
+     * Human-readable result of a force update check. Pure (no WP I/O) so it is
+     * unit-testable. $remote is the version reported by verivyx.com ('' on failure).
+     */
+    public static function status_text(string $remote, string $local): string {
+        if ($remote === '') {
+            return 'Could not reach the Verivyx update server. Please try again in a moment.';
+        }
+        if (self::is_newer($remote, $local)) {
+            return sprintf(
+                'Update available: version %s (you have %s). Open Dashboard → Updates or Plugins to install it.',
+                $remote,
+                $local
+            );
+        }
+        return sprintf('You are up to date (version %s).', $local);
+    }
+
+    /**
+     * Force an immediate re-check: drops our cached metadata AND WordPress's own
+     * plugin-update transient, then refetches. Bypasses the 12h cache so the admin
+     * "Check for updates now" button reflects verivyx.com right away.
+     */
+    public static function force_check(): ?array {
+        delete_transient(self::CACHE_KEY);
+        delete_site_transient('update_plugins'); // make core re-evaluate on next page load
+        return self::fetch_meta(true);
+    }
+
+    /**
      * Validate + normalize untrusted metadata. Pure (no WP I/O) so it is
      * unit-testable. Requires a well-formed version and an https download_url on
      * the exact allowed host. Anything else returns null = "no update" (fail-safe).

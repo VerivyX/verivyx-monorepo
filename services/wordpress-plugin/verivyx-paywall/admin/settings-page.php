@@ -80,6 +80,17 @@
     </form>
 
     <hr>
+    <h2>Updates</h2>
+    <p>Installed version: <code><?php echo esc_html(VERIVYX_VERSION); ?></code></p>
+    <form method="post">
+        <?php wp_nonce_field('verivyx_check_updates'); ?>
+        <p>
+            <input type="submit" name="verivyx_check_updates" class="button" value="Check for updates now">
+            <span class="description">Bypasses the 12-hour cache and re-checks verivyx.com immediately.</span>
+        </p>
+    </form>
+
+    <hr>
     <h2>Embed Script (optional, for browser users)</h2>
     <p>Add this to your theme's <code>&lt;head&gt;</code> for seamless human access with PoW verification:</p>
     <textarea class="large-text code" rows="4" readonly><?php
