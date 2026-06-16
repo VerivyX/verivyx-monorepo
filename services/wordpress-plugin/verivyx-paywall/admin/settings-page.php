@@ -72,6 +72,23 @@
                     <p class="description">Comma-separated page slugs that are never gated (e.g. <code>about, pricing, contact</code>). The homepage and blog index are always public automatically.</p>
                 </td>
             </tr>
+            <tr>
+                <th scope="row"><label for="verivyx_internal_token">Internal content token</label></th>
+                <td>
+                    <?php $token_locked = defined('VERIVYX_INTERNAL_TOKEN'); ?>
+                    <input type="password" id="verivyx_internal_token" name="verivyx_internal_token" class="regular-text"
+                        value="<?php echo esc_attr(Verivyx_Settings::get_internal_token()); ?>"
+                        autocomplete="off" <?php echo $token_locked ? 'disabled' : ''; ?>>
+                    <p class="description">
+                        Shared secret that lets the Verivyx hydration service fetch the full article body for
+                        verified readers (full-withholding mode). Must exactly match <code>WP_INTERNAL_TOKEN</code>
+                        on the hydration service. Leave blank to keep withholding disabled (the body endpoint stays closed).
+                        <?php if ($token_locked): ?>
+                            <br><strong>Managed by the <code>VERIVYX_INTERNAL_TOKEN</code> constant in wp-config.php (field disabled).</strong>
+                        <?php endif; ?>
+                    </p>
+                </td>
+            </tr>
         </table>
 
         <p class="submit">
