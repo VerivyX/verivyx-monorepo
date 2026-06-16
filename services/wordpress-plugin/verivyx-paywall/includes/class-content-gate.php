@@ -158,9 +158,11 @@ class Verivyx_Content_Gate {
             if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return $content;
             if (Verivyx_Gate::$verified) return $content; // intercept confirmed payment/session → real body in source
             self::$building = true;
-            $stub = self::build_stub(self::excerpt_for($post));
-            self::$building = false;
-            return $stub;
+            try {
+                return self::build_stub(self::excerpt_for($post));
+            } finally {
+                self::$building = false;
+            }
         }
 
         // LISTINGS / ARCHIVE / HOME (Phase 1 teaser): unchanged.
@@ -168,9 +170,11 @@ class Verivyx_Content_Gate {
         $post = get_post();
         if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return $content;
         self::$building = true;
-        $teaser = self::excerpt_for($post);
-        self::$building = false;
-        return $teaser;
+        try {
+            return self::excerpt_for($post);
+        } finally {
+            self::$building = false;
+        }
     }
 
     /** the_content_feed + the_excerpt_rss: gated articles become teasers. */
@@ -181,9 +185,11 @@ class Verivyx_Content_Gate {
         if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return $content;
 
         self::$building = true;
-        $teaser = self::excerpt_for($post);
-        self::$building = false;
-        return $teaser;
+        try {
+            return self::excerpt_for($post);
+        } finally {
+            self::$building = false;
+        }
     }
 
     /**
