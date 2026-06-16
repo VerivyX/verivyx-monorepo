@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -224,6 +225,42 @@ func gwURL() string   { return env("GATEWAY_URL", "http://x402-gateway:8081") }
 // caller is authorized (human session or paid x402 session).
 func buildInternalContentURL(domain, slug string) string {
 	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
+}
+
+// fetchArticleBody calls the WP internal content endpoint with the shared token and
+// returns the rendered body HTML. Fail-closed: any error returns ("", err) so the
+// handler does NOT release a body.
+func fetchArticleBody(domain, slug string) (string, error) {
+	token := os.Getenv("WP_INTERNAL_TOKEN")
+	if token == "" {
+		return "", fmt.Errorf("wp_internal_token_unset")
+	}
+	reqURL := buildInternalContentURL(domain, slug)
+	httpReq, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("X-Verivyx-Internal", token)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("wp_internal_status_%d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	return parsed.HTML, nil
 }
 
 func lookupDomain(domain string) (*DomainConfig, error) {
@@ -453,10 +490,16 @@ func main() {
 				if respJSON, jsonErr := json.Marshal(result); jsonErr == nil {
 					c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(respJSON))
 				}
+				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				if ferr != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "success",
 					"served":      "paid_agent",
 					"transaction": result.Transaction,
+					"html":        html,
 				})
 				return
 			}
@@ -490,9 +533,15 @@ func main() {
 					IP:        ip,
 					Ja4:       ja4,
 				})
+				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				if ferr != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"status": "success",
 					"served": "human",
+					"html":   html,
 				})
 				return
 			}
@@ -508,10 +557,16 @@ func main() {
 				IP:        ip,
 				Ja4:       ja4,
 			})
+			html, ferr := fetchArticleBody(req.Domain, req.Slug)
+			if ferr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "success",
 				"served":      "paid_agent",
 				"transaction": txHash,
+				"html":        html,
 			})
 			return
 		}
