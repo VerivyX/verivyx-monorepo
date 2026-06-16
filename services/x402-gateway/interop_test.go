@@ -99,3 +99,27 @@ func TestIsGenericRequirement(t *testing.T) {
 		t.Error("requirement with nil extra must be generic")
 	}
 }
+
+func TestDeriveResource(t *testing.T) {
+	// From payload.Resource.URL with slug.
+	p := PaymentPayload{Resource: &ResourceInfo{URL: "https://demo.com/article-1"}}
+	d, s := deriveResource(p, PaymentRequirement{}, "", "")
+	if d != "demo.com" || s != "article-1" {
+		t.Errorf("payload resource: got (%q,%q), want (demo.com, article-1)", d, s)
+	}
+	// Falls back to per-entry requirement resource.
+	d, s = deriveResource(PaymentPayload{}, PaymentRequirement{Resource: "http://x.io/p/2/"}, "", "")
+	if d != "x.io" || s != "p/2" {
+		t.Errorf("entry resource: got (%q,%q), want (x.io, p/2)", d, s)
+	}
+	// Headers override.
+	d, s = deriveResource(p, PaymentRequirement{}, "override.com", "slug9")
+	if d != "override.com" || s != "slug9" {
+		t.Errorf("header override: got (%q,%q), want (override.com, slug9)", d, s)
+	}
+	// Nothing present.
+	d, s = deriveResource(PaymentPayload{}, PaymentRequirement{}, "", "")
+	if d != "" || s != "" {
+		t.Errorf("empty: got (%q,%q), want empty", d, s)
+	}
+}

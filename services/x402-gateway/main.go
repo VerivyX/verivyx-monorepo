@@ -523,6 +523,41 @@ func isGenericRequirement(r PaymentRequirement) bool {
 	return true
 }
 
+// deriveResource extracts (domain, slug) from an inbound payment, in priority order:
+// the payload resource URL, the per-entry requirement resource URL (Scope A), then
+// the X-Paywall-Domain / X-Paywall-Slug headers (which override). Returns empty
+// strings when no source yields a host.
+func deriveResource(payload PaymentPayload, clientReq PaymentRequirement, hdrDomain, hdrSlug string) (string, string) {
+	domain, slug := "", ""
+	urls := []string{}
+	if payload.Resource != nil {
+		urls = append(urls, payload.Resource.URL)
+	}
+	urls = append(urls, clientReq.Resource)
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		u = strings.TrimPrefix(u, "https://")
+		u = strings.TrimPrefix(u, "http://")
+		parts := strings.SplitN(u, "/", 2)
+		if parts[0] != "" {
+			domain = parts[0]
+			if len(parts) == 2 {
+				slug = strings.TrimSuffix(parts[1], "/")
+			}
+			break
+		}
+	}
+	if hdrDomain != "" {
+		domain = hdrDomain
+	}
+	if hdrSlug != "" {
+		slug = hdrSlug
+	}
+	return domain, slug
+}
+
 func sessionKey(domain, slug string) string {
 	return fmt.Sprintf("paid:%s:%s", domain, slug)
 }
