@@ -22,22 +22,6 @@
   // Hanya valid selama eksekusi script tag — null setelah async boundary.
   const _script = document.currentScript as HTMLScriptElement | null;
 
-  // ─── Hide-First: inject segera sebelum apapun ────────────────────────────
-  // Ini yang membuat AI browser tidak bisa baca konten sebelum verifikasi.
-  const _hideStyle = document.createElement('style');
-  _hideStyle.id = 'vx-hide';
-  _hideStyle.textContent = 'html{visibility:hidden!important}#vx-gate,#vx-gate *{visibility:visible!important}';
-  try { (document.head || document.documentElement).appendChild(_hideStyle); } catch { /* noop */ }
-
-  function revealContent(): void {
-    const el = document.getElementById('vx-hide');
-    if (el) el.remove();
-    document.documentElement.style.removeProperty('visibility');
-  }
-
-  // Safety: kalau script error atau timeout, jangan biarkan halaman blank selamanya.
-  const _safetyReveal = setTimeout(revealContent, 4000);
-
   // ─── Interfaces ────────────────────────────────────────────────────────────
 
   interface VxConfig {
@@ -338,6 +322,36 @@
     }, 300);
   }
 
+  // ─── Hydration: fetch real body + inject into stub ──────────────────────────
+
+  // Fetch the real body from the hydration endpoint and inject it into the stub
+  // container. Fail-closed: on any error, returns false (caller shows retry) — never a body.
+  async function hydrateInject(cfg: VxConfig, headers: Record<string, string>): Promise<boolean> {
+    const target = document.getElementById('vx-article');
+    if (!target) return false;
+    try {
+      const res = await fetch(`${cfg.api}/api/v1/content/hydrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ domain: cfg.domain, slug: cfg.slug }),
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { html?: string };
+      if (typeof data.html !== 'string' || data.html === '') return false;
+      target.innerHTML = data.html;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function showRetry(): void {
+    const target = document.getElementById('vx-article');
+    if (target) {
+      target.innerHTML = '<p class="vx-retry">Content couldn’t load. Please refresh to try again.</p>';
+    }
+  }
+
   // ─── Fingerprint Collector ─────────────────────────────────────────────────
 
   async function collectFingerprint(): Promise<Fingerprint> {
@@ -479,8 +493,7 @@
     const ver = (await verRes.json()) as VerifyResponse;
 
     saveSession(cfg.domain, ver.sessionToken, ver.ttlSeconds);
-    revealContent();
-    clearTimeout(_safetyReveal);
+    if (!(await hydrateInject(cfg, { Authorization: 'Bearer ' + ver.sessionToken }))) showRetry();
     window.dispatchEvent(new CustomEvent('vx:access', {
       detail: { domain: cfg.domain, token: ver.sessionToken, method: 'human' },
     }));
@@ -524,8 +537,7 @@
         if (res.ok) {
           clearInterval(poll);
           hideOverlay();
-          revealContent();
-          clearTimeout(_safetyReveal);
+          if (!(await hydrateInject(cfg, {}))) showRetry();
           window.dispatchEvent(new CustomEvent('vx:access', {
             detail: { domain: cfg.domain, token: null, method: 'paid_agent' },
           }));
@@ -540,15 +552,15 @@
     const domain = _script?.dataset?.domain?.trim();
     const apiRaw = _script?.dataset?.api?.trim();
     if (!domain || !apiRaw) {
-      revealContent();
-      clearTimeout(_safetyReveal);
+      showRetry();
       return;
     }
     const api = apiRaw.replace(/\/$/, '');
     const slug = (location.pathname.replace(/^\//, '').split('/')[0] || '').trim() || 'index';
     const cfg: VxConfig = { domain, api, slug };
 
-    // Cek session yang masih valid — validasi ke server dulu sebelum reveal
+    // Cek session yang masih valid — hydrate ke server dengan token tersimpan.
+    // Single fetch via hydrateInject: kalau authorized langsung inject body.
     const existingToken = getSession(domain);
     if (existingToken) {
       try {
@@ -558,16 +570,21 @@
           body: JSON.stringify({ domain, slug }),
         });
         if (r.ok) {
-          revealContent();
-          clearTimeout(_safetyReveal);
+          const data = (await r.json()) as { html?: string };
+          const target = document.getElementById('vx-article');
+          if (target && typeof data.html === 'string' && data.html !== '') {
+            target.innerHTML = data.html;
+            return;
+          }
+          // Authorized but body unavailable — fail closed.
+          showRetry();
           return;
         }
         // Token rejected by server (expired/invalid) — clear and re-verify
         sessionStorage.removeItem(SESSION_PREFIX + domain);
       } catch {
-        // Network error — reveal anyway to avoid blocking human on flaky connection
-        revealContent();
-        clearTimeout(_safetyReveal);
+        // Network error — there is no body to reveal; fail closed.
+        showRetry();
         return;
       }
     }
@@ -591,8 +608,7 @@
           // Verify gagal → fallback ke bot flow
           hideOverlay();
           runBotFlow(cfg, [{ name: 'verify_failed', score: 0 }]).catch(() => {
-            revealContent();
-            clearTimeout(_safetyReveal);
+            showRetry();
             showOverlay(renderErrorPanel('Could not complete verification. Please reload.'));
           });
         });
