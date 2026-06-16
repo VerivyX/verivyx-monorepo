@@ -1,14 +1,14 @@
 {
   "name": "Verivyx Paywall",
   "slug": "verivyx-paywall",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
   "requires": "5.8",
   "tested": "6.5",
   "requires_php": "8.0",
-  "last_updated": "2026-06-15",
+  "last_updated": "2026-06-16",
   "homepage": "https://verivyx.com",
   "sections": {
-    "changelog": "<h4>1.1.0</h4><ul><li>Self-hosted one-click updates from the WordPress admin; harden the request gate against Sec-Fetch-Mode bypass.</li></ul>"
+    "changelog": "<h4>1.2.0</h4><ul><li>Content gate Phase 1: gate paid-article bodies on homepage/archive/REST/feed/oEmbed (teaser only); never block homepage or allowlisted pages; fix front-page-blocked bug; add always-public pages setting.</li></ul>"
   }
 }
