@@ -1,7 +1,7 @@
 {
   "name": "Verivyx Paywall",
   "slug": "verivyx-paywall",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
   "requires": "5.8",
   "tested": "6.5",
@@ -9,6 +9,6 @@
   "last_updated": "2026-06-16",
   "homepage": "https://verivyx.com",
   "sections": {
-    "changelog": "<h4>1.3.0</h4><ul><li>Add a 'Check for updates now' button (Settings → Verivyx → Updates) that bypasses the 12-hour update cache and re-checks verivyx.com immediately.</li></ul>"
+    "changelog": "<h4>1.3.1</h4><ul><li>Fix agent 402 returning 502 behind nginx: emit a single standard PAYMENT-REQUIRED header (was duplicated, overflowing fastcgi buffers).</li></ul>"
   }
 }
