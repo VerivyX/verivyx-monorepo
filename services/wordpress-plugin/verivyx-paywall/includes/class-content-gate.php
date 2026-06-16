@@ -71,6 +71,16 @@ class Verivyx_Content_Gate {
         return $out;
     }
 
+    /**
+     * Phase 2 stub for a withheld singular article: the teaser followed by an empty
+     * paywalled container. The embed injects the real body into #vx-article after
+     * PoW/payment. The container class (vx-paywalled) matches the JSON-LD cssSelector.
+     */
+    public static function build_stub(string $teaser_html): string {
+        return $teaser_html
+            . '<div id="vx-article" class="vx-paywalled" data-vx-gated="1"></div>';
+    }
+
     /** Reentrancy guard: get_the_excerpt() may re-fire the_content internally. */
     private static $building = false;
 

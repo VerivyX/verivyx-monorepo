@@ -21,5 +21,12 @@ check(Verivyx_Content_Gate::should_withhold_body(true,  true,  false) === false,
 check(Verivyx_Content_Gate::should_withhold_body(true,  false, true ) === false, 'internal render bypass → serve real body');
 check(Verivyx_Content_Gate::should_withhold_body(false, false, false) === false, 'not gated → serve');
 
+// build_stub(teaser_html) → teaser + empty paywalled container, NO body.
+$stub = Verivyx_Content_Gate::build_stub('<p>Teaser text.</p>');
+check(strpos($stub, 'Teaser text.') !== false, 'stub contains teaser');
+check(strpos($stub, 'id="vx-article"') !== false, 'stub has #vx-article container');
+check(strpos($stub, 'class="vx-paywalled"') !== false, 'stub container has vx-paywalled class (matches cssSelector)');
+check(strpos($stub, '<p>This is your first post') === false, 'stub contains NO article body');
+
 echo $failures === 0 ? "\nOK\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);
