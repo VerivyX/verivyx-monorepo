@@ -8,6 +8,7 @@ class Verivyx_Settings {
     const OPTION_ENABLED    = 'verivyx_enabled';
     const OPTION_SCOPE      = 'verivyx_scope';       // 'all' | 'posts' | 'pages' | 'custom'
     const OPTION_POST_TYPES = 'verivyx_post_types';  // comma-separated custom post types
+    const OPTION_PUBLIC_PAGES = 'verivyx_public_pages'; // comma-separated page slugs never gated
 
     public static function activate(): void {
         add_option(self::OPTION_API_URL,    'https://api.verivyx.com');
@@ -15,6 +16,7 @@ class Verivyx_Settings {
         add_option(self::OPTION_ENABLED,    '1');
         add_option(self::OPTION_SCOPE,      'posts');
         add_option(self::OPTION_POST_TYPES, '');
+        add_option(self::OPTION_PUBLIC_PAGES, '');
     }
 
     public static function deactivate(): void {
@@ -39,6 +41,12 @@ class Verivyx_Settings {
 
     public static function get_custom_post_types(): array {
         $raw = (string) get_option(self::OPTION_POST_TYPES, '');
+        if ($raw === '') return [];
+        return array_filter(array_map('trim', explode(',', $raw)));
+    }
+
+    public static function get_public_pages(): array {
+        $raw = (string) get_option(self::OPTION_PUBLIC_PAGES, '');
         if ($raw === '') return [];
         return array_filter(array_map('trim', explode(',', $raw)));
     }
@@ -68,6 +76,7 @@ class Verivyx_Settings {
             update_option(self::OPTION_ENABLED,    isset($_POST['verivyx_enabled']) ? '1' : '0');
             update_option(self::OPTION_SCOPE,      sanitize_text_field(wp_unslash($_POST['verivyx_scope'] ?? 'posts')));
             update_option(self::OPTION_POST_TYPES, sanitize_text_field(wp_unslash($_POST['verivyx_post_types'] ?? '')));
+            update_option(self::OPTION_PUBLIC_PAGES, sanitize_text_field(wp_unslash($_POST['verivyx_public_pages'] ?? '')));
             echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
         }
 

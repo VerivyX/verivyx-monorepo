@@ -16,7 +16,7 @@ class Verivyx_Gate {
         $post = get_queried_object();
         if (!($post instanceof WP_Post)) return;
 
-        if (!self::is_protected($post)) return;
+        if (!Verivyx_Content_Gate::is_protected_post($post)) return;
 
         $domain     = Verivyx_Settings::get_domain();
         $slug       = $post->post_name;
@@ -79,29 +79,6 @@ class Verivyx_Gate {
 
         // 402 — agent has not paid yet. Return requirements so the agent can pay.
         self::send_402($domain, $slug, $resp);
-    }
-
-    /**
-     * Determine if this post should be gated.
-     */
-    private static function is_protected(WP_Post $post): bool {
-        $scope = Verivyx_Settings::get_scope();
-
-        switch ($scope) {
-            case 'all':
-                return true;
-            case 'posts':
-                return $post->post_type === 'post';
-            case 'pages':
-                return $post->post_type === 'page';
-            case 'posts_pages':
-                return in_array($post->post_type, ['post', 'page'], true);
-            case 'custom':
-                $types = Verivyx_Settings::get_custom_post_types();
-                return in_array($post->post_type, $types, true);
-            default:
-                return false;
-        }
     }
 
     /**

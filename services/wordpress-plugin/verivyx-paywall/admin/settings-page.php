@@ -64,6 +64,14 @@
                     <p class="description">Comma-separated post type slugs (only used when scope is "Custom").</p>
                 </td>
             </tr>
+            <tr>
+                <th scope="row"><label for="verivyx_public_pages">Always-public pages</label></th>
+                <td>
+                    <input type="text" id="verivyx_public_pages" name="verivyx_public_pages" class="regular-text"
+                        value="<?php echo esc_attr(implode(', ', Verivyx_Settings::get_public_pages())); ?>">
+                    <p class="description">Comma-separated page slugs that are never gated (e.g. <code>about, pricing, contact</code>). The homepage and blog index are always public automatically.</p>
+                </td>
+            </tr>
         </table>
 
         <p class="submit">
