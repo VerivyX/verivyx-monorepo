@@ -221,6 +221,20 @@ class Verivyx_Content_Gate {
         return $data;
     }
 
+    /** Print Google paywalled-content JSON-LD on a gated singular page (stub only). */
+    public static function print_jsonld(): void {
+        if (!is_singular()) return;
+        if (Verivyx_Gate::$verified) return; // body present → not a paywalled stub
+        $post = get_post();
+        if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return;
+        $ld = self::build_paywall_jsonld(
+            (string) get_the_title($post),
+            (string) get_the_excerpt($post),
+            (string) get_permalink($post)
+        );
+        echo '<script type="application/ld+json">' . $ld . '</script>' . "\n";
+    }
+
     public static function boot(): void {
         if (!Verivyx_Settings::is_enabled()) return;
 
@@ -234,5 +248,7 @@ class Verivyx_Content_Gate {
         foreach ($rest_types as $type) {
             add_filter("rest_prepare_{$type}", [__CLASS__, 'filter_rest'], 10, 3);
         }
+
+        add_action('wp_head', [__CLASS__, 'print_jsonld'], 20);
     }
 }
