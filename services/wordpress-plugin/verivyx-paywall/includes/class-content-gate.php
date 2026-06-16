@@ -147,12 +147,26 @@ class Verivyx_Content_Gate {
      */
     public static function filter_the_content($content) {
         if (self::$building) return $content;
-        if (is_admin() || is_singular() || is_feed()) return $content;
-        if (!in_the_loop() || !is_main_query()) return $content;
+        if (is_admin() || is_feed()) return $content;
 
+        // SINGULAR (Phase 2 withholding): replace the body with teaser + empty
+        // paywalled container, unless the caller is verified or this is the internal
+        // body render. The embed injects the real body after PoW/payment.
+        if (is_singular()) {
+            if (Verivyx_Gate::$internal_render) return $content; // internal endpoint → real body
+            $post = get_post();
+            if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return $content;
+            if (Verivyx_Gate::$verified) return $content; // intercept confirmed payment/session → real body in source
+            self::$building = true;
+            $stub = self::build_stub(self::excerpt_for($post));
+            self::$building = false;
+            return $stub;
+        }
+
+        // LISTINGS / ARCHIVE / HOME (Phase 1 teaser): unchanged.
+        if (!in_the_loop() || !is_main_query()) return $content;
         $post = get_post();
         if (!($post instanceof WP_Post) || !self::is_protected_post($post)) return $content;
-
         self::$building = true;
         $teaser = self::excerpt_for($post);
         self::$building = false;
