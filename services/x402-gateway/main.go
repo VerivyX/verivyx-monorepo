@@ -558,6 +558,34 @@ func deriveResource(payload PaymentPayload, clientReq PaymentRequirement, hdrDom
 	return domain, slug
 }
 
+// pickRequirement selects a requirement by asset. An exact asset match always wins.
+// With no asset hint, preferSoroban=true selects the first contract-id (Soroban)
+// entry, preferSoroban=false selects the first classic entry (asset contains ':').
+// Falls back to the last entry when neither preference matches, mirroring the prior
+// /x-payment-settle default. Returns ok=false only for an empty slice.
+func pickRequirement(reqs []PaymentRequirement, asset string, preferSoroban bool) (PaymentRequirement, bool) {
+	if len(reqs) == 0 {
+		return PaymentRequirement{}, false
+	}
+	if asset != "" {
+		for _, r := range reqs {
+			if r.Asset == asset {
+				return r, true
+			}
+		}
+	}
+	for _, r := range reqs {
+		isClassic := strings.Contains(r.Asset, ":")
+		if preferSoroban && !isClassic {
+			return r, true
+		}
+		if !preferSoroban && isClassic {
+			return r, true
+		}
+	}
+	return reqs[len(reqs)-1], true
+}
+
 func sessionKey(domain, slug string) string {
 	return fmt.Sprintf("paid:%s:%s", domain, slug)
 }
@@ -895,25 +923,13 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no_requirements"})
 			return
 		}
-		// Pick requirement that matches the asset the client used.
-		// Client includes accepted.asset in the payload (x402 v2 spec).
-		// Fallback: classic USDC (asset with ':') for backward compat with legacy clients.
-		req := requirements[len(requirements)-1] // default to last = classic
+		// Pick requirement that matches the asset the client used (x402 v2 spec puts
+		// it in accepted.asset). No hint → classic, preserving legacy behavior.
 		clientAsset := ""
 		if body.XPayment.Accepted != nil {
 			clientAsset = body.XPayment.Accepted.Asset
 		}
-		for _, r := range requirements {
-			if clientAsset != "" && r.Asset == clientAsset {
-				req = r
-				break
-			}
-			// No asset hint — prefer classic (contains ':')
-			if clientAsset == "" && strings.Contains(r.Asset, ":") {
-				req = r
-				break
-			}
-		}
+		req, _ := pickRequirement(requirements, clientAsset, false)
 
 		resourceURL := "https://" + cfg.Domain + "/" + body.Slug
 		resource := ResourceInfo{URL: resourceURL, MimeType: "text/html"}

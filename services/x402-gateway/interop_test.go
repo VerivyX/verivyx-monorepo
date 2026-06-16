@@ -100,6 +100,29 @@ func TestIsGenericRequirement(t *testing.T) {
 	}
 }
 
+func TestPickRequirement(t *testing.T) {
+	soroban := PaymentRequirement{Asset: "CBIELTK6CONTRACT"}
+	classic := PaymentRequirement{Asset: "USDC:GBBD47"}
+	reqs := []PaymentRequirement{soroban, classic}
+
+	// Exact asset match wins regardless of preference.
+	if got, ok := pickRequirement(reqs, "USDC:GBBD47", true); !ok || got.Asset != classic.Asset {
+		t.Errorf("asset match: got (%v, %v), want classic", got.Asset, ok)
+	}
+	// No hint, preferSoroban=true → contract-id entry.
+	if got, ok := pickRequirement(reqs, "", true); !ok || got.Asset != soroban.Asset {
+		t.Errorf("preferSoroban: got %v, want soroban", got.Asset)
+	}
+	// No hint, preferSoroban=false → classic entry (preserves /x-payment-settle default).
+	if got, ok := pickRequirement(reqs, "", false); !ok || got.Asset != classic.Asset {
+		t.Errorf("preferClassic: got %v, want classic", got.Asset)
+	}
+	// Empty slice → not ok.
+	if _, ok := pickRequirement(nil, "", true); ok {
+		t.Error("empty reqs must return ok=false")
+	}
+}
+
 func TestDeriveResource(t *testing.T) {
 	// From payload.Resource.URL with slug.
 	p := PaymentPayload{Resource: &ResourceInfo{URL: "https://demo.com/article-1"}}
