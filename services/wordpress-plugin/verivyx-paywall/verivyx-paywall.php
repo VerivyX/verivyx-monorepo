@@ -4,7 +4,7 @@
  * Plugin URI:  https://verivyx.com
  * Update URI:  https://verivyx.com/verivyx-paywall.json
  * Description: X402 paywall — humans read free, AI agents pay USDC via Stellar.
- * Version:     1.3.1
+ * Version:     1.3.2
  * Author:      Verivyx
  * License:     MIT
  * Text Domain: verivyx-paywall
@@ -12,7 +12,7 @@
 
 defined('ABSPATH') || exit;
 
-define('VERIVYX_VERSION', '1.3.1');
+define('VERIVYX_VERSION', '1.3.2');
 define('VERIVYX_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('VERIVYX_PLUGIN_FILE', __FILE__);
 define('VERIVYX_PLUGIN_BASENAME', plugin_basename(__FILE__));
