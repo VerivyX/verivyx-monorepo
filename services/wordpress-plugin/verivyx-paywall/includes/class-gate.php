@@ -3,6 +3,12 @@ defined('ABSPATH') || exit;
 
 class Verivyx_Gate {
 
+    /** True once intercept() has confirmed a valid payment / human session (hydrate 200). */
+    public static $verified = false;
+
+    /** True only while rendering the body for the internal REST endpoint. */
+    public static $internal_render = false;
+
     public static function boot(): void {
         if (!Verivyx_Settings::is_enabled()) return;
         // Priority 1 — fires before any theme/plugin template output
@@ -67,6 +73,7 @@ class Verivyx_Gate {
         }
 
         if ($status === 200) {
+            self::$verified = true;
             // Payment verified or human session valid — forward PAYMENT-RESPONSE header if present
             $payment_response = wp_remote_retrieve_header($resp, 'payment-response');
             if ($payment_response) {
