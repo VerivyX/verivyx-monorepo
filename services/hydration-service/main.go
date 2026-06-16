@@ -228,11 +228,29 @@ func buildInternalContentURL(domain, slug string) string {
 	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
 }
 
+// invalidateDomainCache drops a cached domain config so the next lookup re-fetches.
+func invalidateDomainCache(domain string) {
+	domainCacheMu.Lock()
+	delete(domainCacheMap, domain)
+	domainCacheMu.Unlock()
+}
+
+// lookupDomainFresh bypasses the cache (used right after a connect, when the cached
+// config may still hold an empty token).
+func lookupDomainFresh(domain string) (*DomainConfig, error) {
+	invalidateDomainCache(domain)
+	return lookupDomain(domain)
+}
+
 // wpTokenFor returns the per-domain WP internal token (provisioned via the zero-config
-// connect handshake and exposed through auth-service /lookup). Falls back to the global
-// WP_INTERNAL_TOKEN env during transition / single-tenant setups.
+// connect handshake and exposed through auth-service /lookup). If the cached config has
+// no token (e.g. cached just before the creator connected), it retries once with a fresh
+// lookup. Falls back to the global WP_INTERNAL_TOKEN env for single-tenant setups.
 func wpTokenFor(domain string) string {
 	if cfg, err := lookupDomain(domain); err == nil && cfg != nil && cfg.WpInternalToken != "" {
+		return cfg.WpInternalToken
+	}
+	if cfg, err := lookupDomainFresh(domain); err == nil && cfg != nil && cfg.WpInternalToken != "" {
 		return cfg.WpInternalToken
 	}
 	return os.Getenv("WP_INTERNAL_TOKEN")
@@ -259,6 +277,11 @@ func fetchArticleBody(domain, slug string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// Token rejected — likely rotated by a reconnect. Drop the cached config so
+		// the next request re-fetches the fresh token.
+		if resp.StatusCode == http.StatusUnauthorized {
+			invalidateDomainCache(domain)
+		}
 		return "", fmt.Errorf("wp_internal_status_%d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
