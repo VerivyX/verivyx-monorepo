@@ -784,7 +784,12 @@ func main() {
 			})
 			return
 		}
-		out, err := facilitator.Verify(req.PaymentPayload, req.PaymentRequirements)
+		canonReq, _, _, rerr := resolveRequirement(req.PaymentPayload, req.PaymentRequirements, c.GetHeader("X-Paywall-Domain"), c.GetHeader("X-Paywall-Slug"))
+		if rerr != nil {
+			c.JSON(httpStatusForResolveErr(rerr), gin.H{"error": rerr.Error()})
+			return
+		}
+		out, err := facilitator.Verify(req.PaymentPayload, canonReq)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
 			return
@@ -840,28 +845,13 @@ func main() {
 			}
 		}
 
-		domain := ""
-		slug := ""
-		if req.PaymentPayload.Resource != nil {
-			u := req.PaymentPayload.Resource.URL
-			u = strings.TrimPrefix(u, "https://")
-			u = strings.TrimPrefix(u, "http://")
-			parts := strings.SplitN(u, "/", 2)
-			if len(parts) >= 1 {
-				domain = parts[0]
-			}
-			if len(parts) >= 2 {
-				slug = strings.TrimSuffix(parts[1], "/")
-			}
-		}
-		if h := c.GetHeader("X-Paywall-Domain"); h != "" {
-			domain = h
-		}
-		if h := c.GetHeader("X-Paywall-Slug"); h != "" {
-			slug = h
+		canonReq, domain, slug, rerr := resolveRequirement(req.PaymentPayload, req.PaymentRequirements, c.GetHeader("X-Paywall-Domain"), c.GetHeader("X-Paywall-Slug"))
+		if rerr != nil {
+			c.JSON(httpStatusForResolveErr(rerr), gin.H{"error": rerr.Error()})
+			return
 		}
 
-		out, err := facilitator.Settle(req.PaymentPayload, req.PaymentRequirements)
+		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
 			return
@@ -892,7 +882,7 @@ func main() {
 				CreatorAmountUsdc:     creatorAmt,
 				PlatformAmountUsdc:    platformAmt,
 				Network:               out.Network,
-				Asset:                 req.PaymentRequirements.Asset,
+				Asset:                 canonReq.Asset,
 				Payer:                 out.Payer,
 				Status:                "confirmed",
 			})
