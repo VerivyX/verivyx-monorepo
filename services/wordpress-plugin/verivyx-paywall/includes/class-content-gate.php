@@ -45,6 +45,19 @@ class Verivyx_Content_Gate {
     }
 
     /**
+     * Pure: should the singular article body be withheld from the HTML source?
+     * Withhold only when the request is for a gated singular article AND the caller
+     * is NOT verified (no payment, no human session) AND this is NOT the internal
+     * body render (which must emit the real body for the hydration-service).
+     */
+    public static function should_withhold_body(bool $is_gated_singular, bool $is_verified, bool $is_internal_render): bool {
+        if ($is_internal_render) {
+            return false;
+        }
+        return $is_gated_singular && !$is_verified;
+    }
+
+    /**
      * Pure teaser builder: excerpt paragraph (escaped) + "Read more" permalink.
      * Never receives or emits the full article body.
      */
