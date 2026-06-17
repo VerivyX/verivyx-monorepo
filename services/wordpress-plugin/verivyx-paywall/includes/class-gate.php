@@ -74,13 +74,34 @@ class Verivyx_Gate {
 
         if ($status === 200) {
             self::$verified = true;
-            // Payment verified or human session valid — forward PAYMENT-RESPONSE header if present
+            // Forward the x402 settlement receipt if hydration returned one.
             $payment_response = wp_remote_retrieve_header($resp, 'payment-response');
             if ($payment_response) {
                 header('Payment-Response: ' . $payment_response);
                 header('X-Payment-Response: ' . $payment_response);
             }
-            // Let WordPress serve the content normally
+
+            // For a paid AGENT request (one that carried an x402 payment) the client
+            // must receive BOTH the settlement receipt header and the content in this
+            // same response. Letting WordPress render the full themed page can drop the
+            // custom Payment-Response header (theme output, full-page caches), which is
+            // exactly what makes an x402 client think the payment never happened. So we
+            // serve hydration's content directly and exit — mirroring the reliable
+            // send_402() path where headers always survive. Human/cookie sessions fall
+            // through to a normal themed render below.
+            if ($x_payment) {
+                $body = json_decode(wp_remote_retrieve_body($resp), true);
+                $html = (is_array($body) && isset($body['html'])) ? (string) $body['html'] : '';
+                if ($html !== '') {
+                    status_header(200);
+                    header('Content-Type: text/html; charset=UTF-8');
+                    header('Access-Control-Allow-Origin: *');
+                    header('Access-Control-Expose-Headers: PAYMENT-REQUIRED, Payment-Response, X-Payment-Response');
+                    echo $html;
+                    exit;
+                }
+            }
+            // Human session valid — let WordPress serve the themed content normally.
             return;
         }
 
