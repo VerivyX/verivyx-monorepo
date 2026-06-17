@@ -26,7 +26,13 @@ import {
   type Balances,
   type PgEvent,
   type PlaygroundSession,
+  type PlaygroundTarget,
 } from '@/lib/playground';
+
+const TARGETS: { key: PlaygroundTarget; label: string; hint: string }[] = [
+  { key: 'demo', label: 'Demo resource', hint: 'Verivyx sandbox demo content' },
+  { key: 'webtest', label: 'web-test.verivyx.com', hint: 'A real Verivyx-protected WordPress post' },
+];
 
 type Item =
   | { id: string; kind: 'user'; text: string }
@@ -36,7 +42,7 @@ type Item =
   | { id: string; kind: 'probe'; probe: Probe };
 
 const SUGGESTIONS = [
-  'Try accessing the demo WITHOUT paying',
+  'Try accessing it WITHOUT paying',
   'Now pay and unlock the content',
   'Show me both: blocked vs paid',
 ];
@@ -53,6 +59,7 @@ export default function PlaygroundPage() {
 
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
+  const [target, setTarget] = useState<PlaygroundTarget>('demo');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -185,7 +192,7 @@ export default function PlaygroundPage() {
     setBusy(true);
     setStatus('thinking');
     try {
-      await streamChat(session.sessionId, msg, onEvent);
+      await streamChat(session.sessionId, msg, onEvent, target);
     } catch (e) {
       setItems((prev) => [
         ...prev,
@@ -244,6 +251,31 @@ export default function PlaygroundPage() {
             {/* Chat */}
             <div className="lg:col-span-2">
               <div className="surface-card flex h-[32rem] flex-col">
+                {/* Target selector: isolated demo vs a real protected WordPress post */}
+                <div className="flex items-center gap-2 border-b border-[var(--color-cream-200)] p-3">
+                  <span className="text-xs font-medium text-[var(--color-ink-500)]">Pay for:</span>
+                  <div className="inline-flex rounded-lg border border-[var(--color-cream-200)] p-0.5">
+                    {TARGETS.map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        title={t.hint}
+                        disabled={busy}
+                        onClick={() => setTarget(t.key)}
+                        className={`rounded-md px-3 py-1 text-xs transition disabled:opacity-50 ${
+                          target === t.key
+                            ? 'bg-[var(--color-ink-900)] text-white'
+                            : 'text-[var(--color-ink-700)] hover:bg-[var(--color-cream-50)]'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="ml-auto hidden text-xs text-[var(--color-ink-300)] sm:block">
+                    {TARGETS.find((t) => t.key === target)?.hint}
+                  </span>
+                </div>
                 <div
                   ref={scrollRef}
                   className="flex-1 space-y-4 overflow-y-auto p-5"

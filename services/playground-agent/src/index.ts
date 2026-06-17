@@ -12,6 +12,9 @@ import type { ChatMessage } from "./llm.js";
 
 const log = pino({ name: "playground-agent" });
 
+type TargetKey = "demo" | "webtest";
+type Target = { url: string; label: string };
+
 type Session = {
   id: string;
   wallet: SessionWallet;
@@ -19,6 +22,8 @@ type Session = {
   messages: ChatMessage[];
   demoUrl: string;
   demoSlug: string;
+  targets: Record<TargetKey, Target>;
+  activeTarget: TargetKey;
   createdAt: number;
   lastUsed: number;
   busy: boolean;
@@ -94,13 +99,20 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
     const mcp = new McpSession(wallet.secret);
     await mcp.connect();
 
+    const targets: Record<TargetKey, Target> = {
+      demo: { url: demoUrl, label: "Verivyx demo resource (sandbox)" },
+      webtest: { url: config.webTestUrl, label: "web-test.verivyx.com — a real Verivyx-protected WordPress post" },
+    };
+
     const session: Session = {
       id,
       wallet,
       mcp,
       demoUrl,
       demoSlug,
-      messages: [{ role: "system", content: systemPrompt(demoUrl) }],
+      targets,
+      activeTarget: "demo",
+      messages: [{ role: "system", content: systemPrompt(targets.demo.url, targets.demo.label) }],
       createdAt: Date.now(),
       lastUsed: Date.now(),
       busy: false,
@@ -114,6 +126,7 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
       walletAddress: wallet.publicKey,
       balances,
       demoSlug,
+      targets: { demo: targets.demo.label, webtest: targets.webtest.label },
       network: "stellar:testnet",
       model: config.openrouterModel,
     });
@@ -125,11 +138,23 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
 
 // Chat turn → SSE stream of agent + payment events.
 app.post("/api/v1/playground/chat", async (req: Request, res: Response) => {
-  const { sessionId, message } = (req.body ?? {}) as { sessionId?: string; message?: string };
+  const { sessionId, message, target } = (req.body ?? {}) as {
+    sessionId?: string;
+    message?: string;
+    target?: TargetKey;
+  };
   const session = sessionId ? sessions.get(sessionId) : undefined;
   if (!session) return res.status(404).json({ error: "session_not_found" });
   if (typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "empty_message" });
   if (session.busy) return res.status(409).json({ error: "session_busy" });
+
+  // Switch the target (demo ↔ web-test) when the UI selects a different one. The
+  // system prompt is rebuilt so the agent only ever knows the active target URL.
+  if ((target === "demo" || target === "webtest") && target !== session.activeTarget) {
+    session.activeTarget = target;
+    const t = session.targets[target];
+    session.messages[0] = { role: "system", content: systemPrompt(t.url, t.label) };
+  }
 
   session.busy = true;
   session.lastUsed = Date.now();
