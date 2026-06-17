@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server';
 
-// Internal & admin API reference. Admin-gated: the page shell loads only the
-// Scalar runtime, then client JS reads the admin session from localStorage and
-// fetches the specs from the gated spec server (which re-validates the admin
-// token server-side). Non-admins never receive the specs.
+// Internal & admin API reference. Admin-gated: the page shell loads only Swagger
+// UI, then client JS reads the admin session from localStorage and renders the
+// specs from the gated spec server (which re-validates the admin token
+// server-side). A requestInterceptor attaches the Bearer token to every request,
+// including Swagger UI's own fetch of the spec definitions.
 
-const SOURCES = [
-  { url: '/docs/api/internal/spec/internal', title: 'Internal & Admin API', slug: 'internal' },
-  { url: '/docs/api/internal/spec/wordpress', title: 'WordPress Plugin REST', slug: 'wordpress' },
+const SWAGGER = '5.18.2';
+
+const URLS = [
+  { url: '/docs/api/internal/spec/internal', name: 'Internal & Admin API' },
+  { url: '/docs/api/internal/spec/wordpress', name: 'WordPress Plugin REST' },
 ];
 
 function html(): string {
@@ -19,6 +22,7 @@ function html(): string {
     <meta name="robots" content="noindex, nofollow" />
     <title>Verivyx Internal API Reference</title>
     <link rel="icon" href="/icon.svg" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER}/swagger-ui.css" />
     <style>
       body { margin: 0; font: 400 15px/1.5 ui-sans-serif, system-ui, sans-serif; color: #1f1f1f; }
       .vx-topbar {
@@ -28,6 +32,7 @@ function html(): string {
       .vx-topbar a { color: #1f1f1f; text-decoration: none; }
       .vx-topbar .vx-sep { color: #c9c9c9; }
       .vx-badge { margin-left: auto; background: #fde68a; color: #713f12; border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+      .swagger-ui .topbar { background: #1f2937; }
       .vx-gate { max-width: 460px; margin: 18vh auto; text-align: center; padding: 0 20px; }
       .vx-gate h1 { font-size: 20px; margin-bottom: 8px; }
       .vx-gate p { color: #555; }
@@ -41,18 +46,19 @@ function html(): string {
       <span>Internal API Reference</span>
       <span class="vx-badge">Admin only</span>
     </div>
-    <div id="app"></div>
+    <div id="swagger-ui"></div>
     <div id="gate" class="vx-gate" style="display:none">
       <h1>Admin access required</h1>
       <p id="gate-msg">Sign in with a Verivyx admin account to view the internal &amp; admin API reference.</p>
       <a class="btn" href="/login">Go to login</a>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.59.3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER}/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER}/swagger-ui-standalone-preset.js"></script>
     <script>
       (function () {
-        var sources = ${JSON.stringify(SOURCES)};
+        var urls = ${JSON.stringify(URLS)};
         function showGate(msg) {
-          document.getElementById('app').style.display = 'none';
+          document.getElementById('swagger-ui').style.display = 'none';
           if (msg) document.getElementById('gate-msg').textContent = msg;
           document.getElementById('gate').style.display = 'block';
         }
@@ -62,17 +68,30 @@ function html(): string {
           user = JSON.parse(localStorage.getItem('paywall_user') || 'null');
         } catch (e) {}
         if (!token || !user || user.role !== 'ADMIN') { showGate(); return; }
-        Promise.all(
-          sources.map(function (s) {
-            return fetch(s.url, { headers: { Authorization: 'Bearer ' + token } }).then(function (r) {
-              if (!r.ok) throw r.status;
-              return r.text();
-            }).then(function (content) { return { content: content, title: s.title, slug: s.slug }; });
-          })
-        ).then(function (resolved) {
-          Scalar.createApiReference('#app', { sources: resolved, theme: 'default' });
-        }).catch(function (status) {
-          showGate('Could not load the internal specs (status ' + status + '). Your admin session may have expired — sign in again.');
+        window.ui = SwaggerUIBundle({
+          urls: urls,
+          "urls.primaryName": urls[0].name,
+          dom_id: '#swagger-ui',
+          deepLinking: true,
+          presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+          plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+          layout: 'StandaloneLayout',
+          tryItOutEnabled: true,
+          persistAuthorization: true,
+          requestInterceptor: function (req) {
+            // Attach the admin token to the gated spec fetches (and any try-it-out
+            // calls to internal endpoints on this origin).
+            if (req.url.indexOf('/docs/api/internal/spec/') !== -1) {
+              req.headers['Authorization'] = 'Bearer ' + token;
+            }
+            return req;
+          },
+          responseInterceptor: function (res) {
+            if ((res.status === 401 || res.status === 403) && res.url.indexOf('/docs/api/internal/spec/') !== -1) {
+              showGate('Your admin session may have expired — sign in again.');
+            }
+            return res;
+          },
         });
       })();
     </script>

@@ -1,7 +1,7 @@
 # Verivyx OpenAPI specs
 
 Hand-written OpenAPI 3.1 specs for every Verivyx API, rendered with
-[Scalar](https://scalar.com) inside the docs app.
+[Swagger UI](https://swagger.io/tools/swagger-ui/) inside the docs app.
 
 ## Layout
 
@@ -23,9 +23,9 @@ caller's Bearer token against auth-service `/auth/me` (role `ADMIN`).
 
 ## Rendering
 
-- `web/src/app/docs/api/route.ts` — public Scalar reference (multi-source).
-- `web/src/app/docs/api/internal/route.ts` — internal Scalar shell + client-side
-  admin gate.
+- `web/src/app/docs/api/route.ts` — public Swagger UI reference (multi-spec dropdown).
+- `web/src/app/docs/api/internal/route.ts` — internal Swagger UI shell + client-side
+  admin gate (requestInterceptor attaches the admin Bearer token).
 - `web/src/app/docs/api/internal/spec/[name]/route.ts` — admin-gated spec server.
 
 `next.config.ts` traces `openapi-internal/**` into the standalone build so the
