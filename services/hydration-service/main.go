@@ -331,28 +331,6 @@ func lookupDomain(domain string) (*DomainConfig, error) {
 	return &out, nil
 }
 
-func gatewayPaid(domain, slug string) (bool, string) {
-	req, _ := http.NewRequest("GET", gwURL()+"/api/v1/payment/internal/check?domain="+domain+"&slug="+slug, nil)
-	req.Header.Set("X-Internal-Token", string(internalTok))
-	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Do(req)
-	if err != nil {
-		return false, ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return false, ""
-	}
-	var out struct {
-		Paid        bool   `json:"paid"`
-		Transaction string `json:"transaction"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, ""
-	}
-	return out.Paid, out.Transaction
-}
-
 func logEvent(p EventPayload) {
 	body, _ := json.Marshal(p)
 	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -581,31 +559,10 @@ func main() {
 			}
 		}
 
-		// Step 3: Paid x402 session (set by gateway /settle)
-		paid, txHash := gatewayPaid(req.Domain, req.Slug)
-		if paid {
-			go logEvent(EventPayload{
-				Domain:    req.Domain,
-				Type:      "agent_served",
-				SessionID: req.Slug,
-				IP:        ip,
-				Ja4:       ja4,
-			})
-			html, ferr := fetchArticleBody(req.Domain, req.Slug)
-			if ferr != nil {
-				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{
-				"status":      "success",
-				"served":      "paid_agent",
-				"transaction": txHash,
-				"html":        html,
-			})
-			return
-		}
-
-		// Step 4: 402, log block
+		// Step 3: no payment header and no human session → blocked.
+		// (There is deliberately no shared "(domain, slug) is paid" lookup here: a
+		// payment only ever authorizes the request that carries it, so one caller's
+		// payment can never unlock the resource for another, anonymous caller.)
 		agent, cat := classifyAgent(ua)
 		go logEvent(EventPayload{
 			Domain:    req.Domain,

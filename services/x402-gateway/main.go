@@ -641,8 +641,11 @@ func httpStatusForResolveErr(err error) int {
 	}
 }
 
-func sessionKey(domain, slug string) string {
-	return fmt.Sprintf("paid:%s:%s", domain, slug)
+// sessionKey scopes a paid session to (domain, slug, payer). Keying on the payer
+// is what stops a single payment from unlocking the resource for every other
+// (anonymous) caller during the TTL — each account only ever sees its own session.
+func sessionKey(domain, slug, payer string) string {
+	return fmt.Sprintf("paid:%s:%s:%s", domain, slug, payer)
 }
 
 func idempotencyKey(key string) string {
@@ -861,9 +864,13 @@ func main() {
 		}
 
 		if out.Success && domain != "" {
-			key := sessionKey(domain, slug)
-			if err := rdb.Set(ctx, key, out.Transaction, SessionTTL).Err(); err != nil {
-				log.Printf("redis set failed: %v", err)
+			key := sessionKey(domain, slug, out.Payer)
+			// Only open a session when we know who paid; an identity-less session
+			// would be a shared key any caller could ride on.
+			if out.Payer != "" {
+				if err := rdb.Set(ctx, key, out.Transaction, SessionTTL).Err(); err != nil {
+					log.Printf("redis set failed: %v", err)
+				}
 			}
 			cfg, _ := lookupDomain(domain)
 			amt := 0.0
@@ -1014,9 +1021,15 @@ func main() {
 			return
 		}
 		if settleOut.Success {
-			key := sessionKey(body.Domain, body.Slug)
-			if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
-				log.Printf("redis set failed: %v", err)
+			payer := settleOut.Payer
+			if payer == "" {
+				payer = body.XPayment.Payload.Payer
+			}
+			key := sessionKey(body.Domain, body.Slug, payer)
+			if payer != "" {
+				if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
+					log.Printf("redis set failed: %v", err)
+				}
 			}
 			agent, cat := body.Agent, body.Category
 			if agent == "" {
@@ -1050,11 +1063,18 @@ func main() {
 		}
 		domain := c.Query("domain")
 		slug := c.Query("slug")
+		payer := c.Query("payer")
 		if domain == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain required"})
 			return
 		}
-		v, err := rdb.Get(ctx, sessionKey(domain, slug)).Result()
+		// Sessions are payer-scoped: without a payer there is nothing to check, and
+		// we must never report a resource "paid" for an identity-less caller.
+		if payer == "" {
+			c.JSON(http.StatusOK, gin.H{"paid": false})
+			return
+		}
+		v, err := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return
