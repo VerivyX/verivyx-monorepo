@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { resolvePayer, extractSorobanFrom } from './payer';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -531,10 +532,10 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       logger.info({ distributeTx }, 'On-chain split completed via distribute()');
     }
 
-    // Prefer the agent address the client declared (it signs the Soroban auth
-    // entries, not the envelope). In the fee-sponsored path tx.source is a null
-    // placeholder, so falling back to it would report GAAA…WHF.
-    const payer = paymentPayload?.payload?.payer || tx.source;
+    // Prefer the agent address the client declared. Generic x402 v2 Stellar payloads
+    // carry only { transaction } (no payer), so fall back to the Soroban transfer
+    // `from` arg before tx.source (a null placeholder in the fee-sponsored path).
+    const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
 
     logger.info({ txHash, distributeTx }, 'Payment settled successfully');
     const result = {

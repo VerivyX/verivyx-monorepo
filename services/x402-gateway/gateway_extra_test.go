@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
@@ -31,10 +30,9 @@ func TestUsdcToAtomicNonPositive(t *testing.T) {
 }
 
 func TestBuildRequirementsDualAccepts(t *testing.T) {
-	os.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
-	os.Setenv("STELLAR_NETWORK", "testnet")
-	os.Setenv("SOROBAN_PAYWALL_CONTRACT_ID", "CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH")
-	t.Cleanup(func() { os.Unsetenv("SOROBAN_PAYWALL_CONTRACT_ID") })
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("SOROBAN_PAYWALL_CONTRACT_ID", "CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH")
 
 	cfg := &DomainConfig{
 		Domain:          "demo.com",

@@ -10,7 +10,12 @@ class Verivyx_Updater {
     const CACHE_TTL    = 43200; // 12h, in seconds (literal so the class loads without WP)
 
     public static function boot(): void {
+        // Classic path (WP < 5.8, and a resilient fallback): inject into the transient.
         add_filter('pre_set_site_transient_update_plugins', [__CLASS__, 'inject_update']);
+        // Modern path (WP 5.8+): the Update URI header routes checks to this
+        // hostname-scoped filter so wordpress.org cannot claim the "verivyx-paywall"
+        // slug. Both paths reuse build_update(), so they always agree.
+        add_filter('update_plugins_' . self::ALLOWED_HOST, [__CLASS__, 'check_update_uri'], 10, 4);
         add_filter('plugins_api', [__CLASS__, 'plugin_info'], 20, 3);
         add_action('upgrader_process_complete', [__CLASS__, 'flush_cache']);
     }
@@ -18,6 +23,35 @@ class Verivyx_Updater {
     /** version_compare wrapper — pure, unit-testable. */
     public static function is_newer(string $remote, string $local): bool {
         return version_compare($remote, $local, '>');
+    }
+
+    /**
+     * Human-readable result of a force update check. Pure (no WP I/O) so it is
+     * unit-testable. $remote is the version reported by verivyx.com ('' on failure).
+     */
+    public static function status_text(string $remote, string $local): string {
+        if ($remote === '') {
+            return 'Could not reach the Verivyx update server. Please try again in a moment.';
+        }
+        if (self::is_newer($remote, $local)) {
+            return sprintf(
+                'Update available: version %s (you have %s). Open Dashboard → Updates or Plugins to install it.',
+                $remote,
+                $local
+            );
+        }
+        return sprintf('You are up to date (version %s).', $local);
+    }
+
+    /**
+     * Force an immediate re-check: drops our cached metadata AND WordPress's own
+     * plugin-update transient, then refetches. Bypasses the 12h cache so the admin
+     * "Check for updates now" button reflects verivyx.com right away.
+     */
+    public static function force_check(): ?array {
+        delete_transient(self::CACHE_KEY);
+        delete_site_transient('update_plugins'); // make core re-evaluate on next page load
+        return self::fetch_meta(true);
     }
 
     /**
@@ -93,29 +127,56 @@ class Verivyx_Updater {
         return $meta;
     }
 
-    /** Inject an update entry when a newer, validated version exists. */
+    /**
+     * Pure: build the WP update entry from sanitized $meta, or null when there is
+     * no newer version. Shaped for BOTH update channels — the classic transient
+     * (reads new_version + package) and the modern update_plugins_{$hostname}
+     * filter (WP core reads version + id). Unit-testable — no WP I/O.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function build_update(?array $meta, string $current, string $basename, string $update_uri): ?array {
+        if ($meta === null || !self::is_newer($meta['version'], $current)) {
+            return null;
+        }
+        return [
+            'id'           => $update_uri,
+            'slug'         => self::SLUG,
+            'plugin'       => $basename,
+            'new_version'  => $meta['version'],
+            'version'      => $meta['version'],
+            'url'          => $meta['homepage'] !== '' ? $meta['homepage'] : 'https://verivyx.com',
+            'package'      => $meta['download_url'],
+            'tested'       => $meta['tested'],
+            'requires'     => $meta['requires'],
+            'requires_php' => $meta['requires_php'],
+        ];
+    }
+
+    /** Classic path: inject an update entry when a newer, validated version exists. */
     public static function inject_update($transient) {
         if (!is_object($transient)) {
             return $transient;
         }
-        $meta = self::fetch_meta();
-        if ($meta === null || !self::is_newer($meta['version'], VERIVYX_VERSION)) {
+        $update = self::build_update(self::fetch_meta(), VERIVYX_VERSION, VERIVYX_PLUGIN_BASENAME, self::META_URL);
+        if ($update === null) {
             return $transient;
         }
         if (!isset($transient->response) || !is_array($transient->response)) {
             $transient->response = [];
         }
-        $transient->response[VERIVYX_PLUGIN_BASENAME] = (object) [
-            'slug'         => self::SLUG,
-            'plugin'       => VERIVYX_PLUGIN_BASENAME,
-            'new_version'  => $meta['version'],
-            'package'      => $meta['download_url'],
-            'url'          => $meta['homepage'] !== '' ? $meta['homepage'] : 'https://verivyx.com',
-            'tested'       => $meta['tested'],
-            'requires'     => $meta['requires'],
-            'requires_php' => $meta['requires_php'],
-        ];
+        $transient->response[VERIVYX_PLUGIN_BASENAME] = (object) $update;
         return $transient;
+    }
+
+    /**
+     * Modern path (WP 5.8+): callback for update_plugins_{$hostname}, reached via the
+     * plugin's Update URI header. Returns the update entry when a newer version
+     * exists, otherwise the unchanged $update (false) so WP records "no update".
+     */
+    public static function check_update_uri($update, $plugin_data, $plugin_file, $locales) {
+        $built = self::build_update(self::fetch_meta(), VERIVYX_VERSION, (string) $plugin_file, self::META_URL);
+        return $built !== null ? $built : $update;
     }
 
     /** Provide the "View details" modal data. */

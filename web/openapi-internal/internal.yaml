@@ -1,0 +1,500 @@
+openapi: 3.1.0
+info:
+  title: Verivyx Internal & Admin API
+  version: "1.0"
+  description: |
+    **Internal reference — not for public consumers.** These endpoints are
+    reachable only inside the Verivyx service mesh (shared `X-Internal-Token`)
+    or by platform admins (admin-scoped Bearer JWT). They are documented here
+    for operators; the route that renders this file is admin-gated.
+
+    Surfaces covered:
+    - **Service-mesh** (`X-Internal-Token`): auth lookup, internal content fetch,
+      event ingestion, gateway paid-session check and X-PAYMENT settle, MCP admin
+      overview.
+    - **Admin** (admin Bearer JWT): platform stats, creator management, logs,
+      transactions, MCP waitlist/overview.
+
+    The **payment-relayer** (port 8084) has its own spec — see the
+    "Payment Relayer" definition in this internal reference.
+servers:
+  - url: https://api.verivyx.com
+    description: Production (mesh-internal paths are not exposed at the edge)
+tags:
+  - name: mesh-auth
+    description: auth-service service-mesh endpoints (X-Internal-Token)
+  - name: mesh-gateway
+    description: x402-gateway service-mesh endpoints (X-Internal-Token)
+  - name: mesh-mcp
+    description: mcp-server service-mesh endpoints (X-Internal-Token)
+  - name: admin
+    description: Platform admin endpoints (admin Bearer JWT)
+paths:
+  # ---------------- auth-service: service mesh ----------------
+  /api/v1/auth/lookup:
+    get:
+      operationId: internalDomainLookup
+      tags: [mesh-auth]
+      summary: Look up a domain's creator config
+      description: Used by the gateway and hydration service. Includes the per-domain wpInternalToken.
+      security:
+        - internalToken: []
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Domain config.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain: { type: string }
+                  stellar_address: { type: [string, "null"] }
+                  pricePerRequest: { type: number }
+                  platformFee: { type: number }
+                  platform_address: { type: string }
+                  paywallEnabled: { type: boolean }
+                  wpInternalToken: { type: [string, "null"] }
+        "400":
+          description: domain required.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/content/get:
+    get:
+      operationId: internalContentGet
+      tags: [mesh-auth]
+      summary: Fetch stored content body (internal)
+      description: Used by the hydration service for Verivyx-hosted content.
+      security:
+        - internalToken: []
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema: { type: string }
+        - name: slug
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Content.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slug: { type: string }
+                  title: { type: [string, "null"] }
+                  body: { type: string }
+                  mimeType: { type: string }
+        "400":
+          description: domain and slug required.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Creator or content not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/events:
+    post:
+      operationId: internalIngestEvent
+      tags: [mesh-auth]
+      summary: Ingest an analytics/payment event (internal)
+      description: Emitted by the gateway and hydration service for a registered domain.
+      security:
+        - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, type]
+              properties:
+                domain: { type: string }
+                type: { type: string, example: payment_verified }
+                agent: { type: string }
+                category: { type: string }
+                amountUsdc: { type: number }
+                sessionId: { type: string }
+                txHash: { type: string }
+                distributeTransaction: { type: string }
+                creatorAmountUsdc: { type: number }
+                platformAmountUsdc: { type: number }
+                network: { type: string }
+                asset: { type: string }
+                payer: { type: string }
+                status: { type: string }
+                ip: { type: string }
+                powDurationMs: { type: integer }
+                ja4: { type: string }
+      responses:
+        "201":
+          description: Event recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  eventId: { type: integer }
+        "400":
+          description: domain and type required.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: No creator registered for this domain.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  # ---------------- x402-gateway: service mesh ----------------
+  /api/v1/payment/internal/check:
+    get:
+      operationId: gatewayInternalCheck
+      tags: [mesh-gateway]
+      summary: Check paid-session status (internal)
+      security:
+        - internalToken: []
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema: { type: string }
+        - name: slug
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paid-session status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paid: { type: boolean }
+                  transaction: { type: string }
+        "400":
+          description: Missing domain.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Missing or wrong X-Internal-Token.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/payment/internal/x-payment-settle:
+    post:
+      operationId: gatewayInternalXPaymentSettle
+      tags: [mesh-gateway]
+      summary: Verify + settle an X-PAYMENT header (internal)
+      description: Called by the hydration service when an agent retries with an X-PAYMENT/PAYMENT-SIGNATURE header.
+      security:
+        - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, xPayment]
+              properties:
+                domain: { type: string }
+                slug: { type: string }
+                agent: { type: string }
+                category: { type: string }
+                xPayment:
+                  type: object
+                  required: [x402Version, payload]
+                  properties:
+                    x402Version: { type: integer, enum: [2] }
+                    scheme: { type: string }
+                    network: { type: string }
+                    accepted:
+                      type: object
+                      properties:
+                        scheme: { type: string }
+                        network: { type: string }
+                        asset: { type: string }
+                    payload:
+                      type: object
+                      properties:
+                        transaction: { type: string }
+                        payer: { type: string }
+      responses:
+        "200":
+          description: Settlement result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettlementResponse" }
+        "400":
+          description: Invalid payload, unsupported version, or missing domain/transaction.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401":
+          description: Missing or wrong X-Internal-Token.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "402":
+          description: Payment invalid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, example: invalid_payment }
+                  invalidReason: { type: string }
+        "404":
+          description: Domain not registered.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "502":
+          description: Facilitator unreachable.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  # ---------------- mcp-server: service mesh ----------------
+  /admin/overview:
+    get:
+      operationId: mcpAdminOverview
+      tags: [mesh-mcp]
+      summary: MCP service overview (internal)
+      description: "On mcp.verivyx.com. Proxied by the admin console via auth-service."
+      security:
+        - internalToken: []
+      responses:
+        "200":
+          description: MCP overview.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  serviceFee: { type: number }
+                  mainnetEnabled: { type: boolean }
+                  apiKeysConfigured: { type: integer }
+                  chains: { type: array, items: { type: string } }
+                  wallets: { type: object, additionalProperties: true }
+
+  # ---------------- auth-service: admin ----------------
+  /api/v1/admin/stats:
+    get:
+      operationId: adminStats
+      tags: [admin]
+      summary: Platform stats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Aggregated platform statistics.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+
+  /api/v1/admin/creators:
+    get:
+      operationId: adminListCreators
+      tags: [admin]
+      summary: List creators
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Creator list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  creators: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+
+  /api/v1/admin/creators/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer }
+    patch:
+      operationId: adminUpdateCreator
+      tags: [admin]
+      summary: Update a creator (platform fee, paywall)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platformFee: { type: number, minimum: 0, maximum: 1 }
+                paywallEnabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated creator.
+          content:
+            application/json:
+              schema: { type: object, properties: { creator: { type: object, additionalProperties: true } } }
+        "400":
+          description: Invalid id/fields, or cannot change fee for an admin user.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+        "404":
+          description: User not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    delete:
+      operationId: adminDeleteCreator
+      tags: [admin]
+      summary: Delete a creator
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  deletedId: { type: integer }
+        "400":
+          description: Invalid id, or cannot delete an admin account.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+        "404":
+          description: User not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/admin/logs:
+    get:
+      operationId: adminLogs
+      tags: [admin]
+      summary: Recent platform logs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logs.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+
+  /api/v1/admin/transactions:
+    get:
+      operationId: adminTransactions
+      tags: [admin]
+      summary: Platform-wide transactions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: cursor
+          in: query
+          schema: { type: integer }
+        - name: domain
+          in: query
+          schema: { type: string }
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Transactions page.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+
+  /api/v1/admin/mcp-waitlist:
+    get:
+      operationId: adminMcpWaitlist
+      tags: [admin]
+      summary: MCP waitlist entries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Waitlist.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  waitlist: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+
+  /api/v1/admin/mcp-overview:
+    get:
+      operationId: adminMcpOverview
+      tags: [admin]
+      summary: MCP service overview (proxied from mcp-server)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Overview (proxied).
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AdminUnauthorized" }
+        "502":
+          description: MCP server unreachable.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared service-mesh secret.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin-scoped creator JWT.
+  responses:
+    AdminUnauthorized:
+      description: Missing/invalid admin Bearer token.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+    SettlementResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        errorReason: { type: string }
+        transaction: { type: string }
+        distributeTransaction: { type: string }
+        network: { type: string }
+        payer: { type: string }
+        amount: { type: string }

@@ -18,6 +18,8 @@ import {
   update as repUpdate,
   type Tier,
 } from './reputation.js';
+import { isValidPublicHost } from './ssrf.js';
+import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 
 declare global {
   namespace Express {
@@ -791,7 +793,71 @@ app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response
     platformFee: Number(user.platformFee || 0),
     platform_address: PLATFORM_STELLAR_ADDRESS,
     paywallEnabled: user.paywallEnabled,
+    wpInternalToken: user.wpInternalToken ?? null,
   });
+});
+
+// --- Zero-config "Connect to Verivyx" handshake (init → authorize → token) ---
+// OAuth-authorization-code style: the secret token is returned only at the
+// server-to-server `token` exchange (one-time code). Ownership is proven by an
+// SSRF-guarded callback to the real domain, gated by a per-handshake nonce.
+
+app.post('/api/v1/domains/connect/init', async (req: Request, res: Response) => {
+  const site = String(req.body?.site ?? '').trim().toLowerCase();
+  if (!isValidPublicHost(site)) return res.status(400).json({ error: 'invalid_site' });
+  const connectId = newConnectId();
+  const nonce = newNonce();
+  await prisma.connectPending.create({ data: { connectId, site, nonce } });
+  return res.json({ connect_id: connectId, nonce });
+});
+
+app.post('/api/v1/domains/connect/authorize', authGuard, async (req: AuthedRequest, res: Response) => {
+  const connectId = String(req.body?.connect_id ?? '');
+  const pending = await prisma.connectPending.findUnique({ where: { connectId } });
+  if (!pending) return res.status(404).json({ error: 'unknown_connect' });
+  if (isPendingExpired(pending.createdAt)) {
+    await prisma.connectPending.delete({ where: { connectId } }).catch(() => {});
+    return res.status(410).json({ error: 'expired' });
+  }
+  let confirmedNonce: string;
+  try {
+    confirmedNonce = await confirmOwnership(pending.site, connectId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'confirm_failed';
+    return res.status(msg === 'invalid_site' ? 400 : 502).json({ error: msg });
+  }
+  if (confirmedNonce !== pending.nonce) return res.status(502).json({ error: 'confirm_failed' });
+
+  const userId = req.userId!;
+  const conflict = await prisma.user.findFirst({ where: { domain: pending.site, NOT: { id: userId } } });
+  if (conflict) return res.status(409).json({ error: 'domain_conflict' });
+  await prisma.user.update({ where: { id: userId }, data: { domain: pending.site } });
+
+  const code = newCode();
+  await prisma.connectPending.update({ where: { connectId }, data: { code, codeUsed: false, userId } });
+  return res.json({ code });
+});
+
+app.post('/api/v1/domains/connect/token', async (req: Request, res: Response) => {
+  const connectId = String(req.body?.connect_id ?? '');
+  const code = String(req.body?.code ?? '');
+  if (!connectId || !code) return res.status(400).json({ error: 'invalid_request' });
+  const pending = await prisma.connectPending.findUnique({ where: { connectId } });
+  if (!pending || !pending.code || pending.userId == null) return res.status(404).json({ error: 'unknown_connect' });
+  if (pending.codeUsed) return res.status(409).json({ error: 'code_used' });
+  if (isPendingExpired(pending.createdAt)) return res.status(410).json({ error: 'expired' });
+  const a = Buffer.from(code);
+  const b = Buffer.from(pending.code);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(403).json({ error: 'bad_code' });
+  }
+  const token = crypto.randomBytes(30).toString('base64url'); // 40-char url-safe secret
+  await prisma.user.update({
+    where: { id: pending.userId },
+    data: { wpInternalToken: token, domainVerified: true, domainVerifiedAt: new Date() },
+  });
+  await prisma.connectPending.delete({ where: { connectId } }).catch(() => {});
+  return res.json({ token });
 });
 
 // --- Internal content fetch (used by hydration service) ---

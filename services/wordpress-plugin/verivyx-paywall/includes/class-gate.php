@@ -3,6 +3,12 @@ defined('ABSPATH') || exit;
 
 class Verivyx_Gate {
 
+    /** True once intercept() has confirmed a valid payment / human session (hydrate 200). */
+    public static $verified = false;
+
+    /** True only while rendering the body for the internal REST endpoint. */
+    public static $internal_render = false;
+
     public static function boot(): void {
         if (!Verivyx_Settings::is_enabled()) return;
         // Priority 1 — fires before any theme/plugin template output
@@ -16,7 +22,7 @@ class Verivyx_Gate {
         $post = get_queried_object();
         if (!($post instanceof WP_Post)) return;
 
-        if (!self::is_protected($post)) return;
+        if (!Verivyx_Content_Gate::is_protected_post($post)) return;
 
         $domain     = Verivyx_Settings::get_domain();
         $slug       = $post->post_name;
@@ -67,6 +73,7 @@ class Verivyx_Gate {
         }
 
         if ($status === 200) {
+            self::$verified = true;
             // Payment verified or human session valid — forward PAYMENT-RESPONSE header if present
             $payment_response = wp_remote_retrieve_header($resp, 'payment-response');
             if ($payment_response) {
@@ -82,32 +89,9 @@ class Verivyx_Gate {
     }
 
     /**
-     * Determine if this post should be gated.
-     */
-    private static function is_protected(WP_Post $post): bool {
-        $scope = Verivyx_Settings::get_scope();
-
-        switch ($scope) {
-            case 'all':
-                return true;
-            case 'posts':
-                return $post->post_type === 'post';
-            case 'pages':
-                return $post->post_type === 'page';
-            case 'posts_pages':
-                return in_array($post->post_type, ['post', 'page'], true);
-            case 'custom':
-                $types = Verivyx_Settings::get_custom_post_types();
-                return in_array($post->post_type, $types, true);
-            default:
-                return false;
-        }
-    }
-
-    /**
-     * Emit a 402 response with X-Payment-Required header + PaymentRequired JSON body.
-     * The hydration 402 body already contains the full PaymentRequired payload,
-     * so we forward it directly when available.
+     * Emit a 402 response with the x402-standard PAYMENT-REQUIRED header + the
+     * PaymentRequired JSON body. The hydration 402 body already contains the full
+     * PaymentRequired payload, so we forward it directly when available.
      */
     private static function send_402(string $domain, string $slug, $hydration_resp): void {
         // Try to use the body from hydration's 402 (already has requirements inline)
@@ -131,18 +115,9 @@ class Verivyx_Gate {
         // Use WordPress's status_header() — http_response_code() does not reliably
         // override the 200 already set by WP::send_headers() before template_redirect.
         status_header(402);
-        header('Content-Type: application/json');
-        header('Cache-Control: no-store');
-
-        // Standard X402 header (both names for compatibility)
-        if ($encoded) {
-            header('X-Payment-Required: ' . $encoded);
-            header('Payment-Required: ' . $encoded);
+        foreach (self::response_headers_402($encoded) as $name => $value) {
+            header($name . ': ' . $value);
         }
-
-        // CORS headers so AI agents calling from non-browser contexts can read these
-        header('Access-Control-Allow-Origin: *');
-        header('Access-Control-Expose-Headers: X-Payment-Required, Payment-Required, X-Payment-Response, Payment-Response');
 
         if (is_array($body)) {
             echo wp_json_encode($body);
@@ -155,6 +130,32 @@ class Verivyx_Gate {
         }
 
         exit;
+    }
+
+    /**
+     * Pure: response headers for a 402, given the base64-encoded PaymentRequired.
+     *
+     * Emits only the x402-standard PAYMENT-REQUIRED header — official @x402 v2
+     * clients read it via getHeader("PAYMENT-REQUIRED"), and the same payload is
+     * also returned in the JSON body for x402 v1 / body-reading clients. The legacy
+     * X-Payment-Required duplicate is intentionally dropped: a multi-asset
+     * PAYMENT-REQUIRED header is ~2 KB, and emitting it twice (~4.2 KB) overran the
+     * default nginx->php-fpm fastcgi_buffer_size (4 KB), making the 402 path 502.
+     *
+     * @return array<string,string> header name => value
+     */
+    public static function response_headers_402(?string $encoded): array {
+        $headers = [
+            'Content-Type'                  => 'application/json',
+            'Cache-Control'                 => 'no-store',
+            // CORS so AI agents calling from non-browser contexts can read these.
+            'Access-Control-Allow-Origin'   => '*',
+            'Access-Control-Expose-Headers' => 'PAYMENT-REQUIRED, Payment-Response, X-Payment-Response',
+        ];
+        if ($encoded) {
+            $headers['PAYMENT-REQUIRED'] = $encoded;
+        }
+        return $headers;
     }
 
     /**

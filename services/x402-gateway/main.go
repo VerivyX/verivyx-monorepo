@@ -50,13 +50,23 @@ type ResourceInfo struct {
 }
 
 type PaymentRequirement struct {
-	Scheme            string                 `json:"scheme"`
-	Network           string                 `json:"network"`
+	Scheme string `json:"scheme"`
+	Network string `json:"network"`
+	// Amount is the canonical x402 v2 field name (per coinbase/x402
+	// specs/x402-specification-v2.md). MaxAmountRequired carries the same value
+	// under the x402 v1 field name so v1 clients (and the agent-sdk's tolerant
+	// parser) interop too.
 	Amount            string                 `json:"amount"`
+	MaxAmountRequired string                 `json:"maxAmountRequired"`
 	Asset             string                 `json:"asset"`
 	PayTo             string                 `json:"payTo"`
 	MaxTimeoutSeconds int                    `json:"maxTimeoutSeconds"`
-	Extra             map[string]interface{} `json:"extra,omitempty"`
+	// Per-entry resource/description/mimeType (x402 v2 puts these on each accepts
+	// entry). Emitted additively; the top-level PaymentRequired.Resource stays too.
+	Resource    string                 `json:"resource,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	MimeType    string                 `json:"mimeType,omitempty"`
+	Extra       map[string]interface{} `json:"extra,omitempty"`
 }
 
 type PaymentRequired struct {
@@ -68,11 +78,16 @@ type PaymentRequired struct {
 }
 
 type PaymentPayload struct {
-	X402Version int                    `json:"x402Version"`
-	Resource    *ResourceInfo          `json:"resource,omitempty"`
-	Accepted    PaymentRequirement     `json:"accepted"`
-	Payload     map[string]interface{} `json:"payload"`
-	Extensions  map[string]interface{} `json:"extensions,omitempty"`
+	X402Version int `json:"x402Version"`
+	// Scheme/Network are advertised flat for generic x402 v2 clients that read
+	// them at the top level. The Accepted wrapper is kept for the Verivyx relayer
+	// and agent-sdk, which read scheme/network/asset from inside `accepted`.
+	Scheme     string                 `json:"scheme,omitempty"`
+	Network    string                 `json:"network,omitempty"`
+	Resource   *ResourceInfo          `json:"resource,omitempty"`
+	Accepted   PaymentRequirement     `json:"accepted"`
+	Payload    map[string]interface{} `json:"payload"`
+	Extensions map[string]interface{} `json:"extensions,omitempty"`
 }
 
 type VerifyResponse struct {
@@ -444,6 +459,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 			Scheme:            SchemeExact,
 			Network:           network,
 			Amount:            usdcToAtomic(total),
+			MaxAmountRequired: usdcToAtomic(total),
 			Asset:             sorobanUSDC,
 			PayTo:             paywallContract, // agent transfers full amount to the contract
 			MaxTimeoutSeconds: MaxTimeoutSeconds,
@@ -466,6 +482,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 		Scheme:            SchemeExact,
 		Network:           network,
 		Amount:            usdcToAtomic(total),
+		MaxAmountRequired: usdcToAtomic(total),
 		Asset:             classicAsset,
 		PayTo:             cfg.StellarAddress,
 		MaxTimeoutSeconds: MaxTimeoutSeconds,
@@ -476,6 +493,152 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 	})
 
 	return reqs
+}
+
+// withResource stamps the x402 v2 per-entry resource URL + mimeType onto each
+// accepts entry, so generic v2 clients see resource/mimeType where the spec
+// expects them. Mutates and returns the slice.
+func withResource(reqs []PaymentRequirement, resource, mimeType string) []PaymentRequirement {
+	for i := range reqs {
+		reqs[i].Resource = resource
+		reqs[i].MimeType = mimeType
+	}
+	return reqs
+}
+
+// isGenericRequirement reports whether a client-supplied PaymentRequirement lacks
+// the Verivyx settlement extras the relayer needs to settle (Soroban paywallContract
+// or classic splitPayments). Generic x402 v2 callers omit these; trusted Verivyx
+// callers (agent-sdk, /x-payment-settle) include them. Detection is structural —
+// never inferred from the User-Agent.
+func isGenericRequirement(r PaymentRequirement) bool {
+	if r.Extra == nil {
+		return true
+	}
+	if _, ok := r.Extra["paywallContract"]; ok {
+		return false
+	}
+	if _, ok := r.Extra["splitPayments"]; ok {
+		return false
+	}
+	return true
+}
+
+// deriveResource extracts (domain, slug) from an inbound payment, in priority order:
+// the payload resource URL, the per-entry requirement resource URL (Scope A), then
+// the X-Paywall-Domain / X-Paywall-Slug headers (which override). Returns empty
+// strings when no source yields a host.
+func deriveResource(payload PaymentPayload, clientReq PaymentRequirement, hdrDomain, hdrSlug string) (string, string) {
+	domain, slug := "", ""
+	urls := []string{}
+	if payload.Resource != nil {
+		urls = append(urls, payload.Resource.URL)
+	}
+	urls = append(urls, clientReq.Resource)
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		u = strings.TrimPrefix(u, "https://")
+		u = strings.TrimPrefix(u, "http://")
+		parts := strings.SplitN(u, "/", 2)
+		if parts[0] != "" {
+			domain = parts[0]
+			if len(parts) == 2 {
+				slug = strings.TrimSuffix(parts[1], "/")
+			}
+			break
+		}
+	}
+	if hdrDomain != "" {
+		domain = hdrDomain
+	}
+	if hdrSlug != "" {
+		slug = hdrSlug
+	}
+	return domain, slug
+}
+
+// pickRequirement selects a requirement by asset. An exact asset match always wins.
+// With no asset hint, preferSoroban=true selects the first contract-id (Soroban)
+// entry, preferSoroban=false selects the first classic entry (asset contains ':').
+// Falls back to the last entry when neither preference matches, mirroring the prior
+// /x-payment-settle default. Returns ok=false only for an empty slice.
+func pickRequirement(reqs []PaymentRequirement, asset string, preferSoroban bool) (PaymentRequirement, bool) {
+	if len(reqs) == 0 {
+		return PaymentRequirement{}, false
+	}
+	if asset != "" {
+		for _, r := range reqs {
+			if r.Asset == asset {
+				return r, true
+			}
+		}
+	}
+	for _, r := range reqs {
+		isClassic := strings.Contains(r.Asset, ":")
+		if preferSoroban && !isClassic {
+			return r, true
+		}
+		if !preferSoroban && isClassic {
+			return r, true
+		}
+	}
+	return reqs[len(reqs)-1], true
+}
+
+// Sentinel errors for resolveRequirement, mapped to HTTP status by httpStatusForResolveErr.
+var (
+	errDomainRequired        = fmt.Errorf("domain_required")
+	errDomainNotRegistered   = fmt.Errorf("domain_not_registered")
+	errNoMatchingRequirement = fmt.Errorf("no_matching_requirement")
+)
+
+// lookupDomainFn is the domain-config lookup, indirected through a package var so
+// tests can inject a stub without a live auth-service.
+var lookupDomainFn = lookupDomain
+
+// resolveRequirement returns the canonical PaymentRequirement to forward to the
+// facilitator, plus the derived domain/slug. Trusted callers (requirements carrying
+// Verivyx settlement extras) pass through unchanged. Generic x402 v2 callers are
+// reconstructed server-side from the domain config so the relayer can validate the
+// Soroban transfer and run distribute(). Generic callers are steered to the Soroban
+// requirement (preferSoroban=true).
+func resolveRequirement(payload PaymentPayload, clientReq PaymentRequirement, hdrDomain, hdrSlug string) (PaymentRequirement, string, string, error) {
+	domain, slug := deriveResource(payload, clientReq, hdrDomain, hdrSlug)
+	if !isGenericRequirement(clientReq) {
+		return clientReq, domain, slug, nil
+	}
+	if domain == "" {
+		return PaymentRequirement{}, "", "", errDomainRequired
+	}
+	cfg, err := lookupDomainFn(domain)
+	if err != nil || cfg == nil {
+		return PaymentRequirement{}, domain, slug, errDomainNotRegistered
+	}
+	asset := clientReq.Asset
+	if asset == "" {
+		asset = payload.Accepted.Asset
+	}
+	req, ok := pickRequirement(buildRequirements(cfg), asset, true)
+	if !ok {
+		return PaymentRequirement{}, domain, slug, errNoMatchingRequirement
+	}
+	return req, domain, slug, nil
+}
+
+// httpStatusForResolveErr maps resolveRequirement sentinel errors to HTTP status codes.
+func httpStatusForResolveErr(err error) int {
+	switch err {
+	case errDomainRequired:
+		return http.StatusBadRequest
+	case errDomainNotRegistered:
+		return http.StatusNotFound
+	case errNoMatchingRequirement:
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 func sessionKey(domain, slug string) string {
@@ -561,7 +724,7 @@ func main() {
 			X402Version: X402Version,
 			Error:       "X-PAYMENT header is required",
 			Resource:    ResourceInfo{URL: resourceURL, MimeType: "text/html"},
-			Accepts:     buildRequirements(cfg),
+			Accepts:     withResource(buildRequirements(cfg), resourceURL, "text/html"),
 			Extensions: map[string]interface{}{
 				// Advertise the hydrate endpoint so standard X402 clients know
 				// to retry POST /hydrate with X-PAYMENT header attached.
@@ -622,9 +785,15 @@ func main() {
 			})
 			return
 		}
-		out, err := facilitator.Verify(req.PaymentPayload, req.PaymentRequirements)
+		canonReq, _, _, rerr := resolveRequirement(req.PaymentPayload, req.PaymentRequirements, c.GetHeader("X-Paywall-Domain"), c.GetHeader("X-Paywall-Slug"))
+		if rerr != nil {
+			c.JSON(httpStatusForResolveErr(rerr), gin.H{"error": rerr.Error()})
+			return
+		}
+		out, err := facilitator.Verify(req.PaymentPayload, canonReq)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		c.JSON(http.StatusOK, out)
@@ -678,30 +847,16 @@ func main() {
 			}
 		}
 
-		domain := ""
-		slug := ""
-		if req.PaymentPayload.Resource != nil {
-			u := req.PaymentPayload.Resource.URL
-			u = strings.TrimPrefix(u, "https://")
-			u = strings.TrimPrefix(u, "http://")
-			parts := strings.SplitN(u, "/", 2)
-			if len(parts) >= 1 {
-				domain = parts[0]
-			}
-			if len(parts) >= 2 {
-				slug = strings.TrimSuffix(parts[1], "/")
-			}
-		}
-		if h := c.GetHeader("X-Paywall-Domain"); h != "" {
-			domain = h
-		}
-		if h := c.GetHeader("X-Paywall-Slug"); h != "" {
-			slug = h
+		canonReq, domain, slug, rerr := resolveRequirement(req.PaymentPayload, req.PaymentRequirements, c.GetHeader("X-Paywall-Domain"), c.GetHeader("X-Paywall-Slug"))
+		if rerr != nil {
+			c.JSON(httpStatusForResolveErr(rerr), gin.H{"error": rerr.Error()})
+			return
 		}
 
-		out, err := facilitator.Settle(req.PaymentPayload, req.PaymentRequirements)
+		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 
@@ -730,7 +885,7 @@ func main() {
 				CreatorAmountUsdc:     creatorAmt,
 				PlatformAmountUsdc:    platformAmt,
 				Network:               out.Network,
-				Asset:                 req.PaymentRequirements.Asset,
+				Asset:                 canonReq.Asset,
 				Payer:                 out.Payer,
 				Status:                "confirmed",
 			})
@@ -756,7 +911,8 @@ func main() {
 	r.GET("/api/v1/payment/supported", func(c *gin.Context) {
 		out, err := facilitator.Supported()
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			log.Printf("facilitator supported() failed: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		c.JSON(http.StatusOK, out)
@@ -815,30 +971,20 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no_requirements"})
 			return
 		}
-		// Pick requirement that matches the asset the client used.
-		// Client includes accepted.asset in the payload (x402 v2 spec).
-		// Fallback: classic USDC (asset with ':') for backward compat with legacy clients.
-		req := requirements[len(requirements)-1] // default to last = classic
+		// Pick requirement that matches the asset the client used (x402 v2 spec puts
+		// it in accepted.asset). No hint → classic, preserving legacy behavior.
 		clientAsset := ""
 		if body.XPayment.Accepted != nil {
 			clientAsset = body.XPayment.Accepted.Asset
 		}
-		for _, r := range requirements {
-			if clientAsset != "" && r.Asset == clientAsset {
-				req = r
-				break
-			}
-			// No asset hint — prefer classic (contains ':')
-			if clientAsset == "" && strings.Contains(r.Asset, ":") {
-				req = r
-				break
-			}
-		}
+		req, _ := pickRequirement(requirements, clientAsset, false)
 
 		resourceURL := "https://" + cfg.Domain + "/" + body.Slug
 		resource := ResourceInfo{URL: resourceURL, MimeType: "text/html"}
 		payload := PaymentPayload{
 			X402Version: X402Version,
+			Scheme:      req.Scheme,
+			Network:     req.Network,
 			Resource:    &resource,
 			Accepted:    req,
 			Payload: map[string]interface{}{
@@ -849,7 +995,8 @@ func main() {
 
 		verifyOut, err := facilitator.Verify(payload, req)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		if !verifyOut.IsValid {
@@ -862,7 +1009,8 @@ func main() {
 
 		settleOut, err := facilitator.Settle(payload, req)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		if settleOut.Success {

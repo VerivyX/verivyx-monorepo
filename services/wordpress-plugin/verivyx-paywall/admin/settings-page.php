@@ -3,6 +3,25 @@
     <h1>Verivyx Paywall Settings</h1>
     <p>Humans read free. AI agents pay USDC via <a href="https://verivyx.com" target="_blank">Verivyx</a>.</p>
 
+    <?php $vx_connected = Verivyx_Connect::is_connected(); ?>
+    <h2>Connection</h2>
+    <p>Status:
+        <?php if ($vx_connected): ?>
+            <strong style="color:#1a7f37;">&#9679; Connected to Verivyx</strong>
+        <?php else: ?>
+            <strong style="color:#b32d2e;">&#9679; Not connected</strong>
+        <?php endif; ?>
+    </p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('verivyx_connect_start'); ?>
+        <input type="hidden" name="action" value="verivyx_connect_start">
+        <p>
+            <input type="submit" class="button button-primary" value="<?php echo $vx_connected ? 'Reconnect' : 'Connect to Verivyx'; ?>">
+            <span class="description">One click &mdash; your site is verified automatically (no DNS, files, or tokens to copy).</span>
+        </p>
+    </form>
+    <hr>
+
     <form method="post">
         <?php wp_nonce_field('verivyx_save_settings'); ?>
 
@@ -64,10 +83,46 @@
                     <p class="description">Comma-separated post type slugs (only used when scope is "Custom").</p>
                 </td>
             </tr>
+            <tr>
+                <th scope="row"><label for="verivyx_public_pages">Always-public pages</label></th>
+                <td>
+                    <input type="text" id="verivyx_public_pages" name="verivyx_public_pages" class="regular-text"
+                        value="<?php echo esc_attr(implode(', ', Verivyx_Settings::get_public_pages())); ?>">
+                    <p class="description">Comma-separated page slugs that are never gated (e.g. <code>about, pricing, contact</code>). The homepage and blog index are always public automatically.</p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row"><label for="verivyx_internal_token">Internal content token</label></th>
+                <td>
+                    <?php $token_locked = defined('VERIVYX_INTERNAL_TOKEN'); ?>
+                    <input type="password" id="verivyx_internal_token" name="verivyx_internal_token" class="regular-text"
+                        value="<?php echo esc_attr(Verivyx_Settings::get_internal_token()); ?>"
+                        autocomplete="off" <?php echo $token_locked ? 'disabled' : ''; ?>>
+                    <p class="description">
+                        Shared secret that lets the Verivyx hydration service fetch the full article body for
+                        verified readers (full-withholding mode). Must exactly match <code>WP_INTERNAL_TOKEN</code>
+                        on the hydration service. Leave blank to keep withholding disabled (the body endpoint stays closed).
+                        <?php if ($token_locked): ?>
+                            <br><strong>Managed by the <code>VERIVYX_INTERNAL_TOKEN</code> constant in wp-config.php (field disabled).</strong>
+                        <?php endif; ?>
+                    </p>
+                </td>
+            </tr>
         </table>
 
         <p class="submit">
             <input type="submit" name="verivyx_save" class="button-primary" value="Save Settings">
+        </p>
+    </form>
+
+    <hr>
+    <h2>Updates</h2>
+    <p>Installed version: <code><?php echo esc_html(VERIVYX_VERSION); ?></code></p>
+    <form method="post">
+        <?php wp_nonce_field('verivyx_check_updates'); ?>
+        <p>
+            <input type="submit" name="verivyx_check_updates" class="button" value="Check for updates now">
+            <span class="description">Bypasses the 12-hour cache and re-checks verivyx.com immediately.</span>
         </p>
     </form>
 

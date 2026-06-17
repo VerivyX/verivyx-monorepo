@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -180,6 +182,7 @@ type DomainConfig struct {
 	StellarAddress  string  `json:"stellar_address"`
 	PricePerRequest float64 `json:"pricePerRequest"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
+	WpInternalToken string  `json:"wpInternalToken"`
 }
 
 type EventPayload struct {
@@ -217,6 +220,82 @@ func verifyHumanSession(token string) (*humanClaims, error) {
 
 func authURL() string { return env("AUTH_SERVICE_URL", "http://auth-service:8083") }
 func gwURL() string   { return env("GATEWAY_URL", "http://x402-gateway:8081") }
+
+// buildInternalContentURL is the token-protected WP endpoint that returns the real
+// article body for a (domain, slug). The hydration-service calls it only after the
+// caller is authorized (human session or paid x402 session).
+func buildInternalContentURL(domain, slug string) string {
+	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
+}
+
+// invalidateDomainCache drops a cached domain config so the next lookup re-fetches.
+func invalidateDomainCache(domain string) {
+	domainCacheMu.Lock()
+	delete(domainCacheMap, domain)
+	domainCacheMu.Unlock()
+}
+
+// lookupDomainFresh bypasses the cache (used right after a connect, when the cached
+// config may still hold an empty token).
+func lookupDomainFresh(domain string) (*DomainConfig, error) {
+	invalidateDomainCache(domain)
+	return lookupDomain(domain)
+}
+
+// wpTokenFor returns the per-domain WP internal token (provisioned via the zero-config
+// connect handshake and exposed through auth-service /lookup). If the cached config has
+// no token (e.g. cached just before the creator connected), it retries once with a fresh
+// lookup. Falls back to the global WP_INTERNAL_TOKEN env for single-tenant setups.
+func wpTokenFor(domain string) string {
+	if cfg, err := lookupDomain(domain); err == nil && cfg != nil && cfg.WpInternalToken != "" {
+		return cfg.WpInternalToken
+	}
+	if cfg, err := lookupDomainFresh(domain); err == nil && cfg != nil && cfg.WpInternalToken != "" {
+		return cfg.WpInternalToken
+	}
+	return os.Getenv("WP_INTERNAL_TOKEN")
+}
+
+// fetchArticleBody calls the WP internal content endpoint with the per-domain token and
+// returns the rendered body HTML. Fail-closed: any error returns ("", err) so the
+// handler does NOT release a body.
+func fetchArticleBody(domain, slug string) (string, error) {
+	token := wpTokenFor(domain)
+	if token == "" {
+		return "", fmt.Errorf("wp_internal_token_unset")
+	}
+	reqURL := buildInternalContentURL(domain, slug)
+	httpReq, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("X-Verivyx-Internal", token)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// Token rejected — likely rotated by a reconnect. Drop the cached config so
+		// the next request re-fetches the fresh token.
+		if resp.StatusCode == http.StatusUnauthorized {
+			invalidateDomainCache(domain)
+		}
+		return "", fmt.Errorf("wp_internal_status_%d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	return parsed.HTML, nil
+}
 
 func lookupDomain(domain string) (*DomainConfig, error) {
 	// Check cache first (read lock)
@@ -445,10 +524,16 @@ func main() {
 				if respJSON, jsonErr := json.Marshal(result); jsonErr == nil {
 					c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(respJSON))
 				}
+				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				if ferr != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "success",
 					"served":      "paid_agent",
 					"transaction": result.Transaction,
+					"html":        html,
 				})
 				return
 			}
@@ -482,9 +567,15 @@ func main() {
 					IP:        ip,
 					Ja4:       ja4,
 				})
+				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				if ferr != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"status": "success",
 					"served": "human",
+					"html":   html,
 				})
 				return
 			}
@@ -500,10 +591,16 @@ func main() {
 				IP:        ip,
 				Ja4:       ja4,
 			})
+			html, ferr := fetchArticleBody(req.Domain, req.Slug)
+			if ferr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "success",
 				"served":      "paid_agent",
 				"transaction": txHash,
+				"html":        html,
 			})
 			return
 		}

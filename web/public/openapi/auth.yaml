@@ -1,0 +1,754 @@
+openapi: 3.1.0
+info:
+  title: Verivyx Auth & Creator API
+  version: "1.0"
+  description: |
+    Creator accounts, email verification, humanity verification (Proof-of-Work),
+    content management, analytics, and the zero-config "Connect to Verivyx"
+    domain handshake.
+
+    Auth model:
+    - **Public** endpoints need no credentials (some are Turnstile-gated).
+    - **Creator** endpoints need `Authorization: Bearer <JWT>` from login or
+      email verification.
+    - The `/domains/connect/*` handshake is OAuth-authorization-code style: the
+      secret `wp_internal_token` is only returned at the final `token` exchange.
+
+    Internal (service-mesh) and admin endpoints are documented separately in the
+    internal reference.
+servers:
+  - url: https://api.verivyx.com
+    description: Production
+tags:
+  - name: account
+    description: Registration, verification, login (public)
+  - name: creator
+    description: Authenticated creator endpoints (Bearer JWT)
+  - name: humanity
+    description: Proof-of-Work humanity challenge (public)
+  - name: connect
+    description: Zero-config "Connect to Verivyx" domain handshake
+  - name: waitlist
+    description: MCP early-access waitlist (public)
+paths:
+  /api/v1/auth/health:
+    get:
+      operationId: authHealth
+      tags: [account]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: ok } } }
+
+  /api/v1/auth/register:
+    post:
+      operationId: register
+      tags: [account]
+      summary: Register a creator account
+      description: Creates an unverified account and emails a verification link. Rate limited to 5/hour per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, turnstileToken]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6 }
+                turnstileToken: { type: string, description: Cloudflare Turnstile token. }
+      responses:
+        "201":
+          description: Account created; verification email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  requiresVerification: { type: boolean, example: true }
+                  email: { type: string, format: email }
+        "400":
+          description: Invalid email/password or email already registered.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Captcha verification failed.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "429":
+          description: Too many registrations from this IP.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [account]
+      summary: Verify an email and auto-login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: The token from the verification link. }
+      responses:
+        "200":
+          description: Verified; returns a session token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  token: { type: string, description: Creator session JWT. }
+                  user: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Token missing, invalid, or expired.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "429":
+          description: Too many attempts.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/resend-verification:
+    post:
+      operationId: resendVerification
+      tags: [account]
+      summary: Resend the verification email
+      description: Always returns success (does not reveal whether the email is registered). Rate limited 5/hour per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200":
+          description: Accepted.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: success } } }
+        "400":
+          description: Invalid email.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "429":
+          description: Too many requests.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      tags: [account]
+      summary: Log in
+      description: Rate limited 10 per 15 min per IP. The account must be email-verified.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, turnstileToken]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                turnstileToken: { type: string }
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: success }
+                  token: { type: string }
+                  user: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Invalid email or password.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Captcha failed or email not verified.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: email_not_verified, detail: "Please verify your email before logging in." }
+        "429":
+          description: Too many login attempts.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/me:
+    get:
+      operationId: getMe
+      tags: [creator]
+      summary: Get the authenticated creator
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The current user.
+          content:
+            application/json:
+              schema: { type: object, properties: { user: { $ref: "#/components/schemas/User" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: User not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/payout-status:
+    get:
+      operationId: getPayoutStatus
+      tags: [creator]
+      summary: Check USDC trustline / payout readiness
+      description: Proxies an on-chain trustline check via the payment relayer.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Payout readiness and asset/network config.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready: { type: boolean }
+                  address: { type: [string, "null"] }
+                  needsOnboarding: { type: boolean }
+                  hasTrustline: { type: boolean }
+                  usdcBalance: { type: string }
+                  xlmBalance: { type: string }
+                  network: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502":
+          description: Relayer unreachable.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/settings:
+    patch:
+      operationId: updateSettings
+      tags: [creator]
+      summary: Update creator settings
+      description: All fields optional; at least one required. Price must be 0.0001–1 USDC.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pricePerRequest: { type: number, minimum: 0.0001, maximum: 1 }
+                domain: { type: string, example: example.com }
+                stellar_address: { type: string, description: 56-char key starting with G. }
+                paywallEnabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema: { type: object, properties: { user: { $ref: "#/components/schemas/User" } } }
+        "400":
+          description: Invalid field, no fields, or domain already taken.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/auth/challenge:
+    post:
+      operationId: getChallenge
+      tags: [humanity]
+      summary: Request a Proof-of-Work challenge
+      description: Issues a signed PoW challenge whose difficulty adapts to the requester's reputation. Rate limited 10/min per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, slug]
+              properties:
+                domain: { type: string }
+                slug: { type: string }
+      responses:
+        "200":
+          description: Challenge issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challenge: { type: string, description: Signed challenge token to return to verify-human. }
+                  salt: { type: string }
+                  difficulty: { type: integer }
+                  ttlSeconds: { type: integer }
+                  powSalt: { type: string }
+        "400":
+          description: domain and slug required.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "429":
+          description: Too many challenges.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/verify-human:
+    post:
+      operationId: verifyHuman
+      tags: [humanity]
+      summary: Submit a solved Proof-of-Work and get a human session token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, nonce]
+              properties:
+                challenge: { type: string, description: The signed challenge from /challenge. }
+                nonce: { type: string, description: The PoW solution nonce. }
+                fingerprint: { type: object, additionalProperties: true, description: Optional browser fingerprint signals. }
+                powDurationMs: { type: integer, description: Optional solve time (anomaly detection). }
+      responses:
+        "200":
+          description: Verified human; returns a domain-scoped session JWT.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionToken: { type: string }
+                  ttlSeconds: { type: integer }
+        "401":
+          description: Invalid/expired challenge, context mismatch, bad PoW, solved too fast, or failed fingerprint.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/mcp-waitlist:
+    post:
+      operationId: joinMcpWaitlist
+      tags: [waitlist]
+      summary: Join the MCP early-access waitlist
+      description: Generic success even on duplicates. Turnstile-gated, rate limited 10/hour per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, turnstileToken]
+              properties:
+                email: { type: string, format: email }
+                turnstileToken: { type: string }
+      responses:
+        "200":
+          description: Accepted.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: success } } }
+        "400":
+          description: Invalid email.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Captcha failed.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "429":
+          description: Too many requests.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/contents:
+    get:
+      operationId: listContents
+      tags: [creator]
+      summary: List the creator's content
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Content list (metadata only).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contents:
+                    type: array
+                    items: { $ref: "#/components/schemas/ContentSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createContent
+      tags: [creator]
+      summary: Create content
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, body]
+              properties:
+                slug: { type: string, description: lowercase alphanumeric/hyphen. }
+                title: { type: string }
+                body: { type: string, maxLength: 200000 }
+                mimeType: { type: string, default: text/html }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { type: object, properties: { content: { $ref: "#/components/schemas/Content" } } }
+        "400":
+          description: Invalid slug/body or slug already exists.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/auth/contents/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getContent
+      tags: [creator]
+      summary: Get one content item (with body)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The content item.
+          content:
+            application/json:
+              schema: { type: object, properties: { content: { $ref: "#/components/schemas/Content" } } }
+        "400":
+          description: Invalid slug.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    patch:
+      operationId: updateContent
+      tags: [creator]
+      summary: Update content
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                body: { type: string, maxLength: 200000 }
+                mimeType: { type: string }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { type: object, properties: { content: { $ref: "#/components/schemas/Content" } } }
+        "400":
+          description: Invalid slug/body or no fields.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    delete:
+      operationId: deleteContent
+      tags: [creator]
+      summary: Delete content
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: deleted } } }
+        "400":
+          description: Invalid slug.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Not found.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/auth/analytics:
+    get:
+      operationId: getAnalytics
+      tags: [creator]
+      summary: Creator analytics summary (last 7 days)
+      description: Aggregated event totals, per-agent breakdown, recent activity, reputation signals, and anomaly counts.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Analytics summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: Aggregated analytics (totals, byAgent, recent, signals, anomalies, topJa4).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/auth/transactions:
+    get:
+      operationId: getTransactions
+      tags: [creator]
+      summary: List the creator's settled payments (cursor-paginated)
+      description: Returns settled `payment_verified` events, newest first. Use `nextCursor` to page.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: cursor
+          in: query
+          description: The last seen event id (from a prior `nextCursor`).
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Transaction page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items: { $ref: "#/components/schemas/TxEvent" }
+                  nextCursor:
+                    type: [integer, "null"]
+                    description: Pass as `cursor` to fetch the next page; null when no more.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/domains/connect/init:
+    post:
+      operationId: connectInit
+      tags: [connect]
+      summary: Begin a domain connect handshake
+      description: Step 1. The WordPress plugin calls this with its site host; returns a connect_id and ownership nonce.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [site]
+              properties:
+                site: { type: string, description: "Public site host, e.g. example.com." }
+      responses:
+        "200":
+          description: Handshake started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connect_id: { type: string }
+                  nonce: { type: string }
+        "400":
+          description: Invalid site.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/domains/connect/authorize:
+    post:
+      operationId: connectAuthorize
+      tags: [connect]
+      summary: Authorize a connect handshake (proves ownership)
+      description: |
+        Step 2. The logged-in creator authorizes the handshake. The server makes
+        an SSRF-guarded callback to the site's `/wp-json/verivyx/v1/confirm` to
+        verify the nonce, binds the domain to the creator, and returns a one-time
+        code. Pending handshakes expire after 10 minutes.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connect_id]
+              properties:
+                connect_id: { type: string }
+      responses:
+        "200":
+          description: Authorized; returns a one-time code.
+          content:
+            application/json:
+              schema: { type: object, properties: { code: { type: string } } }
+        "400":
+          description: Invalid site.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Unknown connect_id.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409":
+          description: Domain already bound to another creator.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "410":
+          description: Handshake expired.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "502":
+          description: Ownership confirmation failed.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /api/v1/domains/connect/token:
+    post:
+      operationId: connectToken
+      tags: [connect]
+      summary: Exchange the code for the per-domain internal token
+      description: Step 3. Server-to-server exchange of the one-time code for the site's wp_internal_token. The code is single-use.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connect_id, code]
+              properties:
+                connect_id: { type: string }
+                code: { type: string }
+      responses:
+        "200":
+          description: Returns the per-domain wp_internal_token.
+          content:
+            application/json:
+              schema: { type: object, properties: { token: { type: string } } }
+        "400":
+          description: Invalid request.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "403":
+          description: Bad code.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Unknown connect_id.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409":
+          description: Code already used.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "410":
+          description: Handshake expired.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Creator session JWT from login or email verification.
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer token.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        detail: { type: string }
+    User:
+      type: object
+      description: Public-shaped creator profile.
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        domain: { type: [string, "null"] }
+        stellar_address: { type: [string, "null"] }
+        pricePerRequest: { type: number }
+        paywallEnabled: { type: boolean }
+        emailVerified: { type: boolean }
+        domainVerified: { type: boolean }
+    ContentSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        title: { type: [string, "null"] }
+        mimeType: { type: string }
+        updatedAt: { type: string, format: date-time }
+    Content:
+      type: object
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        title: { type: [string, "null"] }
+        body: { type: string }
+        mimeType: { type: string }
+        updatedAt: { type: string, format: date-time }
+    TxEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        type: { type: string }
+        agent: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        amountUsdc: { type: number }
+        createdAt: { type: string, format: date-time }
+        sessionId: { type: [string, "null"] }
+        txHash: { type: [string, "null"] }
+        distributeTransaction: { type: [string, "null"] }
+        creatorAmountUsdc: { type: [number, "null"] }
+        platformAmountUsdc: { type: [number, "null"] }
+        network: { type: [string, "null"] }
+        asset: { type: [string, "null"] }
+        payer: { type: [string, "null"] }
+        status: { type: [string, "null"] }

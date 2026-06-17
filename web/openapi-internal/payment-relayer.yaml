@@ -1,0 +1,229 @@
+openapi: 3.1.0
+info:
+  title: Verivyx Payment Relayer
+  version: "1.0"
+  description: |
+    **Internal reference.** The payment relayer signs and submits Stellar
+    transactions and checks on-chain state. It is an internal worker (port 8084)
+    reachable only inside the service mesh — it is NOT exposed at the public edge.
+    The gateway calls `/verify` and `/settle`; auth-service calls `/trustline`.
+    `/supported` and `/health` are unauthenticated liveness/info endpoints.
+servers:
+  - url: http://payment-relayer:8084
+    description: Service-mesh internal (not edge-exposed)
+tags:
+  - name: relayer
+    description: Stellar verify/settle and on-chain checks
+paths:
+  /supported:
+    get:
+      operationId: relayerSupported
+      tags: [relayer]
+      summary: Supported schemes/networks
+      security: []
+      responses:
+        "200":
+          description: Supported kinds and signers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kinds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        x402Version: { type: integer, example: 2 }
+                        scheme: { type: string, example: exact }
+                        network: { type: string, example: "stellar:testnet" }
+                  extensions: { type: array, items: { type: string } }
+                  signers: { type: object, additionalProperties: true }
+
+  /trustline:
+    get:
+      operationId: relayerTrustline
+      tags: [relayer]
+      summary: Check a creator's USDC trustline / payout readiness
+      security:
+        - internalToken: []
+      parameters:
+        - name: account
+          in: query
+          required: true
+          description: Stellar address (G... 56 chars).
+          schema: { type: string }
+      responses:
+        "200":
+          description: On-chain trustline + balance state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account: { type: string }
+                  funded: { type: boolean }
+                  hasTrustline: { type: boolean }
+                  usdcBalance: { type: string }
+                  xlmBalance: { type: string }
+                  asset:
+                    type: object
+                    properties:
+                      code: { type: string, example: USDC }
+                      issuer: { type: string }
+                  network: { type: string, example: testnet }
+                  networkPassphrase: { type: string }
+                  horizonUrl: { type: string }
+        "400":
+          description: Invalid account.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "502":
+          description: Horizon unreachable.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /verify:
+    post:
+      operationId: relayerVerify
+      tags: [relayer]
+      summary: Verify a signed Stellar payment (no submission)
+      security:
+        - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentPayload, paymentRequirements]
+              properties:
+                paymentPayload: { $ref: "#/components/schemas/PaymentPayload" }
+                paymentRequirements: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isValid: { type: boolean }
+                  payer: { type: string }
+                  invalidReason: { type: string }
+        "400":
+          description: Missing transaction XDR, missing signatures, or invalid XDR/asset/split.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isValid: { type: boolean, example: false }
+                  invalidReason: { type: string }
+
+  /settle:
+    post:
+      operationId: relayerSettle
+      tags: [relayer]
+      summary: Submit a signed Stellar payment on-chain
+      description: Submits the transaction (and, for the Soroban path, runs the contract split). Supply `Idempotency-Key` for safe retries.
+      security:
+        - internalToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentPayload, paymentRequirements]
+              properties:
+                x402Version: { type: integer, enum: [2] }
+                paymentPayload: { $ref: "#/components/schemas/PaymentPayload" }
+                paymentRequirements: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Settlement result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  transaction: { type: string }
+                  distributeTransaction: { type: string }
+                  errorReason: { type: string }
+        "400":
+          description: Missing/invalid transaction, asset mismatch, or split not fulfilled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: false }
+                  errorReason: { type: string }
+        "500":
+          description: Settlement error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: false }
+                  errorReason: { type: string }
+        "503":
+          description: Submission timed out.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: false }
+                  errorReason: { type: string }
+
+  /health:
+    get:
+      operationId: relayerHealth
+      tags: [relayer]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: payment-relayer }
+
+components:
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared service-mesh secret.
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    PaymentPayload:
+      type: object
+      properties:
+        x402Version: { type: integer, enum: [2] }
+        scheme: { type: string }
+        network: { type: string }
+        accepted: { type: object, additionalProperties: true }
+        payload:
+          type: object
+          description: Signed transaction envelope.
+          properties:
+            transaction: { type: string, description: Stellar transaction XDR. }
+            payer: { type: string }

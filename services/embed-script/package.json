@@ -4,6 +4,8 @@
   "description": "",
   "main": "build.js",
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && node build.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

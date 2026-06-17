@@ -242,6 +242,10 @@ export type AppConfig = {
   readonly facilitatorApiKey: string | undefined;
   /** When non-empty, target URLs must start with one of these prefixes. */
   readonly allowedPaymentPrefixes: readonly string[];
+  /** Allowed Host header values for /mcp (DNS-rebinding defense). "*" disables. */
+  readonly allowedHosts: readonly string[];
+  /** Allowed Origin header values for /mcp (when an Origin is present). "*" disables. */
+  readonly allowedOrigins: readonly string[];
 };
 
 let cached: AppConfig | undefined;
@@ -297,6 +301,20 @@ export function getConfig(): AppConfig {
     allowedPaymentPrefixes: (optionalEnv("MCP_ALLOWED_PAYMENT_PREFIXES") ?? "")
       .split(",")
       .map(p => p.trim())
+      .filter(Boolean),
+    // DNS-rebinding defense: validate the Host (and Origin, when present) of /mcp
+    // requests. Defaults cover the public host + the internal docker name the
+    // playground uses. Override with MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS;
+    // set either to "*" to disable that check.
+    allowedHosts: (optionalEnv("MCP_ALLOWED_HOSTS") ??
+      "mcp.verivyx.com,mcp-server:8088,localhost:8088,127.0.0.1:8088")
+      .split(",")
+      .map(h => h.trim().toLowerCase())
+      .filter(Boolean),
+    allowedOrigins: (optionalEnv("MCP_ALLOWED_ORIGINS") ??
+      "https://mcp.verivyx.com,https://verivyx.com,https://docs.verivyx.com")
+      .split(",")
+      .map(o => o.trim().toLowerCase())
       .filter(Boolean),
   };
 
