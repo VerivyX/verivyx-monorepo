@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ArrowUpRight } from 'lucide-react';
 
-type Item = { label: string; href: string; external?: boolean };
+type Item = { label: string; href: string; external?: boolean; reload?: boolean };
 
 export const DOCS_NAV: { title: string; items: Item[] }[] = [
   {
@@ -26,6 +26,12 @@ export const DOCS_NAV: { title: string; items: Item[] }[] = [
     title: 'For AI agents',
     items: [
       { label: 'x402 MCP server', href: '/docs/mcp' },
+    ],
+  },
+  {
+    title: 'API reference',
+    items: [
+      { label: 'API reference', href: '/docs/api', reload: true },
     ],
   },
   {
@@ -61,6 +67,10 @@ export function DocsSidebar() {
                     <a href={item.href} target="_blank" rel="noopener noreferrer" className={cls}>
                       {item.label}
                       <ArrowUpRight size={13} className="text-[var(--color-ink-300)]" />
+                    </a>
+                  ) : item.reload ? (
+                    <a href={item.href} className={cls}>
+                      {item.label}
                     </a>
                   ) : (
                     <Link href={item.href} className={cls}>
