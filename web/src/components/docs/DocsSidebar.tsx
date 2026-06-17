@@ -29,9 +29,12 @@ export const DOCS_NAV: { title: string; items: Item[] }[] = [
     ],
   },
   {
-    title: 'API reference',
+    title: 'API',
     items: [
-      { label: 'API reference', href: '/docs/api', reload: true },
+      { label: 'API overview', href: '/docs/api-overview' },
+      { label: 'Payment & content API', href: '/docs/payment-api' },
+      { label: 'Creator & auth API', href: '/docs/creator-api' },
+      { label: 'API reference (Swagger)', href: '/docs/api', reload: true },
     ],
   },
   {
