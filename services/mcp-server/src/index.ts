@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { requireInternalToken, requireMcpKey } from "./auth.js";
+import { dnsRebindingGuard } from "./dnsGuard.js";
 import { createPaymentService } from "./chains/payments.js";
 import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
@@ -27,7 +28,7 @@ async function main(): Promise<void> {
   // Per-session transports for the Streamable HTTP MCP endpoint.
   const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-  app.post("/mcp", requireMcpKey, async (req: Request, res: Response) => {
+  app.post("/mcp", dnsRebindingGuard, requireMcpKey, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
@@ -72,8 +73,8 @@ async function main(): Promise<void> {
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", requireMcpKey, handleSessionRequest);
-  app.delete("/mcp", requireMcpKey, handleSessionRequest);
+  app.get("/mcp", dnsRebindingGuard, requireMcpKey, handleSessionRequest);
+  app.delete("/mcp", dnsRebindingGuard, requireMcpKey, handleSessionRequest);
 
   // Liveness — no secrets.
   app.get("/healthz", (_req, res) => {
