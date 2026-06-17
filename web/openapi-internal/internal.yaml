@@ -15,10 +15,8 @@ info:
     - **Admin** (admin Bearer JWT): platform stats, creator management, logs,
       transactions, MCP waitlist/overview.
 
-    The **payment-relayer** (port 8084) has no public HTTP surface documented
-    here; it is an internal worker the gateway and auth-service call (e.g.
-    `GET /trustline`, settlement submission). It is reachable only inside the
-    mesh with `X-Internal-Token`.
+    The **payment-relayer** (port 8084) has its own spec — see the
+    "Payment Relayer" definition in this internal reference.
 servers:
   - url: https://api.verivyx.com
     description: Production (mesh-internal paths are not exposed at the edge)

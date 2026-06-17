@@ -535,12 +535,21 @@ paths:
     get:
       operationId: getTransactions
       tags: [creator]
-      summary: List the creator's settled-payment / activity events
+      summary: List the creator's settled payments (cursor-paginated)
+      description: Returns settled `payment_verified` events, newest first. Use `nextCursor` to page.
       security:
         - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: cursor
+          in: query
+          description: The last seen event id (from a prior `nextCursor`).
+          schema: { type: integer }
       responses:
         "200":
-          description: Transaction/event list.
+          description: Transaction page.
           content:
             application/json:
               schema:
@@ -549,6 +558,9 @@ paths:
                   transactions:
                     type: array
                     items: { $ref: "#/components/schemas/TxEvent" }
+                  nextCursor:
+                    type: [integer, "null"]
+                    description: Pass as `cursor` to fetch the next page; null when no more.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/domains/connect/init:

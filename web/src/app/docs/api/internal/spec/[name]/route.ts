@@ -18,6 +18,7 @@ const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'https://api.verivyx.com';
 // Whitelist of servable internal specs (no path traversal).
 const SPECS: Record<string, string> = {
   internal: 'internal.yaml',
+  relayer: 'payment-relayer.yaml',
   wordpress: 'wordpress-plugin.yaml',
 };
 

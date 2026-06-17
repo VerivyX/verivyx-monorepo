@@ -10,6 +10,7 @@ const SWAGGER = '5.18.2';
 
 const URLS = [
   { url: '/docs/api/internal/spec/internal', name: 'Internal & Admin API' },
+  { url: '/docs/api/internal/spec/relayer', name: 'Payment Relayer' },
   { url: '/docs/api/internal/spec/wordpress', name: 'WordPress Plugin REST' },
 ];
 

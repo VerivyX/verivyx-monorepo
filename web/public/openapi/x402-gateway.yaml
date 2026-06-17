@@ -113,10 +113,6 @@ paths:
           in: query
           required: true
           schema: { type: string, example: example.com }
-        - name: slug
-          in: query
-          required: false
-          schema: { type: string }
       responses:
         "200":
           description: Pricing for the domain.
