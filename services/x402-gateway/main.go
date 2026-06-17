@@ -792,7 +792,8 @@ func main() {
 		}
 		out, err := facilitator.Verify(req.PaymentPayload, canonReq)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		c.JSON(http.StatusOK, out)
@@ -854,7 +855,8 @@ func main() {
 
 		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 
@@ -909,7 +911,8 @@ func main() {
 	r.GET("/api/v1/payment/supported", func(c *gin.Context) {
 		out, err := facilitator.Supported()
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			log.Printf("facilitator supported() failed: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		c.JSON(http.StatusOK, out)
@@ -992,7 +995,8 @@ func main() {
 
 		verifyOut, err := facilitator.Verify(payload, req)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		if !verifyOut.IsValid {
@@ -1005,7 +1009,8 @@ func main() {
 
 		settleOut, err := facilitator.Settle(payload, req)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable", "details": err.Error()})
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
 			return
 		}
 		if settleOut.Success {
