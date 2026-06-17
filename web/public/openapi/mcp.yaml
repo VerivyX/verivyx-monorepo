@@ -1,0 +1,197 @@
+openapi: 3.1.0
+info:
+  title: Verivyx x402 MCP Server
+  version: "0.1"
+  description: |
+    A Model Context Protocol (MCP) server that lets AI agents pay for
+    x402-protected resources across chains. Transport is **MCP Streamable HTTP**
+    (JSON-RPC 2.0) on a single `/mcp` endpoint — this is not a conventional REST
+    API, so the operations below describe the transport envelope, not per-tool
+    REST routes.
+
+    ## Tools (called via MCP `tools/call`)
+    - **list_supported_chains** — chains/assets payable + the flat service fee. _(no input)_
+    - **wallet_info** — active paying wallet(s) and network config per chain. _(no input)_
+    - **quote_payment** — preview cost to fetch an x402 resource without paying.
+      Input: `{ url, method?, body?, headers? }`.
+    - **pay_for_resource** — fetch an x402 URL and auto-pay the micropayment +
+      flat Verivyx fee; auto-selects the advertised chain. Input: same shape.
+
+    ## Auth
+    Every `/mcp` request requires an API key via `X-Verivyx-MCP-Key` or
+    `Authorization: Bearer <key>` (keys from `MCP_API_KEYS`). An optional
+    `x-session-stellar-secret` header (gated by the same key) pays from the
+    caller's own Stellar wallet instead of the server's.
+
+    ## Sessions
+    The first request must be an MCP `initialize`; the server returns an
+    `Mcp-Session-Id` header. Subsequent POST/GET/DELETE requests must echo it.
+servers:
+  - url: https://mcp.verivyx.com
+    description: Production
+tags:
+  - name: mcp
+    description: MCP Streamable HTTP transport
+  - name: ops
+    description: Operational endpoints
+paths:
+  /mcp:
+    post:
+      operationId: mcpRpc
+      tags: [mcp]
+      summary: MCP JSON-RPC request (initialize, tools/list, tools/call, ...)
+      description: |
+        Send an MCP JSON-RPC 2.0 message. Without a session, the body must be an
+        `initialize` request; the response carries an `Mcp-Session-Id` header to
+        reuse on later calls.
+      security:
+        - mcpKey: []
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/McpSessionId"
+        - name: x-session-stellar-secret
+          in: header
+          required: false
+          description: Optional Stellar secret to pay from the caller's wallet (Stellar-only).
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JsonRpcRequest" }
+            examples:
+              initialize:
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: initialize
+                  params:
+                    protocolVersion: "2025-03-26"
+                    capabilities: {}
+                    clientInfo: { name: my-agent, version: "1.0" }
+              payForResource:
+                value:
+                  jsonrpc: "2.0"
+                  id: 2
+                  method: tools/call
+                  params:
+                    name: pay_for_resource
+                    arguments: { url: "https://example.com/my-article" }
+      responses:
+        "200":
+          description: JSON-RPC response (or SSE stream for streaming methods).
+          headers:
+            Mcp-Session-Id:
+              description: Session id (set on initialize).
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+        "400":
+          description: No valid session id (non-initialize request without a session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+        "401":
+          description: Missing or invalid MCP API key.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    get:
+      operationId: mcpStream
+      tags: [mcp]
+      summary: Open the MCP server-to-client SSE stream
+      description: Requires an existing Mcp-Session-Id.
+      security:
+        - mcpKey: []
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/McpSessionId"
+      responses:
+        "200":
+          description: SSE stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid or missing session id.
+        "401":
+          description: Missing or invalid MCP API key.
+    delete:
+      operationId: mcpClose
+      tags: [mcp]
+      summary: Terminate an MCP session
+      security:
+        - mcpKey: []
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/McpSessionId"
+      responses:
+        "200":
+          description: Session terminated.
+        "400":
+          description: Invalid or missing session id.
+        "401":
+          description: Missing or invalid MCP API key.
+
+  /healthz:
+    get:
+      operationId: mcpHealth
+      tags: [ops]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  service: { type: string, example: mcp-server }
+                  chains:
+                    type: array
+                    items: { type: string }
+
+components:
+  securitySchemes:
+    mcpKey:
+      type: apiKey
+      in: header
+      name: X-Verivyx-MCP-Key
+      description: MCP API key (from MCP_API_KEYS).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Alternative to X-Verivyx-MCP-Key — the same key as a Bearer token.
+  parameters:
+    McpSessionId:
+      name: Mcp-Session-Id
+      in: header
+      required: false
+      description: MCP session id returned by initialize. Required on all non-initialize requests.
+      schema: { type: string }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc: { type: string, enum: ["2.0"] }
+        id: { type: [integer, string] }
+        method: { type: string, example: tools/call }
+        params: { type: object, additionalProperties: true }
+    JsonRpcResponse:
+      type: object
+      properties:
+        jsonrpc: { type: string, enum: ["2.0"] }
+        id: { type: [integer, string, "null"] }
+        result: { type: object, additionalProperties: true }
+        error:
+          type: object
+          properties:
+            code: { type: integer }
+            message: { type: string }
