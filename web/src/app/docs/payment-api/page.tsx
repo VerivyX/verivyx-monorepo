@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Lead, H2, H3, P, Ul, Li, C, A, Note } from '@/components/docs/Prose';
+import { Lead, H2, H3, P, C, A, Note, Table } from '@/components/docs/Prose';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 
 export const metadata: Metadata = { title: 'Payment & content API — Verivyx Docs' };
@@ -16,6 +16,20 @@ export default function PaymentApi() {
         <A href="/docs/x402">x402 flow guide</A> for the narrative, or the{' '}
         <A href="/docs/api">interactive reference</A> for full schemas.
       </Lead>
+
+      <H2 id="endpoints">Endpoints at a glance</H2>
+      <Table
+        head={['Method & path', 'Auth', 'Purpose']}
+        rows={[
+          [<C key="e">GET /api/v1/payment/requirements</C>, 'None', 'Discover how to pay (returns the x402 402 body).'],
+          [<C key="e">GET /api/v1/payment/quote</C>, 'None', 'Price, asset, network, and destination for a domain.'],
+          [<C key="e">POST /api/v1/payment/verify</C>, 'None', 'Dry-run: validate a signed payment without submitting.'],
+          [<C key="e">POST /api/v1/payment/settle</C>, 'None', 'Submit on-chain, split, and open a paid session.'],
+          [<C key="e">GET /api/v1/payment/supported</C>, 'None', 'Supported schemes and networks.'],
+          [<C key="e">GET /api/v1/payment/health</C>, 'None', 'Liveness probe.'],
+          [<C key="e">POST /api/v1/content/hydrate</C>, 'x402 / human JWT / paid session', 'Return the real content to an authorized requester.'],
+        ]}
+      />
 
       <H2 id="gateway">Payment gateway</H2>
 

@@ -61,6 +61,36 @@ export function C({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Clean reference table. `head` is the column labels; `rows` is a list of cells.
+export function Table({ head, rows }: { head: React.ReactNode[]; rows: React.ReactNode[][] }) {
+  return (
+    <div className="mt-6 overflow-x-auto rounded-xl border border-[var(--color-cream-200)]">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="bg-[var(--color-cream-100)] text-left">
+            {head.map((h, i) => (
+              <th key={i} className="px-4 py-2.5 font-semibold text-[var(--color-ink-900)]">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className="border-t border-[var(--color-cream-200)] align-top">
+              {row.map((cell, ci) => (
+                <td key={ci} className="px-4 py-2.5 leading-relaxed text-[var(--color-ink-700)]">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Note({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-6 rounded-xl border border-[var(--color-stellar-yellow)] bg-[var(--color-stellar-yellow-soft)]/40 px-4 py-3 text-sm text-[var(--color-ink-700)]">
