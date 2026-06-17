@@ -52,9 +52,10 @@ type ResourceInfo struct {
 type PaymentRequirement struct {
 	Scheme string `json:"scheme"`
 	Network string `json:"network"`
-	// Amount is the legacy Verivyx field name (kept for backward compat with the
-	// agent-sdk and the MCP server's tolerant parser). MaxAmountRequired carries
-	// the same value under the canonical x402 v2 name so generic v2 clients interop.
+	// Amount is the canonical x402 v2 field name (per coinbase/x402
+	// specs/x402-specification-v2.md). MaxAmountRequired carries the same value
+	// under the x402 v1 field name so v1 clients (and the agent-sdk's tolerant
+	// parser) interop too.
 	Amount            string                 `json:"amount"`
 	MaxAmountRequired string                 `json:"maxAmountRequired"`
 	Asset             string                 `json:"asset"`

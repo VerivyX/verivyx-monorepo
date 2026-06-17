@@ -276,8 +276,8 @@ components:
       properties:
         scheme: { type: string, example: exact }
         network: { type: string, description: CAIP-2 network id., example: "stellar:testnet" }
-        amount: { type: string, description: Legacy Verivyx field — atomic USDC amount., example: "100000" }
-        maxAmountRequired: { type: string, description: Canonical x402 v2 amount (same value as amount)., example: "100000" }
+        amount: { type: string, description: "Canonical x402 v2 atomic USDC amount.", example: "100000" }
+        maxAmountRequired: { type: string, description: "x402 v1 field name carrying the same value, emitted for v1-client interop.", example: "100000" }
         asset: { type: string, description: Soroban contract id or "USDC:ISSUER" for classic. }
         payTo: { type: string, description: "Destination address (paywall contract for Soroban, creator address for classic)." }
         maxTimeoutSeconds: { type: integer, example: 60 }

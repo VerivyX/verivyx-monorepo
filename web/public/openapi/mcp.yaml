@@ -23,9 +23,16 @@ info:
     `x-session-stellar-secret` header (gated by the same key) pays from the
     caller's own Stellar wallet instead of the server's.
 
-    ## Sessions
-    The first request must be an MCP `initialize`; the server returns an
-    `Mcp-Session-Id` header. Subsequent POST/GET/DELETE requests must echo it.
+    ## Sessions & transport headers
+    Per the MCP Streamable HTTP spec, clients **must**:
+    - send `Accept: application/json, text/event-stream` on every `/mcp` request;
+    - send the first request as an MCP `initialize` — the server returns an
+      `Mcp-Session-Id` header that must be echoed on all subsequent requests;
+    - send `MCP-Protocol-Version: <negotiated version>` (e.g. `2025-06-18`) on
+      every request after initialization.
+
+    A non-initialize request without a valid `Mcp-Session-Id` returns `400`; a
+    request against a terminated session returns `404` (start a new session).
 servers:
   - url: https://mcp.verivyx.com
     description: Production
@@ -48,7 +55,9 @@ paths:
         - mcpKey: []
         - bearerAuth: []
       parameters:
+        - $ref: "#/components/parameters/AcceptHeader"
         - $ref: "#/components/parameters/McpSessionId"
+        - $ref: "#/components/parameters/McpProtocolVersion"
         - name: x-session-stellar-secret
           in: header
           required: false
@@ -105,7 +114,9 @@ paths:
         - mcpKey: []
         - bearerAuth: []
       parameters:
+        - $ref: "#/components/parameters/AcceptHeader"
         - $ref: "#/components/parameters/McpSessionId"
+        - $ref: "#/components/parameters/McpProtocolVersion"
       responses:
         "200":
           description: SSE stream.
@@ -171,6 +182,18 @@ components:
       required: false
       description: MCP session id returned by initialize. Required on all non-initialize requests.
       schema: { type: string }
+    AcceptHeader:
+      name: Accept
+      in: header
+      required: true
+      description: Must list both content types per the MCP Streamable HTTP spec.
+      schema: { type: string, default: "application/json, text/event-stream" }
+    McpProtocolVersion:
+      name: MCP-Protocol-Version
+      in: header
+      required: false
+      description: Negotiated MCP protocol version; required on requests after initialization.
+      schema: { type: string, example: "2025-06-18" }
   schemas:
     Error:
       type: object
