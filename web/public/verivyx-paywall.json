@@ -1,14 +1,14 @@
 {
   "name": "Verivyx Paywall",
   "slug": "verivyx-paywall",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
   "requires": "5.8",
   "tested": "6.5",
   "requires_php": "8.0",
-  "last_updated": "2026-06-16",
+  "last_updated": "2026-06-17",
   "homepage": "https://verivyx.com",
   "sections": {
-    "changelog": "<h4>1.5.0</h4><ul><li>Zero-config Connect to Verivyx (one-click site link, no token to copy); embed refactor.</li></ul>"
+    "changelog": "<h4>1.6.0</h4><ul><li>Deliver the x402 settlement receipt to paid agents: serve paid-agent content directly so the Payment-Response header survives and x402 clients see payment success.</li></ul>"
   }
 }
