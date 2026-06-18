@@ -2,6 +2,8 @@ import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseApiKeys } from "./apiKeys.js";
+import type { ApiKeyEntry } from "./apiKeys.js";
 import {
   STELLAR_PUBNET_CAIP2,
   STELLAR_TESTNET_CAIP2,
@@ -229,8 +231,8 @@ function buildSolanaConfig(): SolanaChainConfig | undefined {
 export type AppConfig = {
   readonly port: number;
   readonly mainnetEnabled: boolean;
-  /** Raw API keys allowed to call /mcp. Hashed admin-managed keys land later. */
-  readonly apiKeys: readonly string[];
+  /** API keys allowed to call /mcp, stored as SHA-256 hashes with per-key labels. */
+  readonly apiKeys: readonly ApiKeyEntry[];
   readonly internalToken: string;
   readonly feeUsdc: string;
   readonly stellarSecretKey: string;
@@ -275,10 +277,7 @@ export function getConfig(): AppConfig {
     );
   }
 
-  const apiKeys = (optionalEnv("MCP_API_KEYS") ?? "")
-    .split(",")
-    .map(k => k.trim())
-    .filter(Boolean);
+  const apiKeys = parseApiKeys(optionalEnv("MCP_API_KEYS") ?? "");
 
   cached = {
     port: Number(optionalEnv("MCP_PORT") ?? "8088"),

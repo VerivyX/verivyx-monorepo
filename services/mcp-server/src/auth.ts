@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
+import { matchApiKey } from "./apiKeys.js";
 import { getConfig } from "./config.js";
 
 const MCP_KEY_HEADER = "x-verivyx-mcp-key";
@@ -10,16 +11,6 @@ function safeEqual(a: string, b: string): boolean {
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
-}
-
-/** Returns the matched key (or null) without leaking which key matched. */
-function matchApiKey(presented: string): string | null {
-  const { apiKeys } = getConfig();
-  let matched: string | null = null;
-  for (const key of apiKeys) {
-    if (safeEqual(presented, key)) matched = key;
-  }
-  return matched;
 }
 
 /**
@@ -37,10 +28,12 @@ export function requireMcpKey(req: Request, res: Response, next: NextFunction): 
     res.status(503).json({ error: "mcp_disabled", message: "No MCP API keys configured." });
     return;
   }
-  if (!presented || !matchApiKey(presented)) {
+  const label = matchApiKey(presented, apiKeys);
+  if (!presented || label === null) {
     res.status(401).json({ error: "unauthorized", message: "Valid X-Verivyx-MCP-Key required." });
     return;
   }
+  (req as Request & { mcpKeyLabel?: string }).mcpKeyLabel = label;
   next();
 }
 
