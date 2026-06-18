@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Ledger as _, storage::Persistent as _},
     token, Address, Env, String,
 };
 
@@ -10,6 +10,7 @@ use soroban_sdk::{
 
 /// Returns (env, contract_id, admin, platform, usdc_id) with init already called.
 /// A keeper address is generated internally and registered for `distribute`.
+/// usdc_id is the official USDC token registered at init.
 fn setup() -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -22,7 +23,7 @@ fn setup() -> (Env, Address, Address, Address, Address) {
     let usdc_id     = env.register_stellar_asset_contract_v2(usdc_admin).address();
 
     let client = PaywallContractClient::new(&env, &contract_id);
-    client.init(&admin, &platform, &keeper);
+    client.init(&admin, &platform, &keeper, &usdc_id);
 
     (env, contract_id, admin, platform, usdc_id)
 }
@@ -35,12 +36,12 @@ fn mint(env: &Env, usdc_id: &Address, to: &Address, amount: i128) {
 
 #[test]
 fn test_init_double_fails() {
-    let (env, contract_id, admin, platform, _) = setup();
+    let (env, contract_id, admin, platform, usdc_id) = setup();
     let client = PaywallContractClient::new(&env, &contract_id);
     let keeper = Address::generate(&env);
 
     assert_eq!(
-        client.try_init(&admin, &platform, &keeper),
+        client.try_init(&admin, &platform, &keeper, &usdc_id),
         Err(Ok(ContractError::AlreadyInitialized))
     );
 }
@@ -326,4 +327,107 @@ fn test_set_enabled_domain_not_registered() {
         client.try_set_enabled(&creator, &domain, &false),
         Err(Ok(ContractError::DomainNotRegistered))
     );
+}
+
+// ── USDC token assertion ───────────────────────────────────────────────────
+
+#[test]
+fn test_pay_wrong_token_rejected() {
+    let (env, contract_id, _, _, _) = setup();
+    let client   = PaywallContractClient::new(&env, &contract_id);
+    let creator  = Address::generate(&env);
+    let payer    = Address::generate(&env);
+    let domain   = String::from_str(&env, "wrongtoken-pay.com");
+
+    client.register(&creator, &domain, &50_000, &500);
+
+    // Create a DIFFERENT token contract (not the usdc registered at init).
+    let other_token_admin = Address::generate(&env);
+    let other_token = env.register_stellar_asset_contract_v2(other_token_admin).address();
+    mint(&env, &other_token, &payer, 1_000_000);
+
+    assert_eq!(
+        client.try_pay(&payer, &domain, &other_token),
+        Err(Ok(ContractError::WrongAsset))
+    );
+}
+
+#[test]
+fn test_distribute_wrong_token_rejected() {
+    let (env, contract_id, _, _, usdc_id) = setup();
+    let client  = PaywallContractClient::new(&env, &contract_id);
+    let creator = Address::generate(&env);
+    let domain  = String::from_str(&env, "wrongtoken-dist.com");
+
+    let price:        i128 = 500_000;
+    let platform_fee: i128 = 10_000;
+
+    client.register(&creator, &domain, &price, &platform_fee);
+
+    // Mint correct USDC into the contract (simulating x402 inbound transfer).
+    mint(&env, &usdc_id, &contract_id, price);
+
+    // Create a DIFFERENT token and try to distribute with it.
+    let other_token_admin = Address::generate(&env);
+    let other_token = env.register_stellar_asset_contract_v2(other_token_admin).address();
+
+    assert_eq!(
+        client.try_distribute(&domain, &other_token, &price),
+        Err(Ok(ContractError::WrongAsset))
+    );
+}
+
+// ── keeper re-register guard ───────────────────────────────────────────────
+
+#[test]
+fn test_register_by_keeper_cannot_change_creator() {
+    let (env, contract_id, _, _, _) = setup();
+    let client   = PaywallContractClient::new(&env, &contract_id);
+    let creator_a = Address::generate(&env);
+    let creator_b = Address::generate(&env);
+    let domain    = String::from_str(&env, "keeper-guard.com");
+
+    // Keeper registers domain for creatorA.
+    client.register_by_keeper(&domain, &creator_a, &500_000, &10_000);
+
+    // Keeper tries to re-register the same domain for a different creatorB → Unauthorized.
+    assert_eq!(
+        client.try_register_by_keeper(&domain, &creator_b, &500_000, &10_000),
+        Err(Ok(ContractError::Unauthorized))
+    );
+
+    // Keeper re-registering the SAME creatorA (price update) must still succeed.
+    client.register_by_keeper(&domain, &creator_a, &600_000, &12_000);
+    let data = client.get_creator(&domain).unwrap();
+    assert_eq!(data.price,        600_000);
+    assert_eq!(data.platform_fee, 12_000);
+    assert_eq!(data.address,      creator_a);
+}
+
+// ── TTL extension ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_pay_extends_creator_ttl() {
+    let (env, contract_id, _, _, usdc_id) = setup();
+    let client  = PaywallContractClient::new(&env, &contract_id);
+    let creator = Address::generate(&env);
+    let payer   = Address::generate(&env);
+    let domain  = String::from_str(&env, "ttl-pay.com");
+
+    client.register(&creator, &domain, &50_000, &500);
+    mint(&env, &usdc_id, &payer, 1_000_000);
+
+    // Advance ledger to simulate partial TTL consumption.
+    env.ledger().with_mut(|li| {
+        li.sequence_number += 100_000;
+    });
+
+    client.pay(&payer, &domain, &usdc_id);
+
+    // After pay, the creator entry TTL must be >= LEDGER_TTL (bumped by extend_ttl).
+    let key = DataKey::Creator(domain);
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+    assert!(ttl >= LEDGER_TTL, "expected TTL >= {LEDGER_TTL}, got {ttl}");
 }
