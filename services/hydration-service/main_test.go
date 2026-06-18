@@ -4,10 +4,45 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestValidHostname(t *testing.T) {
+	valid := []string{
+		"example.com",
+		"web-test.verivyx.com",
+		"a.b.c.co.uk",
+		"xn--nxasmq6b.com",
+	}
+	invalid := []string{
+		"",
+		"evil.com/path",
+		"a.com@evil.com",
+		"a.com#@evil.com",
+		"a.com:8080",
+		"a.com?x=1",
+		"a.com/../b",
+		"http://a.com",
+		" a.com",
+		"a..com",
+		strings.Repeat("a", 254) + ".com",
+		"-a.com",
+		"a_b.com",
+	}
+	for _, h := range valid {
+		if !isValidHostname(h) {
+			t.Errorf("isValidHostname(%q) = false; want true", h)
+		}
+	}
+	for _, h := range invalid {
+		if isValidHostname(h) {
+			t.Errorf("isValidHostname(%q) = true; want false", h)
+		}
+	}
+}
 
 func TestClassifyAgent(t *testing.T) {
 	cases := []struct {
