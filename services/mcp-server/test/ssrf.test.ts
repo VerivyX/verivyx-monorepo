@@ -17,6 +17,13 @@ test("blocks unspecified 0.0.0.0", () => assert.equal(isBlockedIp("0.0.0.0"), tr
 test("allows public 8.8.8.8", () => assert.equal(isBlockedIp("8.8.8.8"), false));
 test("allows public 1.1.1.1", () => assert.equal(isBlockedIp("1.1.1.1"), false));
 
+// 172.16.0.0/12 boundary checks
+test("blocks 172.31.255.255 (top of 172.16/12)", () => assert.equal(isBlockedIp("172.31.255.255"), true));
+test("allows 172.15.255.255 (just below 172.16/12)", () => assert.equal(isBlockedIp("172.15.255.255"), false));
+
+// IPv4-mapped IPv6 literal with dotted-quad tail
+test("blocks ::ffff:10.0.0.1 (mapped private)", () => assert.equal(isBlockedIp("::ffff:10.0.0.1"), true));
+
 // ---- assertPublicHttpsUrl ----
 
 test("rejects http:// scheme", async () => {

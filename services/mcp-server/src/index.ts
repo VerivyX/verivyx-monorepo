@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   const lastSeen: Record<string, number> = {};
 
   // Evict sessions idle longer than MCP_SESSION_TTL_MS (default 30 min).
-  const SESSION_TTL_MS = Number(process.env["MCP_SESSION_TTL_MS"] ?? 30 * 60_000);
+  const SESSION_TTL_MS = Number(process.env["MCP_SESSION_TTL_MS"]) || (30 * 60_000);
   const sweepInterval = setInterval(() => {
     const cutoff = Date.now() - SESSION_TTL_MS;
     for (const id of Object.keys(transports)) {

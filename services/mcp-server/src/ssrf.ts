@@ -120,10 +120,21 @@ function isBlockedV6(ip: string): boolean {
  * otherwise non-routable range that must not be reached by outbound payments.
  *
  * Covers OWASP SSRF cheat-sheet ranges for both IPv4 and IPv6.
+ *
+ * Handles IPv4-mapped IPv6 literals with a dotted-quad tail (e.g.
+ * `::ffff:10.0.0.1`): Node's `net.isIPv6` accepts these but `expandV6` would
+ * call `parseInt("10.0.0.1", 16)` on the last segment and misread it.  We
+ * detect the pattern here and delegate the tail to the IPv4 path instead.
  */
 export function isBlockedIp(ip: string): boolean {
   if (net.isIPv4(ip)) return isBlockedV4(ip);
-  if (net.isIPv6(ip)) return isBlockedV6(ip);
+  if (net.isIPv6(ip)) {
+    // Detect ::ffff:<dotted-quad> — e.g. "::ffff:10.0.0.1".
+    // The dotted-quad portion after the last colon is a valid IPv4 string.
+    const mappedMatch = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+    if (mappedMatch) return isBlockedV4(mappedMatch[1]);
+    return isBlockedV6(ip);
+  }
   // Unrecognised format — block by default
   return true;
 }
