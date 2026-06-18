@@ -27,6 +27,23 @@ async function main(): Promise<void> {
 
   // Per-session transports for the Streamable HTTP MCP endpoint.
   const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const lastSeen: Record<string, number> = {};
+
+  // Evict sessions idle longer than MCP_SESSION_TTL_MS (default 30 min).
+  const SESSION_TTL_MS = Number(process.env["MCP_SESSION_TTL_MS"] ?? 30 * 60_000);
+  const sweepInterval = setInterval(() => {
+    const cutoff = Date.now() - SESSION_TTL_MS;
+    for (const id of Object.keys(transports)) {
+      if ((lastSeen[id] ?? 0) < cutoff) {
+        logger.info({ sessionId: id }, "mcp session evicted (idle TTL)");
+        transports[id].close();
+        delete transports[id];
+        delete lastSeen[id];
+      }
+    }
+  }, 60_000);
+  // Don't hold the process open if it would otherwise exit cleanly.
+  sweepInterval.unref();
 
   app.post("/mcp", dnsRebindingGuard, requireMcpKey, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -34,15 +51,20 @@ async function main(): Promise<void> {
 
     if (sessionId && transports[sessionId]) {
       transport = transports[sessionId];
+      lastSeen[sessionId] = Date.now();
     } else if (!sessionId && isInitializeRequest(req.body)) {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: id => {
           transports[id] = transport;
+          lastSeen[id] = Date.now();
         },
       });
       transport.onclose = () => {
-        if (transport.sessionId) delete transports[transport.sessionId];
+        if (transport.sessionId) {
+          delete transports[transport.sessionId];
+          delete lastSeen[transport.sessionId];
+        }
       };
       // Internal per-session wallet override (e.g. the playground pool). Gated by
       // the same API key; pays from the caller's session wallet, Stellar-only.
@@ -70,6 +92,7 @@ async function main(): Promise<void> {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
+    lastSeen[sessionId] = Date.now();
     await transports[sessionId].handleRequest(req, res);
   };
 

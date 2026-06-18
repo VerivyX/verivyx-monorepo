@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import { addDecimalStrings, atomsToDecimalString } from "../money.js";
 import { chargeStellarFee } from "../fee/stellar.js";
 import type { FeeReceipt } from "../fee/types.js";
+import { assertPublicHttpsUrl } from "../ssrf.js";
 import { setupStellarRail, stellarInfo } from "./stellar.js";
 import { setupEvmRail, type EvmRail } from "./evm.js";
 import { chargeSolanaFee, setupSolanaRail, solanaInfo, type SolanaRail } from "./solana.js";
@@ -152,11 +153,12 @@ export async function createPaymentService(opts?: {
     return false;
   }
 
-  function assertUrlAllowed(url: string): void {
-    if (cfg.allowedPaymentPrefixes.length === 0) return;
-    if (!cfg.allowedPaymentPrefixes.some(prefix => url.startsWith(prefix))) {
-      throw new Error(`URL not allowed by payment policy: ${url}`);
-    }
+  async function assertUrlAllowed(url: string): Promise<void> {
+    // If the URL matches a trusted prefix, skip further checks (explicit bypass for
+    // internal/test hosts). An EMPTY prefix list is NOT "allow all" — it means only
+    // public HTTPS non-private hosts are permitted (default-deny via SSRF guard).
+    if (cfg.allowedPaymentPrefixes.some(prefix => url.startsWith(prefix))) return;
+    await assertPublicHttpsUrl(url);
   }
 
   function buildInit(input: PayInput): RequestInit {
@@ -191,7 +193,7 @@ export async function createPaymentService(opts?: {
   }
 
   async function pay(input: PayInput): Promise<PayResult> {
-    assertUrlAllowed(input.url);
+    await assertUrlAllowed(input.url);
     const response = await fetchWithPayment(input.url, buildInit(input));
     const rawBody = await response.text();
     const parsedBody = tryParseBody(rawBody, response.headers.get("content-type"));
@@ -237,6 +239,7 @@ export async function createPaymentService(opts?: {
   }
 
   async function quote(input: PayInput): Promise<QuoteResult> {
+    await assertUrlAllowed(input.url);
     const response = await fetch(input.url, buildInit(input));
     const rawBody = await response.text();
     const parsedBody = tryParseBody(rawBody, response.headers.get("content-type"));
