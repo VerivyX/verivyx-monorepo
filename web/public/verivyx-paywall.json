@@ -1,15 +1,15 @@
 {
   "name": "Verivyx Paywall",
   "slug": "verivyx-paywall",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
-  "sha256": "b6b976106d120f920153144dff676893b32a29c7ac6581de05e4b2a936d82bb1",
+  "sha256": "f97cd81c08b40278dad8f0d33abfaf4815eeaeff48928768a185bae6a5a11d11",
   "requires": "5.8",
   "tested": "6.5",
   "requires_php": "8.0",
   "last_updated": "2026-06-18",
   "homepage": "https://verivyx.com",
   "sections": {
-    "changelog": "<h4>1.7.0</h4><ul><li>Security: signed update package (SHA-256) verification, masked internal token in admin settings, and uninstall cleanup of stored secrets/options.</li></ul>"
+    "changelog": "<h4>1.7.1</h4><ul><li>Fix: paid x402 settle on slow Soroban path no longer reported as failed (raise hydrate timeout to 35s; buyer was charged but agent saw failure).</li></ul>"
   }
 }
