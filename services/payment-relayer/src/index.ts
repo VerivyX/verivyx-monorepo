@@ -4,6 +4,7 @@ import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom } from './payer';
 import { payloadHash, settleOnce, SettleValidationError } from './idempotency';
+import { parseAllowedPaywallContracts, assertPaywallContractAllowed, toStableError } from './validation';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -13,6 +14,10 @@ if (!INTERNAL_TOKEN) {
   console.error('INTERNAL_TOKEN env var is required');
   process.exit(1);
 }
+
+// Allowlist of official paywall_core contract addresses the relayer may fee-sponsor.
+// Fail-closed: if empty/unset on the fee-sponsored path, settlement is rejected.
+const ALLOWED_PAYWALL_CONTRACTS = parseAllowedPaywallContracts(process.env.ALLOWED_PAYWALL_CONTRACTS);
 
 const isDev = process.env.NODE_ENV !== 'production';
 const logger = pino({
@@ -475,16 +480,16 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       // Facilitator rebuilds TX as source and covers XLM fees (areFeesSponsored: true).
       const needsFeeSponsoring = isSoroban && tx.signatures.length === 0 && !!facilitatorKeypair;
 
-      // Security: for the spec Soroban path, verify the transfer actually moves the
-      // full amount to the paywall contract before we sponsor + distribute.
+      // Security: for the spec Soroban path, pc is MANDATORY and must be in the
+      // ALLOWED_PAYWALL_CONTRACTS allowlist before we sponsor + distribute.
       if (isSoroban && needsFeeSponsoring) {
         const pc: string | undefined = paymentRequirements?.extra?.paywallContract;
-        if (pc) {
-          const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc, paymentRequirements.amount);
-          if (tErr) {
-            logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
-            throw new SettleValidationError(tErr);
-          }
+        // Throws SettleValidationError (→ 400) if pc is absent or not allowlisted.
+        assertPaywallContractAllowed(pc, ALLOWED_PAYWALL_CONTRACTS);
+        const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc as string, paymentRequirements.amount);
+        if (tErr) {
+          logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
+          throw new SettleValidationError(tErr);
         }
       }
 
@@ -492,6 +497,15 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       if (isSoroban && needsFeeSponsoring) {
         txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
       } else if (isSoroban) {
+        // Pre-flight simulate the already-signed legacy tx before submitting.
+        // Simulation is a read-only error check; we do NOT assemble/resign (that
+        // would invalidate the client's signature). Submit the original tx as-is.
+        const legacyTx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE);
+        const legacySim = await sorobanServer.simulateTransaction(legacyTx);
+        if (!rpc.Api.isSimulationSuccess(legacySim)) {
+          logger.error({ legacySim }, 'Legacy Soroban pre-flight simulation failed');
+          throw new Error('soroban_legacy_sim_failed');
+        }
         txHash = await withTimeout(submitSoroban(txXdr), 15000, 'soroban_submit');
       } else {
         txHash = await withTimeout(submitClassic(txXdr), 15000, 'horizon_submit');
@@ -534,12 +548,11 @@ app.post('/settle', requireInternalToken, async (req, res) => {
     if (err instanceof SettleValidationError) {
       return res.status(400).json({ success: false, errorReason: err.message });
     }
-    const message = err instanceof Error ? err.message : 'Unknown error during settlement';
-    const isTimeout = message.endsWith('_timeout');
-    logger.error({ err }, 'Failed to settle payment on-chain');
-    res.status(isTimeout ? 503 : 500).json({
+    const { status, reason } = toStableError(err);
+    logger.error({ err }, 'settle failed');
+    res.status(status).json({
       success: false,
-      errorReason: message,
+      errorReason: reason,
       transaction: '',
       network: paymentRequirements.network,
     });
