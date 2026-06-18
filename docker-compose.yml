@@ -243,6 +243,58 @@ services:
           memory: 1024M
           cpus: '1.0'
 
+  # ---------------------------------------------------------------------------
+  # Ory Hydra — OAuth2 / OIDC engine
+  # ---------------------------------------------------------------------------
+  # hydra-migrate runs once at startup to apply DB migrations, then exits.
+  # restart: "no" is intentional — it must NOT loop on failure.
+  hydra-migrate:
+    image: oryd/hydra:v2.2.0
+    command: migrate sql -e --yes
+    environment:
+      - DSN=postgres://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/hydra?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - paywall_net
+    restart: "no"
+
+  # Hydra public API → port 4444 (mapped for local verification; nginx fronts it in production).
+  # Hydra admin API → port 4445 (internal only — NO host port mapping).
+  # --dev disables HTTPS enforcement for the issuer; DROP --dev and use https:// in production.
+  hydra:
+    image: oryd/hydra:v2.2.0
+    command: serve all --dev
+    environment:
+      - DSN=postgres://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/hydra?sslmode=disable
+      - URLS_SELF_ISSUER=${HYDRA_ISSUER:-http://localhost:4444}
+      - URLS_LOGIN=${HYDRA_LOGIN_URL:-${API_PUBLIC_URL}/api/v1/oauth/login}
+      - URLS_CONSENT=${HYDRA_CONSENT_URL:-${API_PUBLIC_URL}/api/v1/oauth/consent}
+      - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?HYDRA_SECRETS_SYSTEM is required}
+      - OAUTH2_EXPOSE_INTERNAL_ERRORS=false
+      - OIDC_DYNAMIC_CLIENT_REGISTRATION_ENABLED=true
+      - OIDC_DYNAMIC_CLIENT_REGISTRATION_DEFAULT_SCOPE=openid,offline,offline_access
+      # Advertise the DCR endpoint in /.well-known/openid-configuration as registration_endpoint.
+      # /oauth2/register is Hydra's built-in public DCR path (RFC 7591).
+      - WEBFINGER_OIDC_DISCOVERY_CLIENT_REGISTRATION_URL=${HYDRA_ISSUER:-http://localhost:4444}/oauth2/register
+    ports:
+      - "127.0.0.1:4444:4444"
+      # 4445 (admin) is intentionally NOT published — internal network only
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hydra-migrate:
+        condition: service_completed_successfully
+    networks:
+      - paywall_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
   mcp-server:
     image: paywall-ai-mcp-server:local
     build:
