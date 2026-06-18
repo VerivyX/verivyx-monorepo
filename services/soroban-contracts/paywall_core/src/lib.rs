@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short,
+    contract, contractevent, contractimpl, contracttype, contracterror,
     token, Address, BytesN, Env, String,
 };
 
@@ -38,6 +38,48 @@ pub enum DataKey {
     PlatformAddress, // Instance: platform wallet for fee collection
     Keeper,          // Instance: keeper address — authorized to call distribute()
     Usdc,            // Instance: the official USDC token address (set once at init)
+}
+
+/// Emitted when a creator registers or updates their domain config.
+#[contractevent]
+pub struct RegisterEvent {
+    #[topic]
+    pub domain: String,
+    pub creator: Address,
+    pub price: i128,
+    pub platform_fee: i128,
+}
+
+/// Emitted when the keeper registers or updates a domain on behalf of a creator.
+#[contractevent]
+pub struct KeeperRegisterEvent {
+    #[topic]
+    pub domain: String,
+    pub creator: Address,
+    pub price: i128,
+    pub platform_fee: i128,
+}
+
+/// Emitted when a payer executes a split payment via `pay`.
+#[contractevent]
+pub struct PayEvent {
+    #[topic]
+    pub domain: String,
+    pub payer: Address,
+    pub creator: Address,
+    pub price: i128,
+    pub usdc_token: Address,
+}
+
+/// Emitted when the keeper distributes funds from the contract balance via `distribute`.
+#[contractevent]
+pub struct DistributeEvent {
+    #[topic]
+    pub domain: String,
+    pub creator: Address,
+    pub platform_address: Address,
+    pub amount: i128,
+    pub usdc_token: Address,
 }
 
 #[contract]
@@ -109,10 +151,7 @@ impl PaywallContract {
         env.storage().persistent().set(&key, &data);
         env.storage().persistent().extend_ttl(&key, LEDGER_TTL, LEDGER_TTL);
 
-        env.events().publish(
-            (symbol_short!("reg"), domain),
-            (creator, price, platform_fee),
-        );
+        RegisterEvent { domain, creator, price, platform_fee }.publish(&env);
         Ok(())
     }
 
@@ -163,10 +202,7 @@ impl PaywallContract {
         env.storage().persistent().set(&key, &data);
         env.storage().persistent().extend_ttl(&key, LEDGER_TTL, LEDGER_TTL);
 
-        env.events().publish(
-            (symbol_short!("kreg"), domain),
-            (creator, price, platform_fee),
-        );
+        KeeperRegisterEvent { domain, creator, price, platform_fee }.publish(&env);
         Ok(())
     }
 
@@ -230,10 +266,7 @@ impl PaywallContract {
         token_client.transfer(&payer, &data.address, &creator_share);
         token_client.transfer(&payer, &platform_address, &data.platform_fee);
 
-        env.events().publish(
-            (symbol_short!("pay"), domain),
-            (payer, data.address, data.price, usdc_token),
-        );
+        PayEvent { domain, payer, creator: data.address, price: data.price, usdc_token }.publish(&env);
         Ok(())
     }
 
@@ -310,10 +343,13 @@ impl PaywallContract {
         token_client.transfer(&contract_addr, &data.address, &creator_share);
         token_client.transfer(&contract_addr, &platform_address, &data.platform_fee);
 
-        env.events().publish(
-            (symbol_short!("distrib"), domain),
-            (data.address, platform_address, amount, usdc_token),
-        );
+        DistributeEvent {
+            domain,
+            creator: data.address,
+            platform_address,
+            amount,
+            usdc_token,
+        }.publish(&env);
         Ok(())
     }
 
