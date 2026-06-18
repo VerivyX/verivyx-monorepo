@@ -86,6 +86,28 @@ export async function acquireWallet(): Promise<SessionWallet> {
   return provision();
 }
 
+// Retire a session wallet so it is permanently removed from the pool and can
+// never be handed to another session. This is a one-way operation: the wallet
+// is NOT returned to the pool, ensuring a payer that has an active paid-session
+// entry in the gateway cache (TTL 1 h, keyed by public key) cannot be recycled
+// into a new session and silently skip payment for the same resource.
+// Call this when a session closes (normally or via TTL expiry).
+export function retireWallet(publicKey: string): void {
+  // The wallet was already removed from the pool by acquireWallet (pool.shift()),
+  // so there is nothing to remove from the live pool array. This function exists
+  // to trigger an immediate refill so the pool stays warm, and to serve as a
+  // clear semantic boundary in index.ts (documenting the lifecycle decision).
+  const idx = pool.findIndex((w) => w.publicKey === publicKey);
+  if (idx !== -1) {
+    // Safety: if somehow the wallet is still in the pool (should not happen),
+    // remove it rather than risk handing it out again.
+    pool.splice(idx, 1);
+    log.warn({ wallet: publicKey }, "retireWallet: wallet was still in pool — removed");
+  }
+  // Immediately top-up the pool to replace the consumed wallet.
+  replenish().catch(() => {});
+}
+
 export async function walletBalances(publicKey: string): Promise<{ usdc: string; xlm: string }> {
   const acct = await server.loadAccount(publicKey);
   let u = "0";

@@ -80,10 +80,22 @@ export async function runAgentTurn(
 
           if (unpaid) {
             // Plain fetch, no payment — demonstrate the 402 block a bot/scraper hits.
+            // Send an explicit bot User-Agent so the paywall (WP plugin or gateway) can
+            // never misidentify this request as a browser navigation pass-through,
+            // regardless of which HTTP headers the underlying fetch implementation adds.
+            // Without this, an x402 client behind a CDN or reverse proxy that injects
+            // Sec-Fetch-Mode: navigate would make the WP plugin serve the full page
+            // (200), rendering the demo non-deterministic on the 402-block path.
             onEvent({ type: "status", text: "checking" });
-            const r = await fetch(url, { method });
+            const r = await fetch(url, {
+              method,
+              headers: { "User-Agent": "verivyx-playground-probe/1.0 (httpclient; no-payment)" },
+            });
             const body = await r.text();
             const blocked = r.status === 402;
+            // A non-402 response means the paywall served content to an unauthenticated
+            // client — treat this as a content-leak warning, not "allowed". The demo
+            // must never present a non-blocked probe as a success state.
             onEvent({ type: "access_check", status: r.status, blocked });
             toolResult = JSON.stringify({
               status: r.status,
@@ -91,7 +103,7 @@ export async function runAgentTurn(
               paymentMade: false,
               note: blocked
                 ? "Access denied — HTTP 402 Payment Required. The resource is paywalled; no content was returned because no payment was made. This is what an unpaid bot or scraper receives."
-                : "Unexpected: the resource did not return 402 without payment.",
+                : `Unexpected: the resource returned ${r.status} without payment — the paywall did not enforce on this request.`,
               response: body.slice(0, 500),
             });
           } else {

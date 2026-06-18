@@ -3,7 +3,7 @@ import cors from "cors";
 import pino from "pino";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { startWalletPool, acquireWallet, walletBalances, type SessionWallet } from "./walletPool.js";
+import { startWalletPool, acquireWallet, retireWallet, walletBalances, type SessionWallet } from "./walletPool.js";
 import { McpSession } from "./mcpBridge.js";
 import { runAgentTurn, systemPrompt, type AgentEvent } from "./agentLoop.js";
 import { demoResource } from "./demoResource.js";
@@ -50,6 +50,11 @@ async function verifyTurnstile(token: string, ip?: string): Promise<boolean> {
 function closeSession(s: Session) {
   sessions.delete(s.id);
   s.mcp.close().catch(() => {});
+  // Retire the wallet so it cannot be recycled into a new session. A wallet
+  // that has paid for a resource leaves a payer-scoped session entry in the
+  // gateway Redis cache (TTL 1 h); retiring prevents a future session from
+  // inheriting the same public key and skipping payment for the same resource.
+  retireWallet(s.wallet.publicKey);
 }
 
 // Expire idle sessions (frees MCP subprocesses).
