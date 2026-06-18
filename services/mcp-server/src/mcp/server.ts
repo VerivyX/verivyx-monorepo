@@ -34,8 +34,13 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       title: "List supported chains",
       description: "List the chains/assets this Verivyx MCP can pay on, plus the flat service fee.",
       inputSchema: {},
+      outputSchema: { serviceFee: z.string(), chains: z.array(z.any()) },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => asText({ serviceFee: cfg.feeUsdc, chains: payments.supportedChains() }),
+    async () => {
+      const payload = { serviceFee: cfg.feeUsdc, chains: payments.supportedChains() };
+      return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }], structuredContent: payload };
+    },
   );
 
   server.registerTool(
@@ -44,6 +49,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       title: "Wallet info",
       description: "Show the active paying wallet(s) and network configuration for each chain.",
       inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => asText(payments.info()),
   );
@@ -55,6 +61,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       description:
         "Preview the cost to fetch an x402 resource (resource price + Verivyx service fee) WITHOUT paying.",
       inputSchema: fetchInputShape,
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ url, method, body, headers }) => {
       try {
@@ -73,6 +80,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       description:
         "Fetch an x402-protected URL and automatically pay the required micropayment (plus the flat Verivyx service fee). Auto-selects the chain the resource advertises. Returns the content and a payment receipt.",
       inputSchema: fetchInputShape,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ url, method, body, headers }) => {
       try {
