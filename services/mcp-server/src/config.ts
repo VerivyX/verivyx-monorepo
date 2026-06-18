@@ -234,6 +234,8 @@ export type AppConfig = {
   /** API keys allowed to call /mcp, stored as SHA-256 hashes with per-key labels. */
   readonly apiKeys: readonly ApiKeyEntry[];
   readonly internalToken: string;
+  /** OAuth 2.1 / Hydra resource server config. Present only when HYDRA_ISSUER is set. */
+  readonly oauth: { readonly issuer: string; readonly jwksUrl: string; readonly resourceUri: string } | undefined;
   readonly feeUsdc: string;
   readonly stellarSecretKey: string;
   readonly stellar: StellarChainConfig;
@@ -279,6 +281,13 @@ export function getConfig(): AppConfig {
 
   const apiKeys = parseApiKeys(optionalEnv("MCP_API_KEYS") ?? "");
 
+  const hydraIssuer = optionalEnv("HYDRA_ISSUER")?.replace(/\/$/, "");
+  const oauth = hydraIssuer ? {
+    issuer: hydraIssuer,
+    jwksUrl: optionalEnv("HYDRA_JWKS_URL") ?? `${hydraIssuer}/.well-known/jwks.json`,
+    resourceUri: optionalEnv("MCP_RESOURCE_URI") ?? "https://mcp.verivyx.com/mcp",
+  } : undefined;
+
   cached = {
     port: Number(optionalEnv("MCP_PORT") ?? "8088"),
     mainnetEnabled,
@@ -315,6 +324,7 @@ export function getConfig(): AppConfig {
       .split(",")
       .map(o => o.trim().toLowerCase())
       .filter(Boolean),
+    oauth,
   };
 
   return cached;

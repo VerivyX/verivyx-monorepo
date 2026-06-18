@@ -5,11 +5,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 
-import { requireInternalToken, requireMcpKey } from "./auth.js";
+import { requireInternalToken, requireMcpAuth } from "./auth.js";
 import { createPaymentService } from "./chains/payments.js";
 import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { buildMcpServer } from "./mcp/server.js";
+import { buildProtectedResourceMetadata } from "./oauth.js";
 
 async function main(): Promise<void> {
   const cfg = getConfig();
@@ -43,9 +44,25 @@ async function main(): Promise<void> {
         )],
       );
 
+  // Serve RFC 9728 Protected Resource Metadata when Hydra OAuth is configured.
+  if (cfg.oauth) {
+    app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+      res.json(buildProtectedResourceMetadata(cfg.oauth!.resourceUri, cfg.oauth!.issuer));
+    });
+  }
+
   // Per-session transports for the Streamable HTTP MCP endpoint.
   const transports: Record<string, StreamableHTTPServerTransport> = {};
   const lastSeen: Record<string, number> = {};
+  // Session owner binding: maps sessionId → owner identity string.
+  const owners: Record<string, string> = {};
+
+  /** Derive a stable owner identity string from the authenticated request. */
+  function ownerId(req: Request): string {
+    const u = (req as Request & { mcpUser?: { kind: "oauth"; sub: string } | { kind: "key"; label: string } }).mcpUser;
+    if (u?.kind === "oauth") return `oauth:${u.sub}`;
+    return `key:${u?.kind === "key" ? u.label : "unknown"}`;
+  }
 
   // Evict sessions idle longer than MCP_SESSION_TTL_MS (default 30 min).
   const SESSION_TTL_MS = Number(process.env["MCP_SESSION_TTL_MS"]) || (30 * 60_000);
@@ -57,31 +74,40 @@ async function main(): Promise<void> {
         transports[id].close();
         delete transports[id];
         delete lastSeen[id];
+        delete owners[id];
       }
     }
   }, 60_000);
   // Don't hold the process open if it would otherwise exit cleanly.
   sweepInterval.unref();
 
-  app.post("/mcp", hostGuard, requireMcpKey, async (req: Request, res: Response) => {
+  app.post("/mcp", hostGuard, requireMcpAuth, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
     if (sessionId && transports[sessionId]) {
+      // Validate session ownership to prevent session hijacking.
+      if (owners[sessionId] !== undefined && owners[sessionId] !== ownerId(req)) {
+        res.status(403).json({ error: "session_owner_mismatch" });
+        return;
+      }
       transport = transports[sessionId];
       lastSeen[sessionId] = Date.now();
     } else if (!sessionId && isInitializeRequest(req.body)) {
+      const reqOwnerId = ownerId(req);
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: id => {
           transports[id] = transport;
           lastSeen[id] = Date.now();
+          owners[id] = reqOwnerId;
         },
       });
       transport.onclose = () => {
         if (transport.sessionId) {
           delete transports[transport.sessionId];
           delete lastSeen[transport.sessionId];
+          delete owners[transport.sessionId];
         }
       };
       // Internal per-session wallet override (e.g. the playground pool). Gated by
@@ -110,12 +136,17 @@ async function main(): Promise<void> {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
+    // Validate session ownership.
+    if (owners[sessionId] !== undefined && owners[sessionId] !== ownerId(req)) {
+      res.status(403).json({ error: "session_owner_mismatch" });
+      return;
+    }
     lastSeen[sessionId] = Date.now();
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", hostGuard, requireMcpKey, handleSessionRequest);
-  app.delete("/mcp", hostGuard, requireMcpKey, handleSessionRequest);
+  app.get("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
+  app.delete("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
 
   // Liveness — no secrets.
   app.get("/healthz", (_req, res) => {
