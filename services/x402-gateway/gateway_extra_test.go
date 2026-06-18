@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -96,5 +100,141 @@ func TestIdempotencyAndDigestHelpers(t *testing.T) {
 	}
 	if len(a) != 64 {
 		t.Errorf("sha256 hex digest must be 64 chars; got %d", len(a))
+	}
+}
+
+// stubFacilitator returns a *Facilitator configured in stub mode for tests.
+// ALLOW_STUB_MODE must be set before calling.
+func stubFacilitator(t *testing.T) *Facilitator {
+	t.Helper()
+	t.Setenv("FACILITATOR_MODE", "stub")
+	t.Setenv("ALLOW_STUB_MODE", "true")
+	return newFacilitator()
+}
+
+// trustedFacilitatorRequest builds a facilitatorRequest carrying a trusted (Verivyx-style)
+// PaymentRequirement so that resolveRequirement passes it through without a domain lookup.
+// This lets handler tests focus on the gate logic without a live auth-service.
+func trustedFacilitatorRequest() facilitatorRequest {
+	trustedReq := PaymentRequirement{
+		Scheme:  SchemeExact,
+		Network: NetworkTestnet,
+		Asset:   "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+		Amount:  "50000",
+		PayTo:   "GABCDEF1234567890DEMO",
+		Extra: map[string]interface{}{
+			// splitPayments marks this as a trusted (non-generic) requirement so
+			// resolveRequirement returns it unmodified without a domain lookup.
+			"splitPayments": []interface{}{},
+		},
+	}
+	payload := PaymentPayload{
+		X402Version: X402Version,
+		Scheme:      SchemeExact,
+		Network:     NetworkTestnet,
+		Accepted:    trustedReq,
+		Payload: map[string]interface{}{
+			"transaction": "TESTHASH",
+			"payer":       "GPAYER",
+		},
+	}
+	return facilitatorRequest{
+		X402Version:         X402Version,
+		PaymentPayload:      payload,
+		PaymentRequirements: trustedReq,
+	}
+}
+
+// TestPublicVerifyRequiresInternalToken asserts that POST /api/v1/payment/verify
+// returns 401 when no X-Internal-Token header is sent.
+func TestPublicVerifyRequiresInternalToken(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
+
+	internalToken = "test-secret-token"
+	f := stubFacilitator(t)
+	r := setupRouter(f)
+
+	body, _ := json.Marshal(trustedFacilitatorRequest())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/verify", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No X-Internal-Token header — should be rejected.
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("verify without token: got %d, want %d (unauthorized)", w.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestPublicVerifyAllowedWithInternalToken asserts that POST /api/v1/payment/verify
+// accepts the request when the correct X-Internal-Token header is present.
+func TestPublicVerifyAllowedWithInternalToken(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
+
+	const testToken = "test-secret-token"
+	internalToken = testToken
+	f := stubFacilitator(t)
+	r := setupRouter(f)
+
+	body, _ := json.Marshal(trustedFacilitatorRequest())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/verify", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", testToken)
+	r.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("verify with valid token: got 401, want non-401")
+	}
+}
+
+// TestPublicSettleRequiresInternalToken asserts that POST /api/v1/payment/settle
+// returns 401 when no X-Internal-Token header is sent.
+func TestPublicSettleRequiresInternalToken(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
+
+	internalToken = "test-secret-token"
+	f := stubFacilitator(t)
+	r := setupRouter(f)
+
+	body, _ := json.Marshal(trustedFacilitatorRequest())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/settle", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No X-Internal-Token header — should be rejected.
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("settle without token: got %d, want %d (unauthorized)", w.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestPublicSettleAllowedWithInternalToken asserts that POST /api/v1/payment/settle
+// accepts the request when the correct X-Internal-Token header is present.
+func TestPublicSettleAllowedWithInternalToken(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
+
+	const testToken = "test-secret-token"
+	internalToken = testToken
+	f := stubFacilitator(t)
+	r := setupRouter(f)
+
+	body, _ := json.Marshal(trustedFacilitatorRequest())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/settle", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", testToken)
+	r.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("settle with valid token: got 401, want non-401")
 	}
 }

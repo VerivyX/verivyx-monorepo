@@ -668,17 +668,9 @@ func bodyDigest(b []byte) string {
 
 // ----------------------- gin handlers --------------------------------
 
-func main() {
-	internalToken = mustEnv("INTERNAL_TOKEN")
-	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
-
-	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
-	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {
-		redisOpts.Password = pw
-	}
-	rdb = redis.NewClient(redisOpts)
-	facilitator := newFacilitator()
-
+// setupRouter wires all HTTP routes onto a new gin.Engine and returns it.
+// Extracted from main so tests can build the router without starting a server.
+func setupRouter(facilitator *Facilitator) *gin.Engine {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -776,6 +768,10 @@ func main() {
 	})
 
 	r.POST("/api/v1/payment/verify", func(c *gin.Context) {
+		if c.GetHeader("X-Internal-Token") != internalToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		var req facilitatorRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "detail": err.Error()})
@@ -803,6 +799,10 @@ func main() {
 	})
 
 	r.POST("/api/v1/payment/settle", func(c *gin.Context) {
+		if c.GetHeader("X-Internal-Token") != internalToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "body_read_failed"})
@@ -853,6 +853,20 @@ func main() {
 		canonReq, domain, slug, rerr := resolveRequirement(req.PaymentPayload, req.PaymentRequirements, c.GetHeader("X-Paywall-Domain"), c.GetHeader("X-Paywall-Slug"))
 		if rerr != nil {
 			c.JSON(httpStatusForResolveErr(rerr), gin.H{"error": rerr.Error()})
+			return
+		}
+
+		verifyOut, err := facilitator.Verify(req.PaymentPayload, canonReq)
+		if err != nil {
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
+			return
+		}
+		if !verifyOut.IsValid {
+			c.JSON(http.StatusPaymentRequired, gin.H{
+				"error":         "invalid_payment",
+				"invalidReason": verifyOut.InvalidReason,
+			})
 			return
 		}
 
@@ -1086,6 +1100,21 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"paid": true, "transaction": v})
 	})
 
+	return r
+}
+
+func main() {
+	internalToken = mustEnv("INTERNAL_TOKEN")
+	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
+
+	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
+	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {
+		redisOpts.Password = pw
+	}
+	rdb = redis.NewClient(redisOpts)
+	facilitator := newFacilitator()
+
+	r := setupRouter(facilitator)
 	log.Printf("x402-gateway listening on :8081 (facilitator_mode=%s)", facilitator.mode)
 	r.Run(":8081")
 }
