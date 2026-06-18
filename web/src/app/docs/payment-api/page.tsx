@@ -23,8 +23,8 @@ export default function PaymentApi() {
         rows={[
           [<C key="e">GET /api/v1/payment/requirements</C>, 'None', 'Discover how to pay (returns the x402 402 body).'],
           [<C key="e">GET /api/v1/payment/quote</C>, 'None', 'Price, asset, network, and destination for a domain.'],
-          [<C key="e">POST /api/v1/payment/verify</C>, 'None', 'Dry-run: validate a signed payment without submitting.'],
-          [<C key="e">POST /api/v1/payment/settle</C>, 'None', 'Submit on-chain, split, and open a paid session.'],
+          [<C key="e">POST /api/v1/payment/verify</C>, 'X-Internal-Token (internal)', 'Dry-run: validate a signed payment without submitting.'],
+          [<C key="e">POST /api/v1/payment/settle</C>, 'X-Internal-Token (internal)', 'Submit on-chain, split, and open a paid session.'],
           [<C key="e">GET /api/v1/payment/supported</C>, 'None', 'Supported schemes and networks.'],
           [<C key="e">GET /api/v1/payment/health</C>, 'None', 'Liveness probe.'],
           [<C key="e">POST /api/v1/content/hydrate</C>, 'x402 / human JWT / paid session', 'Return the real content to an authorized requester.'],
@@ -47,11 +47,18 @@ export default function PaymentApi() {
       <P><C>GET /api/v1/payment/quote?domain</C> — no auth. Returns the price, atomic amount, asset, network, and destination for a domain.</P>
 
       <H3 id="verify">Verify a payment</H3>
-      <P><C>POST /api/v1/payment/verify</C> — no auth. A dry run: validates a signed payment against the requirement without submitting it. Body is the x402 facilitator request.</P>
+      <P>
+        <C>POST /api/v1/payment/verify</C> — <strong>internal/service-to-service only</strong>. Requires the
+        <C>X-Internal-Token</C> header (the shared secret configured via environment variable). External callers
+        receive <C>401 Unauthorized</C>. A dry run: validates a signed payment against the requirement without
+        submitting it on-chain. Body is the x402 facilitator request.
+      </P>
       <CodeBlock
         lang="bash"
-        code={`curl https://api.verivyx.com/api/v1/payment/verify \\
+        code={`# Internal service call — requires X-Internal-Token
+curl https://api.verivyx.com/api/v1/payment/verify \\
   -H 'Content-Type: application/json' \\
+  -H 'X-Internal-Token: <internal-token>' \\
   -d '{
     "x402Version": 2,
     "paymentPayload": { "x402Version": 2, "accepted": { ... }, "payload": { "transaction": "<xdr>", "payer": "G…" } },
@@ -62,15 +69,18 @@ export default function PaymentApi() {
 
       <H3 id="settle">Settle a payment</H3>
       <P>
-        <C>POST /api/v1/payment/settle</C> — no auth. Submits the signed payment on-chain, splits creator/platform,
-        and opens a one-hour paid session for the <C>(domain, slug)</C>. Pass an <C>Idempotency-Key</C> header to
-        make retries safe — a repeat with the same key replays the cached result instead of charging again. The
-        response also carries a <C>PAYMENT-RESPONSE</C> header.
+        <C>POST /api/v1/payment/settle</C> — <strong>internal/service-to-service only</strong>. Requires the
+        <C>X-Internal-Token</C> header. External callers receive <C>401 Unauthorized</C>. Submits the signed
+        payment on-chain, splits creator/platform, and opens a one-hour paid session for the <C>(domain, slug)</C>.
+        Pass an <C>Idempotency-Key</C> header to make retries safe — a repeat with the same key replays the cached
+        result instead of charging again. The response also carries a <C>PAYMENT-RESPONSE</C> header.
       </P>
       <CodeBlock
         lang="bash"
-        code={`curl https://api.verivyx.com/api/v1/payment/settle \\
+        code={`# Internal service call — requires X-Internal-Token
+curl https://api.verivyx.com/api/v1/payment/settle \\
   -H 'Content-Type: application/json' \\
+  -H 'X-Internal-Token: <internal-token>' \\
   -H 'Idempotency-Key: 0f3c…unique' \\
   -d '{ "x402Version": 2, "paymentPayload": { … }, "paymentRequirements": { … } }'
 # → { "success": true, "transaction": "…", "distributeTransaction": "…", "network": "stellar:testnet" }`}

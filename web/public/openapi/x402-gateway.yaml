@@ -33,7 +33,7 @@ tags:
   - name: discovery
     description: Payment requirement discovery (public)
   - name: settlement
-    description: Verify and settle payments (public)
+    description: Verify and settle payments (internal/service-to-service only)
 paths:
   /api/v1/payment/health:
     get:
@@ -141,9 +141,13 @@ paths:
     post:
       operationId: verifyPayment
       tags: [settlement]
-      summary: Verify a signed payment (dry-run, no settlement)
-      description: Validates a signed payment against the reconstructed requirement without submitting it on-chain.
-      security: []
+      summary: Verify a signed payment (dry-run, no settlement) — internal only
+      description: |
+        Validates a signed payment against the reconstructed requirement without
+        submitting it on-chain. **Internal/service-to-service only.** Requires
+        the `X-Internal-Token` header. External callers receive `401`.
+      security:
+        - internalTokenAuth: []
       parameters:
         - $ref: "#/components/parameters/PaywallDomainHeader"
         - $ref: "#/components/parameters/PaywallSlugHeader"
@@ -179,14 +183,17 @@ paths:
     post:
       operationId: settlePayment
       tags: [settlement]
-      summary: Settle a signed payment on-chain
+      summary: Settle a signed payment on-chain — internal only
       description: |
         Submits the signed payment to the facilitator, distributes the
         creator/platform split, and opens a 1-hour paid session for the
         `(domain, slug)`. Supply an `Idempotency-Key` to make retries safe — a
         repeat with the same key replays the cached response instead of
         re-charging; a repeat with a different body returns `422`.
-      security: []
+        **Internal/service-to-service only.** Requires the `X-Internal-Token`
+        header. External callers receive `401`.
+      security:
+        - internalTokenAuth: []
       parameters:
         - name: Idempotency-Key
           in: header
@@ -244,6 +251,12 @@ paths:
             application/json: { schema: { $ref: "#/components/schemas/Error" } }
 
 components:
+  securitySchemes:
+    internalTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Shared secret for internal/service-to-service calls. Never expose to external clients.
   parameters:
     PaywallDomainHeader:
       name: X-Paywall-Domain
