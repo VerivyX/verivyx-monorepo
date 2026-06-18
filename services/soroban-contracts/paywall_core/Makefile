@@ -31,18 +31,25 @@ deploy: build
 	@echo "Set in .env: SOROBAN_PAYWALL_CONTRACT_ID=$$(cat /tmp/contract_id.txt)"
 
 ## Initialize deployed contract (run once after deploy)
-## Usage: CONTRACT_ID=C... ADMIN_SECRET=S... PLATFORM_ADDRESS=G... make init
+## Signature: init(admin, platform_address, keeper, usdc)
+## KEEPER_ADDRESS  = the facilitator/relayer account that calls distribute().
+## USDC_CONTRACT_ID = the Soroban USDC token contract id; MUST equal the gateway/.env USDC_CONTRACT_ID.
+## Usage: CONTRACT_ID=C... ADMIN_SECRET=S... PLATFORM_ADDRESS=G... KEEPER_ADDRESS=G... USDC_CONTRACT_ID=C... make init
 init:
 	@[ -n "$$CONTRACT_ID" ]      || (echo "ERROR: CONTRACT_ID not set"      && exit 1)
 	@[ -n "$$ADMIN_SECRET" ]     || (echo "ERROR: ADMIN_SECRET not set"     && exit 1)
 	@[ -n "$$PLATFORM_ADDRESS" ] || (echo "ERROR: PLATFORM_ADDRESS not set" && exit 1)
+	@[ -n "$$KEEPER_ADDRESS" ]   || (echo "ERROR: KEEPER_ADDRESS not set"   && exit 1)
+	@[ -n "$$USDC_CONTRACT_ID" ] || (echo "ERROR: USDC_CONTRACT_ID not set" && exit 1)
 	stellar contract invoke \
 		--id "$$CONTRACT_ID" \
 		--source "$$ADMIN_SECRET" \
 		--network $(NETWORK) \
 		-- init \
 		--admin "$$(stellar keys address "$$ADMIN_SECRET" 2>/dev/null || echo "$$ADMIN_SECRET")" \
-		--platform_address "$$PLATFORM_ADDRESS"
+		--platform_address "$$PLATFORM_ADDRESS" \
+		--keeper "$$KEEPER_ADDRESS" \
+		--usdc "$$USDC_CONTRACT_ID"
 
 ## Register a domain (testing)
 ## Usage: CONTRACT_ID=C... CREATOR_SECRET=S... DOMAIN=example.com PRICE=50000 FEE=500 make invoke-register
