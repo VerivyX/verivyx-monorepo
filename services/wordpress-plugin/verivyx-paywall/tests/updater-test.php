@@ -73,5 +73,40 @@ check(Verivyx_Updater::build_update($meta, '1.4.0', 'x/x.php', $uri) === null, '
 check(Verivyx_Updater::build_update($meta, '1.5.0', 'x/x.php', $uri) === null, 'build_update: null when installed is newer');
 check(Verivyx_Updater::build_update(null, '1.3.1', 'x/x.php', $uri) === null, 'build_update: null when meta unavailable');
 
+// --- verify_sha256 (package integrity helper) ---
+// Create a temp file with known content to test hash verification.
+$tmp = sys_get_temp_dir() . '/vx-test-' . getmypid() . '.bin';
+file_put_contents($tmp, 'hello verivyx');
+$good_hex = hash('sha256', 'hello verivyx');
+$bad_hex  = str_repeat('0', 64); // wrong but valid-length hex
+
+check(Verivyx_Updater::verify_sha256($tmp, $good_hex) === true,  'verify_sha256: matching hash returns true');
+check(Verivyx_Updater::verify_sha256($tmp, $bad_hex)  === false, 'verify_sha256: wrong hash returns false');
+check(Verivyx_Updater::verify_sha256('/no/such/file/xyz.zip', $good_hex) === false, 'verify_sha256: missing file returns false');
+check(Verivyx_Updater::verify_sha256($tmp, 'not-hex') === false, 'verify_sha256: malformed hex returns false');
+check(Verivyx_Updater::verify_sha256($tmp, strtoupper($good_hex)) === true, 'verify_sha256: uppercase hex accepted');
+@unlink($tmp);
+
+// --- sanitize_meta: sha256 field carried when valid 64-char hex ---
+$with_sha = Verivyx_Updater::sanitize_meta([
+    'version'      => '1.3.0',
+    'download_url' => 'https://verivyx.com/verivyx-paywall.zip',
+    'sha256'       => $good_hex,
+]);
+check(is_array($with_sha) && ($with_sha['sha256'] ?? '') === $good_hex, 'sanitize_meta: valid sha256 carried through');
+
+$no_sha = Verivyx_Updater::sanitize_meta([
+    'version'      => '1.3.0',
+    'download_url' => 'https://verivyx.com/verivyx-paywall.zip',
+]);
+check(is_array($no_sha) && ($no_sha['sha256'] ?? '') === '', 'sanitize_meta: missing sha256 results in empty string (backward-compat)');
+
+$bad_sha = Verivyx_Updater::sanitize_meta([
+    'version'      => '1.3.0',
+    'download_url' => 'https://verivyx.com/verivyx-paywall.zip',
+    'sha256'       => 'too-short',
+]);
+check(is_array($bad_sha) && ($bad_sha['sha256'] ?? '') === '', 'sanitize_meta: invalid sha256 is stripped to empty (not rejected)');
+
 echo $failures === 0 ? "\nOK\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);

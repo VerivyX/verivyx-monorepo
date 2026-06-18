@@ -41,6 +41,16 @@ rm -f "$PLUGIN_PHP.bak"
 echo "==> Building zip"
 bash "$BUILD_SH"
 
+ZIP_PATH="$ROOT/services/wordpress-plugin/verivyx-paywall.zip"
+if [[ ! -f "$ZIP_PATH" ]]; then
+  echo "ERROR: expected zip not found at $ZIP_PATH" >&2
+  exit 1
+fi
+
+echo "==> Computing SHA-256 of $(basename "$ZIP_PATH")"
+sha256="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
+echo "    sha256: $sha256"
+
 echo "==> Writing update metadata $JSON_OUT"
 mkdir -p "$PUBLIC_DIR"
 today="$(date +%Y-%m-%d)"
@@ -51,6 +61,7 @@ cat > "$JSON_OUT" <<EOF
   "slug": "verivyx-paywall",
   "version": "$new",
   "download_url": "https://verivyx.com/verivyx-paywall.zip",
+  "sha256": "$sha256",
   "requires": "5.8",
   "tested": "6.5",
   "requires_php": "8.0",
