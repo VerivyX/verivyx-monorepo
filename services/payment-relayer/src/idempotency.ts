@@ -5,6 +5,18 @@ export function payloadHash(transactionXdr: string): string {
   return createHash('sha256').update(transactionXdr).digest('hex');
 }
 
+// Sentinel for intentional 400 validation failures inside settleOnce.
+// Using instanceof instead of an unguarded statusCode cast prevents third-party
+// errors (e.g. from the Stellar SDK) that happen to carry statusCode: 400 from
+// being misrouted as client errors.
+export class SettleValidationError extends Error {
+  readonly statusCode = 400;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SettleValidationError';
+  }
+}
+
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type CompletedEntry = { result: unknown; expiresAt: number };

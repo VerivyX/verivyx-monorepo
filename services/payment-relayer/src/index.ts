@@ -3,7 +3,7 @@ import cors from 'cors';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom } from './payer';
-import { payloadHash, settleOnce } from './idempotency';
+import { payloadHash, settleOnce, SettleValidationError } from './idempotency';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -483,7 +483,7 @@ app.post('/settle', requireInternalToken, async (req, res) => {
           const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc, paymentRequirements.amount);
           if (tErr) {
             logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
-            throw Object.assign(new Error(tErr), { statusCode: 400 });
+            throw new SettleValidationError(tErr);
           }
         }
       }
@@ -531,9 +531,8 @@ app.post('/settle', requireInternalToken, async (req, res) => {
 
     res.json(result);
   } catch (err: unknown) {
-    const statusCode = (err as any)?.statusCode;
-    if (statusCode === 400) {
-      return res.status(400).json({ success: false, errorReason: (err as Error).message });
+    if (err instanceof SettleValidationError) {
+      return res.status(400).json({ success: false, errorReason: err.message });
     }
     const message = err instanceof Error ? err.message : 'Unknown error during settlement';
     const isTimeout = message.endsWith('_timeout');
