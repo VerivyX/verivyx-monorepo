@@ -3,6 +3,7 @@ import cors from 'cors';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom } from './payer';
+import { payloadHash, settleOnce } from './idempotency';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -77,21 +78,6 @@ function requireInternalToken(req: express.Request, res: express.Response, next:
   next();
 }
 
-// In-memory idempotency cache — TTL 24h, matches gateway IdempotencyTTL
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
-type IdempotencyEntry = { result: unknown; expiresAt: number };
-const idempotencyCache = new Map<string, IdempotencyEntry>();
-
-function getIdempotencyResult(key: string): unknown | null {
-  const entry = idempotencyCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { idempotencyCache.delete(key); return null; }
-  return entry.result;
-}
-
-function setIdempotencyResult(key: string, result: unknown): void {
-  idempotencyCache.set(key, { result, expiresAt: Date.now() + IDEMPOTENCY_TTL_MS });
-}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -432,17 +418,11 @@ app.post('/settle', requireInternalToken, async (req, res) => {
     return res.status(400).json({ success: false, errorReason: 'Missing transaction XDR' });
   }
 
-  // Idempotency: return cached result if this key was already settled
-  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
-  if (idempotencyKey) {
-    const cached = getIdempotencyResult(idempotencyKey);
-    if (cached !== null) {
-      logger.info({ idempotencyKey }, 'Returning cached settlement result');
-      return res.json(cached);
-    }
-  }
-
+  // Derive the dedupe key server-side from the transaction XDR (not from a caller header).
+  // This prevents double-spend when the caller omits or rotates the idempotency header.
   const txXdr = paymentPayload.payload.transaction;
+  const key = payloadHash(txXdr);
+
   let tx: Transaction;
   try {
     tx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
@@ -489,66 +469,72 @@ app.post('/settle', requireInternalToken, async (req, res) => {
   }
 
   try {
-    const isSoroban = tx.operations.some(op => op.type === 'invokeHostFunction');
-    // x402 spec-compliant Soroban: client signs auth entries only, TX has no envelope signature.
-    // Facilitator rebuilds TX as source and covers XLM fees (areFeesSponsored: true).
-    const needsFeeSponsoring = isSoroban && tx.signatures.length === 0 && !!facilitatorKeypair;
+    const result = await settleOnce(key, async () => {
+      const isSoroban = tx.operations.some(op => op.type === 'invokeHostFunction');
+      // x402 spec-compliant Soroban: client signs auth entries only, TX has no envelope signature.
+      // Facilitator rebuilds TX as source and covers XLM fees (areFeesSponsored: true).
+      const needsFeeSponsoring = isSoroban && tx.signatures.length === 0 && !!facilitatorKeypair;
 
-    // Security: for the spec Soroban path, verify the transfer actually moves the
-    // full amount to the paywall contract before we sponsor + distribute.
-    if (isSoroban && needsFeeSponsoring) {
-      const pc: string | undefined = paymentRequirements?.extra?.paywallContract;
-      if (pc) {
-        const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc, paymentRequirements.amount);
-        if (tErr) {
-          logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
-          return res.status(400).json({ success: false, errorReason: tErr });
+      // Security: for the spec Soroban path, verify the transfer actually moves the
+      // full amount to the paywall contract before we sponsor + distribute.
+      if (isSoroban && needsFeeSponsoring) {
+        const pc: string | undefined = paymentRequirements?.extra?.paywallContract;
+        if (pc) {
+          const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc, paymentRequirements.amount);
+          if (tErr) {
+            logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
+            throw Object.assign(new Error(tErr), { statusCode: 400 });
+          }
         }
       }
-    }
 
-    let txHash: string;
-    if (isSoroban && needsFeeSponsoring) {
-      txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
-    } else if (isSoroban) {
-      txHash = await withTimeout(submitSoroban(txXdr), 15000, 'soroban_submit');
-    } else {
-      txHash = await withTimeout(submitClassic(txXdr), 15000, 'horizon_submit');
-    }
+      let txHash: string;
+      if (isSoroban && needsFeeSponsoring) {
+        txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
+      } else if (isSoroban) {
+        txHash = await withTimeout(submitSoroban(txXdr), 15000, 'soroban_submit');
+      } else {
+        txHash = await withTimeout(submitClassic(txXdr), 15000, 'horizon_submit');
+      }
 
-    // x402 spec Soroban path: the agent's single transfer just landed the full amount
-    // in the paywall contract. Now run the on-chain split via distribute().
-    // Gateway passes domain + paywallContract in paymentRequirements.extra.
-    let distributeTx: string | undefined;
-    const extra = paymentRequirements?.extra;
-    const paywallContract: string | undefined = extra?.paywallContract;
-    const distributeDomain: string | undefined = extra?.domain;
-    if (isSoroban && needsFeeSponsoring && paywallContract && distributeDomain) {
-      distributeTx = await withTimeout(
-        callDistribute(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
-        30000,
-        'soroban_distribute',
-      );
-      logger.info({ distributeTx }, 'On-chain split completed via distribute()');
-    }
+      // x402 spec Soroban path: the agent's single transfer just landed the full amount
+      // in the paywall contract. Now run the on-chain split via distribute().
+      // Gateway passes domain + paywallContract in paymentRequirements.extra.
+      let distributeTx: string | undefined;
+      const extra = paymentRequirements?.extra;
+      const paywallContract: string | undefined = extra?.paywallContract;
+      const distributeDomain: string | undefined = extra?.domain;
+      if (isSoroban && needsFeeSponsoring && paywallContract && distributeDomain) {
+        distributeTx = await withTimeout(
+          callDistribute(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
+          30000,
+          'soroban_distribute',
+        );
+        logger.info({ distributeTx }, 'On-chain split completed via distribute()');
+      }
 
-    // Prefer the agent address the client declared. Generic x402 v2 Stellar payloads
-    // carry only { transaction } (no payer), so fall back to the Soroban transfer
-    // `from` arg before tx.source (a null placeholder in the fee-sponsored path).
-    const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
+      // Prefer the agent address the client declared. Generic x402 v2 Stellar payloads
+      // carry only { transaction } (no payer), so fall back to the Soroban transfer
+      // `from` arg before tx.source (a null placeholder in the fee-sponsored path).
+      const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
 
-    logger.info({ txHash, distributeTx }, 'Payment settled successfully');
-    const result = {
-      success: true,
-      transaction: txHash,
-      distributeTransaction: distributeTx,
-      network: paymentRequirements.network,
-      payer,
-      amount: paymentRequirements.amount,
-    };
-    if (idempotencyKey) setIdempotencyResult(idempotencyKey, result);
+      logger.info({ txHash, distributeTx }, 'Payment settled successfully');
+      return {
+        success: true,
+        transaction: txHash,
+        distributeTransaction: distributeTx,
+        network: paymentRequirements.network,
+        payer,
+        amount: paymentRequirements.amount,
+      };
+    });
+
     res.json(result);
   } catch (err: unknown) {
+    const statusCode = (err as any)?.statusCode;
+    if (statusCode === 400) {
+      return res.status(400).json({ success: false, errorReason: (err as Error).message });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error during settlement';
     const isTimeout = message.endsWith('_timeout');
     logger.error({ err }, 'Failed to settle payment on-chain');
