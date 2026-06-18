@@ -63,6 +63,12 @@ services:
       - RESEND_REPLY_TO=${RESEND_REPLY_TO:-}
       # Public base URL (frontend) used to build the email verification link.
       - APP_BASE_URL=${APP_BASE_URL:-${PUBLIC_DOMAIN:?PUBLIC_DOMAIN or APP_BASE_URL is required}}
+      # Public frontend URL — used by GET /api/v1/oauth/login to redirect the browser to the login UI.
+      - PUBLIC_DOMAIN=${PUBLIC_DOMAIN:-}
+      # Hydra admin API (internal network only — 4445 is never host-mapped).
+      - HYDRA_ADMIN_URL=${HYDRA_ADMIN_URL:-http://hydra:4445}
+      # OAuth2 resource identifier — added as audience on every consent grant.
+      - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
     ports:
       - "127.0.0.1:8083:8083"
     depends_on:
@@ -269,8 +275,8 @@ services:
     environment:
       - DSN=postgres://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/hydra?sslmode=disable
       - URLS_SELF_ISSUER=${HYDRA_ISSUER:-http://localhost:4444}
-      - URLS_LOGIN=${HYDRA_LOGIN_URL:-${API_PUBLIC_URL}/api/v1/oauth/login}
-      - URLS_CONSENT=${HYDRA_CONSENT_URL:-${API_PUBLIC_URL}/api/v1/oauth/consent}
+      - URLS_LOGIN=${HYDRA_LOGIN_URL}
+      - URLS_CONSENT=${HYDRA_CONSENT_URL}
       - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?HYDRA_SECRETS_SYSTEM is required}
       - OAUTH2_EXPOSE_INTERNAL_ERRORS=false
       - OIDC_DYNAMIC_CLIENT_REGISTRATION_ENABLED=true
@@ -327,6 +333,11 @@ services:
       - USDC_CONTRACT_ID=${USDC_CONTRACT_ID:-}
       - X402_FACILITATOR_URL=${X402_FACILITATOR_URL:-}
       - X402_FACILITATOR_API_KEY=${X402_FACILITATOR_API_KEY:-}
+      # OAuth 2.1 resource server config. HYDRA_JWKS_URL must use the docker service
+      # name (hydra:4444) — not localhost — so mcp-server can fetch keys inside the network.
+      - HYDRA_ISSUER=${HYDRA_ISSUER:-}
+      - HYDRA_JWKS_URL=${HYDRA_JWKS_URL:-}
+      - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
     ports:
       - "127.0.0.1:8088:8088"
     networks:
