@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import cors from "cors";
-import express, { type Request, type Response } from "express";
+import express, { type Request, type Response, type RequestHandler } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 
 import { requireInternalToken, requireMcpKey } from "./auth.js";
 import { createPaymentService } from "./chains/payments.js";
@@ -24,6 +25,24 @@ async function main(): Promise<void> {
     }),
   );
 
+  // Build the host-guard middleware for the /mcp endpoint (DNS-rebinding defence).
+  // Strip any ":port" suffix from cfg.allowedHosts so hostHeaderValidation receives
+  // bare hostnames (IPv6 brackets preserved, e.g. "[::1]").
+  const hostGuard: RequestHandler = cfg.allowedHosts.includes("*")
+    ? (_req, _res, next) => next()
+    : hostHeaderValidation(
+        [...new Set(
+          cfg.allowedHosts.map(h => {
+            // IPv6 with port: "[::1]:8088" → "[::1]"
+            const ipv6Match = /^(\[.+\])(?::\d+)?$/.exec(h);
+            if (ipv6Match) return ipv6Match[1];
+            // IPv4/hostname with port: "127.0.0.1:8088" → "127.0.0.1"
+            const colonIdx = h.lastIndexOf(":");
+            return colonIdx !== -1 ? h.slice(0, colonIdx) : h;
+          }),
+        )],
+      );
+
   // Per-session transports for the Streamable HTTP MCP endpoint.
   const transports: Record<string, StreamableHTTPServerTransport> = {};
   const lastSeen: Record<string, number> = {};
@@ -44,7 +63,7 @@ async function main(): Promise<void> {
   // Don't hold the process open if it would otherwise exit cleanly.
   sweepInterval.unref();
 
-  app.post("/mcp", requireMcpKey, async (req: Request, res: Response) => {
+  app.post("/mcp", hostGuard, requireMcpKey, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
@@ -58,9 +77,6 @@ async function main(): Promise<void> {
           transports[id] = transport;
           lastSeen[id] = Date.now();
         },
-        enableDnsRebindingProtection: !cfg.allowedHosts.includes("*"),
-        allowedHosts: cfg.allowedHosts.includes("*") ? undefined : [...cfg.allowedHosts],
-        allowedOrigins: cfg.allowedOrigins.includes("*") ? undefined : [...cfg.allowedOrigins],
       });
       transport.onclose = () => {
         if (transport.sessionId) {
@@ -98,8 +114,8 @@ async function main(): Promise<void> {
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", requireMcpKey, handleSessionRequest);
-  app.delete("/mcp", requireMcpKey, handleSessionRequest);
+  app.get("/mcp", hostGuard, requireMcpKey, handleSessionRequest);
+  app.delete("/mcp", hostGuard, requireMcpKey, handleSessionRequest);
 
   // Liveness — no secrets.
   app.get("/healthz", (_req, res) => {
