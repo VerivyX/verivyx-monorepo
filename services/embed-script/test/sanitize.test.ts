@@ -42,6 +42,32 @@ test('removes data:text/html href from anchor', () => {
   assert.ok(!out.match(/href\s*=/), `href attr still present: ${out}`);
 });
 
+test('removes SVG-namespaced script element (lowercase tagName)', () => {
+  const out = sanitizeHtml('<svg><script>alert(1)</script></svg>', parse);
+  assert.ok(!out.includes('<script'), `<script still present in SVG context: ${out}`);
+});
+
+test('removes href with whitespace-interleaved javascript: scheme (tab)', () => {
+  const out = sanitizeHtml('<a href="java\tscript:alert(1)">x</a>', parse);
+  assert.ok(!out.includes('javascript') && !out.match(/href\s*=/), `tab-evaded javascript: still present: ${out}`);
+});
+
+test('removes href with whitespace-interleaved javascript: scheme (newline)', () => {
+  const out = sanitizeHtml('<a href="java\nscript:alert(1)">x</a>', parse);
+  assert.ok(!out.includes('javascript') && !out.match(/href\s*=/), `newline-evaded javascript: still present: ${out}`);
+});
+
+test('removes vbscript: href from anchor', () => {
+  const out = sanitizeHtml('<a href="vbscript:msgbox(1)">x</a>', parse);
+  assert.ok(!out.includes('vbscript:'), `vbscript: still present: ${out}`);
+  assert.ok(!out.match(/href\s*=/), `href attr still present: ${out}`);
+});
+
+test('strips style with CSS expression()', () => {
+  const out = sanitizeHtml('<div style="width:expression(alert(1))">hi</div>', parse);
+  assert.ok(!out.includes('expression('), `expression() still present in style: ${out}`);
+});
+
 test('preserves safe article markup including data:image src', () => {
   const safe =
     '<p class="a"><strong>hi</strong> <a href="https://ok.com">l</a> ' +

@@ -27,7 +27,7 @@ export function sanitizeHtml(html: string, parse: (html: string) => Document): s
   // Collect elements to remove first (modifying DOM while iterating causes issues)
   const toRemove: Element[] = [];
   for (const el of Array.from(doc.body.querySelectorAll('*'))) {
-    if (BLOCKED_TAGS.has(el.tagName)) {
+    if (BLOCKED_TAGS.has(el.tagName.toUpperCase())) {
       toRemove.push(el);
       continue;
     }
@@ -41,7 +41,8 @@ export function sanitizeHtml(html: string, parse: (html: string) => Document): s
       }
       if (BLOCKED_URL_ATTRS.has(name)) {
         const val = attr.value;
-        if (RE_JS_PROTO.test(val) || RE_DATA_NON_IMAGE.test(val)) {
+        const stripped = val.replace(/\s+/g, '');
+        if (RE_JS_PROTO.test(stripped) || RE_DATA_NON_IMAGE.test(stripped)) {
           el.removeAttribute(attr.name);
         }
         continue;
