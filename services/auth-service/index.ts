@@ -21,7 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
-import { getLoginRequest, acceptLogin } from './hydra.js';
+import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent } from './hydra.js';
 
 declare global {
   namespace Express {
@@ -557,6 +557,42 @@ app.post('/api/v1/oauth/login/accept', authGuard, async (req: Request, res: Resp
     return res.json({ redirect_to });
   } catch (err) {
     console.error('Hydra acceptLogin error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// MCP resource URI that every issued access token must carry as audience.
+// Defaults to the production value; wired into docker-compose in T7.
+const MCP_RESOURCE_URI = (process.env.MCP_RESOURCE_URI ?? 'https://mcp.verivyx.com/mcp').replace(/\/$/, '');
+
+// --- Hydra OAuth2 consent challenge ---
+//
+// Browser redirect target from Hydra. Auto-accepts consent because Verivyx is a
+// first-party AS (not a third-party proxy) — the user already authenticated at
+// the login step. A user-facing consent screen is deferred to Fase 2 polish.
+//
+// Critical job: always include MCP_RESOURCE_URI in grant_access_token_audience so
+// tokens carry the correct `aud` even when the client (e.g. Claude) omits the
+// `resource` parameter.
+app.get('/api/v1/oauth/consent', async (req: Request, res: Response) => {
+  const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
+  if (!challenge) {
+    return res.status(400).json({ error: 'consent_challenge query param required' });
+  }
+  try {
+    const cr = await getConsentRequest(challenge);
+    // Union: preserve any audiences the client explicitly requested, then add ours.
+    const audience = Array.from(
+      new Set([...(cr.requested_access_token_audience ?? []), MCP_RESOURCE_URI]),
+    );
+    const { redirect_to } = await acceptConsent(challenge, {
+      grantScope: cr.requested_scope,
+      grantAudience: audience,
+      sessionSub: cr.subject,
+    });
+    return res.redirect(302, redirect_to);
+  } catch (err) {
+    console.error('Hydra consent error:', err instanceof Error ? err.message : err);
     return res.status(502).json({ error: 'hydra_unreachable' });
   }
 });

@@ -25,12 +25,14 @@ export async function acceptLogin(
   subject: string,
   opts?: Record<string, unknown>,
 ): Promise<{ redirect_to: string }> {
+  // subject is placed LAST so that any `opts` entry named "subject" cannot override
+  // the authenticated identity. This is the footgun fix from the T2 review.
   return hydraRequest(
     `${HYDRA_ADMIN_URL}/admin/oauth2/auth/requests/login/accept?login_challenge=${encodeURIComponent(challenge)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject, remember: true, remember_for: 86400, ...opts }),
+      body: JSON.stringify({ remember: true, remember_for: 86400, ...opts, subject }),
     },
   );
 }

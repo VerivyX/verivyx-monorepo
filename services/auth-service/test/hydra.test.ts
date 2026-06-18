@@ -137,3 +137,40 @@ test('acceptLogin throws on non-2xx response', async () => {
     /404/,
   );
 });
+
+test('acceptLogin: opts subject cannot override the real subject (footgun guard)', async () => {
+  const payload = { redirect_to: 'https://hydra.test/callback' };
+  const fetchMock = mockFetch(payload);
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  // Caller attempts to override subject via opts — must be silently ignored.
+  await acceptLogin('c-guard', 'real-user', { subject: 'evil-user' });
+
+  const [, init] = fetchMock.mock.calls[0].arguments as [string, RequestInit];
+  const sent = JSON.parse(init.body as string);
+  assert.equal(sent.subject, 'real-user', 'subject must remain the real authenticated identity');
+});
+
+test('acceptConsent audience guarantee: MCP resource URI always included in grant_access_token_audience', async () => {
+  const payload = { redirect_to: 'https://hydra.test/done' };
+  const fetchMock = mockFetch(payload);
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const mcpUri = 'https://mcp.verivyx.com/mcp';
+  await acceptConsent('c1', {
+    grantScope: ['openid'],
+    grantAudience: [mcpUri],
+    sessionSub: 'user-123',
+  });
+
+  const [url, init] = fetchMock.mock.calls[0].arguments as [string, RequestInit];
+  assert.equal(url, `${ADMIN_URL}/admin/oauth2/auth/requests/consent/accept?consent_challenge=c1`);
+  assert.equal(init.method, 'PUT');
+  const sent = JSON.parse(init.body as string);
+  assert.deepEqual(sent.grant_scope, ['openid']);
+  assert.ok(
+    (sent.grant_access_token_audience as string[]).includes(mcpUri),
+    'grant_access_token_audience must contain the MCP resource URI',
+  );
+  assert.equal(sent.session?.id_token?.sub, 'user-123');
+});
