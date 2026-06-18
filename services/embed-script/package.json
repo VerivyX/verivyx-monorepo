@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && node build.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsx --test test/*.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +14,8 @@
   "type": "module",
   "devDependencies": {
     "esbuild": "^0.28.0",
+    "linkedom": "^0.18.9",
+    "tsx": "^4.19.4",
     "typescript": "^6.0.3"
   }
 }
