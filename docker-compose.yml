@@ -126,6 +126,7 @@ services:
       - SOROBAN_URL=${SOROBAN_URL:-}
       - USDC_ISSUER=${USDC_ISSUER:-}
       - FACILITATOR_STELLAR_SECRET=${FACILITATOR_STELLAR_SECRET:-}
+      - ALLOWED_PAYWALL_CONTRACTS=${ALLOWED_PAYWALL_CONTRACTS:-}
     networks:
       - paywall_net
     restart: unless-stopped
