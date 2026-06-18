@@ -5,7 +5,6 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { requireInternalToken, requireMcpKey } from "./auth.js";
-import { dnsRebindingGuard } from "./dnsGuard.js";
 import { createPaymentService } from "./chains/payments.js";
 import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
@@ -45,7 +44,7 @@ async function main(): Promise<void> {
   // Don't hold the process open if it would otherwise exit cleanly.
   sweepInterval.unref();
 
-  app.post("/mcp", dnsRebindingGuard, requireMcpKey, async (req: Request, res: Response) => {
+  app.post("/mcp", requireMcpKey, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
@@ -59,6 +58,9 @@ async function main(): Promise<void> {
           transports[id] = transport;
           lastSeen[id] = Date.now();
         },
+        enableDnsRebindingProtection: !cfg.allowedHosts.includes("*"),
+        allowedHosts: cfg.allowedHosts.includes("*") ? undefined : [...cfg.allowedHosts],
+        allowedOrigins: cfg.allowedOrigins.includes("*") ? undefined : [...cfg.allowedOrigins],
       });
       transport.onclose = () => {
         if (transport.sessionId) {
@@ -96,8 +98,8 @@ async function main(): Promise<void> {
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", dnsRebindingGuard, requireMcpKey, handleSessionRequest);
-  app.delete("/mcp", dnsRebindingGuard, requireMcpKey, handleSessionRequest);
+  app.get("/mcp", requireMcpKey, handleSessionRequest);
+  app.delete("/mcp", requireMcpKey, handleSessionRequest);
 
   // Liveness — no secrets.
   app.get("/healthz", (_req, res) => {

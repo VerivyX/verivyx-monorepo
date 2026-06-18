@@ -1,7 +1,3 @@
-import type { NextFunction, Request, Response } from "express";
-
-import { getConfig } from "./config.js";
-
 export type GuardResult = { ok: true } | { ok: false; reason: "host_not_allowed" | "origin_not_allowed" };
 
 /**
@@ -33,17 +29,4 @@ export function checkRequestOrigin(
   }
 
   return { ok: true };
-}
-
-/** Express middleware wrapper around checkRequestOrigin for the /mcp routes. */
-export function dnsRebindingGuard(req: Request, res: Response, next: NextFunction): void {
-  const { allowedHosts, allowedOrigins } = getConfig();
-  const result = checkRequestOrigin(req.headers.host, req.headers.origin, allowedHosts, allowedOrigins);
-  if (!result.ok) {
-    // 421 Misdirected Request fits a Host mismatch; 403 for a disallowed Origin.
-    const status = result.reason === "host_not_allowed" ? 421 : 403;
-    res.status(status).json({ error: result.reason });
-    return;
-  }
-  next();
 }
