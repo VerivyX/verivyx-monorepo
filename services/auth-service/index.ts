@@ -21,6 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
+import { getLoginRequest, acceptLogin } from './hydra.js';
 
 declare global {
   namespace Express {
@@ -69,6 +70,10 @@ const RESEND_FROM = process.env.RESEND_FROM?.trim() || 'Verivyx <noreply@verivyx
 const APP_BASE_URL = requireEnv('APP_BASE_URL').replace(/\/$/, '');
 // Email verification token lifetime.
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60_000;
+
+// Public frontend URL (e.g. https://verivyx.com) — used to redirect browser to
+// the dashboard login page when a Hydra login challenge requires interaction.
+const PUBLIC_DOMAIN = process.env.PUBLIC_DOMAIN?.replace(/\/$/, '') ?? APP_BASE_URL;
 
 // ---------- in-memory rate limiter ----------
 const _rl = new Map<string, { count: number; resetAt: number }>();
@@ -512,6 +517,48 @@ app.get('/api/v1/auth/me', authGuard, async (req: Request, res: Response) => {
   const user = await prisma.user.findUnique({ where: { id: req.userId! } });
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ user: shapeUser(user) });
+});
+
+// --- Hydra OAuth2 login challenge ---
+
+// Browser redirect target from Hydra. Reads the login_challenge, checks whether
+// Hydra says the session can be skipped (already authenticated), and either
+// accepts immediately or bounces the user to the dashboard login page which
+// will call POST /api/v1/oauth/login/accept after the user logs in.
+// NOTE: auth-service uses Bearer-JWT, not cookies, so there is no usable session
+// for a raw browser hit. Hydra's skip flag handles the re-auth-not-needed case.
+app.get('/api/v1/oauth/login', async (req: Request, res: Response) => {
+  const challenge = typeof req.query.login_challenge === 'string' ? req.query.login_challenge : '';
+  if (!challenge) {
+    return res.status(400).json({ error: 'login_challenge query param required' });
+  }
+  try {
+    const lr = await getLoginRequest(challenge);
+    if (lr.skip) {
+      const { redirect_to } = await acceptLogin(challenge, lr.subject);
+      return res.redirect(302, redirect_to);
+    }
+    return res.redirect(302, `${PUBLIC_DOMAIN}/login?login_challenge=${encodeURIComponent(challenge)}`);
+  } catch (err) {
+    console.error('Hydra getLoginRequest error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// Called by the dashboard after a successful Bearer-JWT login when a
+// login_challenge is present. Returns redirect_to so the client can navigate.
+app.post('/api/v1/oauth/login/accept', authGuard, async (req: Request, res: Response) => {
+  const { login_challenge } = req.body ?? {};
+  if (typeof login_challenge !== 'string' || !login_challenge) {
+    return res.status(400).json({ error: 'login_challenge required' });
+  }
+  try {
+    const { redirect_to } = await acceptLogin(login_challenge, String(req.userId!));
+    return res.json({ redirect_to });
+  } catch (err) {
+    console.error('Hydra acceptLogin error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
 });
 
 const PAYMENT_RELAYER_URL = process.env.PAYMENT_RELAYER_URL || 'http://payment-relayer:8084';
