@@ -10,6 +10,7 @@ import {
   validateSlug,
   checkPow,
   fingerprintReason,
+  clientIp as _clientIp,
   type Fingerprint,
 } from './lib.js';
 import {
@@ -34,6 +35,8 @@ type AuthedRequest = Request & { userId?: number; userEmail?: string };
 
 const prisma = new PrismaClient();
 const app = express();
+const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? '1');
+app.set('trust proxy', TRUSTED_PROXY_HOPS);
 app.use(express.json({ limit: '256kb' }));
 app.use(cors());
 
@@ -119,10 +122,8 @@ function signHumanSession(c: HumanClaims): string {
   return jwt.sign(c, SESSION_SECRET, { expiresIn: HUMAN_SESSION_TTL_SEC, audience: 'human' });
 }
 
-function clientIp(req: Request): string {
-  const xf = req.headers['x-forwarded-for'];
-  if (typeof xf === 'string') return xf.split(',')[0]?.trim() || req.ip || 'unknown';
-  return req.ip || 'unknown';
+function reqIp(req: Request): string {
+  return _clientIp(req.headers['x-forwarded-for'], req.socket?.remoteAddress, TRUSTED_PROXY_HOPS);
 }
 
 // ---------- guards ----------
@@ -359,7 +360,7 @@ app.get('/api/v1/auth/health', (_req, res) => {
 // gathered later in the onboarding wizard. The account starts UNVERIFIED and a
 // verification email is sent; the user cannot log in until they verify.
 app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip, 5, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many registrations from this IP. Try again in an hour.' });
   }
@@ -400,7 +401,7 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
 // Verify an email via the link token. On success the account is marked verified
 // and a session token is returned (auto-login → onboarding).
 app.post('/api/v1/auth/verify-email', async (req: Request, res: Response) => {
-  if (!rateLimit(clientIp(req), 20, 15 * 60_000)) {
+  if (!rateLimit(reqIp(req), 20, 15 * 60_000)) {
     return res.status(429).json({ error: 'Too many attempts. Try again shortly.' });
   }
   const { token } = req.body ?? {};
@@ -425,7 +426,7 @@ app.post('/api/v1/auth/verify-email', async (req: Request, res: Response) => {
 // Resend a verification email. Always returns success to avoid leaking which
 // emails are registered.
 app.post('/api/v1/auth/resend-verification', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(`resend:${ip}`, 5, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many requests. Try again later.' });
   }
@@ -451,7 +452,7 @@ app.post('/api/v1/auth/resend-verification', async (req: Request, res: Response)
 // MCP early-access waitlist (public, mcp.verivyx.com coming-soon).
 // Generic success even on duplicates to avoid leaking who has signed up.
 app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(`mcpwl:${ip}`, 10, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many requests. Try again later.' });
   }
@@ -480,7 +481,7 @@ app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
 });
 
 app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip, 10, 15 * 60_000)) {
     return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
   }
@@ -599,7 +600,7 @@ app.post('/api/v1/auth/challenge', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'domain and slug required' });
   }
 
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip + ':challenge', 10, 60_000)) {
     return res.status(429).json({ error: 'too_many_challenges' });
   }
@@ -643,7 +644,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'invalid_or_expired_challenge' });
   }
 
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   const ua = String(req.headers['user-agent'] || '').slice(0, 256);
 
   if (claims.ip !== ip || claims.ua !== ua) {

@@ -62,6 +62,28 @@ export interface Fingerprint {
   mouseMoved?: boolean;
 }
 
+// Returns the client IP that the trusted edge established. nginx appends the real peer to the END of
+// X-Forwarded-For, so with trustedHops=1 the last XFF entry is authoritative. Attacker-injected
+// leading entries are ignored. Falls back to remoteAddr when XFF is absent or has fewer entries
+// than trustedHops.
+export function clientIp(
+  xForwardedFor: string | string[] | undefined,
+  remoteAddr: string | undefined,
+  trustedHops: number = 1,
+): string {
+  const raw = Array.isArray(xForwardedFor) ? xForwardedFor.join(',') : xForwardedFor;
+  if (typeof raw === 'string') {
+    const parts = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (parts.length >= trustedHops) {
+      return parts[parts.length - trustedHops]!;
+    }
+  }
+  return remoteAddr ?? '';
+}
+
 export function fingerprintReason(fp: Fingerprint): string | null {
   if (!fp || typeof fp !== 'object') return 'fingerprint_missing';
   if (fp.webdriver === true) return 'webdriver_flag_set';
