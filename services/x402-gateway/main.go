@@ -284,6 +284,9 @@ type Facilitator struct {
 	apiKey        string
 	internalToken string
 	client        *http.Client
+	// stubForceInvalid is a test-only knob: when true, Verify returns IsValid=false
+	// in stub mode so tests can exercise the 402 rejection path without a live facilitator.
+	stubForceInvalid bool
 }
 
 func newFacilitator() *Facilitator {
@@ -336,6 +339,9 @@ type facilitatorRequest struct {
 
 func (f *Facilitator) Verify(payload PaymentPayload, req PaymentRequirement) (*VerifyResponse, error) {
 	if f.mode == "stub" {
+		if f.stubForceInvalid {
+			return &VerifyResponse{IsValid: false, InvalidReason: "stub_forced_invalid"}, nil
+		}
 		return &VerifyResponse{IsValid: true, Payer: "STUB-PAYER"}, nil
 	}
 	if f.baseURL == "" {

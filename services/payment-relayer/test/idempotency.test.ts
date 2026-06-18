@@ -77,3 +77,26 @@ test('settleOnce: different keys each run fn independently', async () => {
   assert.equal(callsA, 1);
   assert.equal(callsB, 1);
 });
+
+test('settleOnce: completed cache entry expires after ttlMs, allowing fn to run again', async () => {
+  let calls = 0;
+  const fn = async () => { calls++; return `result-${calls}`; };
+
+  // First call — fn runs, result is cached with a 20ms TTL.
+  const r1 = await settleOnce('ttl-key', fn, 20);
+  assert.equal(r1, 'result-1');
+  assert.equal(calls, 1);
+
+  // Second call within TTL — returns cached result without calling fn.
+  const r2 = await settleOnce('ttl-key', fn, 20);
+  assert.equal(r2, 'result-1');
+  assert.equal(calls, 1, 'fn must not run again while cache entry is fresh');
+
+  // Wait past the TTL so the cache entry expires.
+  await new Promise<void>(resolve => setTimeout(resolve, 30));
+
+  // Third call after TTL — cache entry expired, fn must run again.
+  const r3 = await settleOnce('ttl-key', fn, 20);
+  assert.equal(r3, 'result-2');
+  assert.equal(calls, 2, 'fn must run again after cache TTL expires (completedCache.delete branch)');
+});

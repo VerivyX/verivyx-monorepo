@@ -153,6 +153,7 @@ func TestPublicVerifyRequiresInternalToken(t *testing.T) {
 	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
 
 	internalToken = "test-secret-token"
+	t.Cleanup(func() { internalToken = "" })
 	f := stubFacilitator(t)
 	r := setupRouter(f)
 
@@ -177,6 +178,7 @@ func TestPublicVerifyAllowedWithInternalToken(t *testing.T) {
 
 	const testToken = "test-secret-token"
 	internalToken = testToken
+	t.Cleanup(func() { internalToken = "" })
 	f := stubFacilitator(t)
 	r := setupRouter(f)
 
@@ -200,6 +202,7 @@ func TestPublicSettleRequiresInternalToken(t *testing.T) {
 	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
 
 	internalToken = "test-secret-token"
+	t.Cleanup(func() { internalToken = "" })
 	f := stubFacilitator(t)
 	r := setupRouter(f)
 
@@ -224,6 +227,7 @@ func TestPublicSettleAllowedWithInternalToken(t *testing.T) {
 
 	const testToken = "test-secret-token"
 	internalToken = testToken
+	t.Cleanup(func() { internalToken = "" })
 	f := stubFacilitator(t)
 	r := setupRouter(f)
 
@@ -236,5 +240,44 @@ func TestPublicSettleAllowedWithInternalToken(t *testing.T) {
 
 	if w.Code == http.StatusUnauthorized {
 		t.Errorf("settle with valid token: got 401, want non-401")
+	}
+}
+
+// TestPublicSettleRejectsInvalidPayment asserts that POST /api/v1/payment/settle
+// returns 402 when the facilitator's Verify call reports IsValid=false, and that
+// Settle is NOT reached (no settlement response in the body).
+func TestPublicSettleRejectsInvalidPayment(t *testing.T) {
+	t.Setenv("USDC_CONTRACT_ID", "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("API_PUBLIC_URL", "https://api.verivyx.com")
+
+	const testToken = "test-secret-token"
+	internalToken = testToken
+	t.Cleanup(func() { internalToken = "" })
+
+	f := stubFacilitator(t)
+	f.stubForceInvalid = true // force Verify to return IsValid=false
+	r := setupRouter(f)
+
+	body, _ := json.Marshal(trustedFacilitatorRequest())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/settle", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", testToken)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Errorf("invalid payment: got %d, want %d (payment required)", w.Code, http.StatusPaymentRequired)
+	}
+	// Settle must NOT have been reached — no "success" or "transaction" key in body.
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("could not decode response body: %v", err)
+	}
+	if _, ok := resp["success"]; ok {
+		t.Error("settle body must not contain 'success' key — Settle should not have been called")
+	}
+	if _, ok := resp["transaction"]; ok {
+		t.Error("settle body must not contain 'transaction' key — Settle should not have been called")
 	}
 }
