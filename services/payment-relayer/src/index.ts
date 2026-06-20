@@ -2,9 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
-import { resolvePayer, extractSorobanFrom } from './payer';
+import { resolvePayer, extractSorobanFrom, extractInvokedOp } from './payer';
 import { payloadHash, settleOnce, SettleValidationError } from './idempotency';
-import { parseAllowedPaywallContracts, assertPaywallContractAllowed, toStableError } from './validation';
+import {
+  parseAllowedPaywallContracts, assertPaywallContractAllowed,
+  parseAllowedPayAdapters, assertAdapterAllowed,
+  toStableError,
+} from './validation';
+import { classifySettlePath, SettlePath } from './routing';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -18,6 +23,11 @@ if (!INTERNAL_TOKEN) {
 // Allowlist of official paywall_core contract addresses the relayer may fee-sponsor.
 // Fail-closed: if empty/unset on the fee-sponsored path, settlement is rejected.
 const ALLOWED_PAYWALL_CONTRACTS = parseAllowedPaywallContracts(process.env.ALLOWED_PAYWALL_CONTRACTS);
+
+// Allowlist of official verivyx_pay_adapter contract addresses the relayer may fee-sponsor.
+// Fail-closed: a tx targeting an adapter when this set is empty is REJECTED.
+// On the adapter path the relayer only sponsors — it does NOT call distribute.
+const ALLOWED_PAY_ADAPTERS = parseAllowedPayAdapters(process.env.ALLOWED_PAY_ADAPTERS);
 
 const isDev = process.env.NODE_ENV !== 'production';
 const logger = pino({
@@ -133,6 +143,39 @@ function validateSorobanTransfer(
   }
   if (amount !== expectedAmount) {
     return `transfer amount must be ${expectedAmount}, got ${amount}`;
+  }
+  return null;
+}
+
+// Validate a verivyx_pay_adapter.pay(owner, domain, slug) invocation:
+// exactly one invokeHostFunction → invokeContract targeting the adapter, function `pay`, 3 args.
+// Does NOT inspect arg values — the adapter contract enforces them on-chain.
+function validateAdapterPayOp(
+  tx: Transaction,
+  expectedAdapterId: string,
+): string | null {
+  if (tx.operations.length !== 1) {
+    return `Adapter TX must have exactly 1 operation, got ${tx.operations.length}`;
+  }
+  const op = tx.operations[0];
+  if (op.type !== 'invokeHostFunction') {
+    return `Adapter op must be invokeHostFunction, got ${op.type}`;
+  }
+  const hostFn = (op as unknown as { func: xdr.HostFunction }).func;
+  if (hostFn.switch().name !== 'hostFunctionTypeInvokeContract') {
+    return 'Adapter host function must be invokeContract';
+  }
+  const ic = hostFn.invokeContract();
+  const contractAddr = Address.fromScAddress(ic.contractAddress()).toString();
+  if (contractAddr !== expectedAdapterId) {
+    return `Adapter pay must target adapter contract ${expectedAdapterId}, got ${contractAddr}`;
+  }
+  if (ic.functionName().toString() !== 'pay') {
+    return `Adapter call must be pay, got ${ic.functionName().toString()}`;
+  }
+  const args = ic.args();
+  if (args.length !== 3) {
+    return `Adapter pay must have 3 args (owner, domain, slug), got ${args.length}`;
   }
   return null;
 }
@@ -480,23 +523,88 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       // Facilitator rebuilds TX as source and covers XLM fees (areFeesSponsored: true).
       const needsFeeSponsoring = isSoroban && tx.signatures.length === 0 && !!facilitatorKeypair;
 
-      // Security: for the spec Soroban path, pc is MANDATORY and must be in the
-      // ALLOWED_PAYWALL_CONTRACTS allowlist before we sponsor + distribute.
       if (isSoroban && needsFeeSponsoring) {
+        // Extract the invoked contract + function to determine the routing path.
+        const invokedOp = extractInvokedOp(tx);
+        if (!invokedOp) {
+          throw new SettleValidationError('Soroban TX must have exactly one invokeHostFunction → invokeContract operation');
+        }
+
+        const settlePath = classifySettlePath(invokedOp, ALLOWED_PAY_ADAPTERS, ALLOWED_PAYWALL_CONTRACTS);
+
+        if (settlePath === SettlePath.ADAPTER) {
+          // --- ADAPTER PATH (verivyx_pay_adapter.pay) ---
+          // The adapter performs the 3-way split atomically inside itself.
+          // Relayer ONLY fee-sponsors — distribute must NOT be called here.
+
+          // Fail-closed allowlist assertion (throws SettleValidationError → 400 if not allowed).
+          assertAdapterAllowed(invokedOp.contractId, ALLOWED_PAY_ADAPTERS);
+
+          // Validate op shape: exactly one invokeHostFunction → adapter.pay with 3 args.
+          const aErr = validateAdapterPayOp(tx, invokedOp.contractId);
+          if (aErr) {
+            logger.warn({ aErr }, 'Adapter pay op validation failed in /settle');
+            throw new SettleValidationError(aErr);
+          }
+
+          logger.info({ adapterId: invokedOp.contractId }, 'Adapter path: sponsor-only (no distribute)');
+          const txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
+
+          const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
+          logger.info({ txHash }, 'Adapter payment settled (sponsor-only, split done atomically in adapter)');
+          return {
+            success: true,
+            transaction: txHash,
+            distributeTransaction: undefined,
+            network: paymentRequirements.network,
+            payer,
+            amount: paymentRequirements.amount,
+          };
+        }
+
+        // --- LEGACY PAYWALL PATH ---
+        // assertPaywallContractAllowed throws SettleValidationError (→ 400) if not allowed.
         const pc: string | undefined = paymentRequirements?.extra?.paywallContract;
-        // Throws SettleValidationError (→ 400) if pc is absent or not allowlisted.
         assertPaywallContractAllowed(pc, ALLOWED_PAYWALL_CONTRACTS);
         const tErr = validateSorobanTransfer(tx, paymentRequirements.asset, pc as string, paymentRequirements.amount);
         if (tErr) {
           logger.warn({ tErr }, 'Soroban transfer validation failed in /settle');
           throw new SettleValidationError(tErr);
         }
+
+        const txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
+
+        // x402 spec Soroban path: the agent's single transfer just landed the full amount
+        // in the paywall contract. Now run the on-chain split via distribute().
+        // Gateway passes domain + paywallContract in paymentRequirements.extra.
+        let distributeTx: string | undefined;
+        const extra = paymentRequirements?.extra;
+        const paywallContract: string | undefined = extra?.paywallContract;
+        const distributeDomain: string | undefined = extra?.domain;
+        if (paywallContract && distributeDomain) {
+          distributeTx = await withTimeout(
+            callDistribute(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
+            30000,
+            'soroban_distribute',
+          );
+          logger.info({ distributeTx }, 'On-chain split completed via distribute()');
+        }
+
+        const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
+        logger.info({ txHash, distributeTx }, 'Payment settled successfully');
+        return {
+          success: true,
+          transaction: txHash,
+          distributeTransaction: distributeTx,
+          network: paymentRequirements.network,
+          payer,
+          amount: paymentRequirements.amount,
+        };
       }
 
+      // --- NON-FEE-SPONSORED SOROBAN OR CLASSIC PATH ---
       let txHash: string;
-      if (isSoroban && needsFeeSponsoring) {
-        txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
-      } else if (isSoroban) {
+      if (isSoroban) {
         // Pre-flight simulate the already-signed legacy tx before submitting.
         // Simulation is a read-only error check; we do NOT assemble/resign (that
         // would invalidate the client's signature). Submit the original tx as-is.
@@ -511,32 +619,12 @@ app.post('/settle', requireInternalToken, async (req, res) => {
         txHash = await withTimeout(submitClassic(txXdr), 15000, 'horizon_submit');
       }
 
-      // x402 spec Soroban path: the agent's single transfer just landed the full amount
-      // in the paywall contract. Now run the on-chain split via distribute().
-      // Gateway passes domain + paywallContract in paymentRequirements.extra.
-      let distributeTx: string | undefined;
-      const extra = paymentRequirements?.extra;
-      const paywallContract: string | undefined = extra?.paywallContract;
-      const distributeDomain: string | undefined = extra?.domain;
-      if (isSoroban && needsFeeSponsoring && paywallContract && distributeDomain) {
-        distributeTx = await withTimeout(
-          callDistribute(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
-          30000,
-          'soroban_distribute',
-        );
-        logger.info({ distributeTx }, 'On-chain split completed via distribute()');
-      }
-
-      // Prefer the agent address the client declared. Generic x402 v2 Stellar payloads
-      // carry only { transaction } (no payer), so fall back to the Soroban transfer
-      // `from` arg before tx.source (a null placeholder in the fee-sponsored path).
       const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
-
-      logger.info({ txHash, distributeTx }, 'Payment settled successfully');
+      logger.info({ txHash }, 'Payment settled successfully');
       return {
         success: true,
         transaction: txHash,
-        distributeTransaction: distributeTx,
+        distributeTransaction: undefined,
         network: paymentRequirements.network,
         payer,
         amount: paymentRequirements.amount,

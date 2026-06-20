@@ -1,16 +1,32 @@
 import { SettleValidationError } from './idempotency';
 
 /**
- * Parse the comma-separated ALLOWED_PAYWALL_CONTRACTS env value into a
- * trimmed, non-empty Set. Undefined or empty string → empty Set (fail-closed).
+ * Shared parser for comma-separated contract/adapter allowlist env values.
+ * Returns a trimmed, non-empty Set. Undefined or empty string → empty Set (fail-closed).
  */
-export function parseAllowedPaywallContracts(raw: string | undefined): Set<string> {
+function parseAllowedContracts(raw: string | undefined): Set<string> {
   if (!raw) return new Set();
   return new Set(
     raw.split(',')
       .map(s => s.trim())
       .filter(s => s.length > 0)
   );
+}
+
+/**
+ * Parse the comma-separated ALLOWED_PAYWALL_CONTRACTS env value into a
+ * trimmed, non-empty Set. Undefined or empty string → empty Set (fail-closed).
+ */
+export function parseAllowedPaywallContracts(raw: string | undefined): Set<string> {
+  return parseAllowedContracts(raw);
+}
+
+/**
+ * Parse the comma-separated ALLOWED_PAY_ADAPTERS env value into a
+ * trimmed, non-empty Set. Undefined or empty string → empty Set (fail-closed).
+ */
+export function parseAllowedPayAdapters(raw: string | undefined): Set<string> {
+  return parseAllowedContracts(raw);
 }
 
 /**
@@ -27,6 +43,23 @@ export function assertPaywallContractAllowed(pc: string | undefined, allowed: Se
   }
   if (!allowed.has(pc)) {
     throw new SettleValidationError(`paywallContract ${pc} is not in the allowlist`);
+  }
+}
+
+/**
+ * Assert that the adapter id is present and in the adapter allowlist.
+ * Throws SettleValidationError (→ HTTP 400) if not — fail-closed.
+ * Called only on the adapter (non-custodial) sponsor path.
+ */
+export function assertAdapterAllowed(adapterId: string | undefined, allowed: Set<string>): void {
+  if (!adapterId) {
+    throw new SettleValidationError('payAdapterId is required for adapter fee-sponsored settlement');
+  }
+  if (allowed.size === 0) {
+    throw new SettleValidationError('ALLOWED_PAY_ADAPTERS is not configured — adapter settlement rejected');
+  }
+  if (!allowed.has(adapterId)) {
+    throw new SettleValidationError(`payAdapter ${adapterId} is not in the allowlist`);
   }
 }
 

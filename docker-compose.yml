@@ -133,6 +133,7 @@ services:
       - USDC_ISSUER=${USDC_ISSUER:-}
       - FACILITATOR_STELLAR_SECRET=${FACILITATOR_STELLAR_SECRET:-}
       - ALLOWED_PAYWALL_CONTRACTS=${ALLOWED_PAYWALL_CONTRACTS:-}
+      - ALLOWED_PAY_ADAPTERS=${ALLOWED_PAY_ADAPTERS:-}
     networks:
       - paywall_net
     restart: unless-stopped
