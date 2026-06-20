@@ -800,9 +800,16 @@ fn revoke_remove_context_rule_disables_session() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PRODUCTION ADAPTER TEST
-// Verifies: adapter atomically pulls resource price + flat fee from owner via
-// SEP-41 allowance, then triggers paywall_core distribute end-to-end.
+// PRODUCTION ADAPTER TESTS — DIRECT 3-WAY SPLIT
+//
+// Verifies the adapter reads the authoritative on-chain price from paywall_core
+// (get_creator) and credits creator + platform + Verivyx fee_treasury directly
+// from the owner's SEP-41 allowance, in one atomic invocation. There is no pooled
+// deposit and no cross-call to distribute — so the over-distribution risk (I-1)
+// cannot arise, and there is no keeper signature on the money path.
+//
+// Numbers (per the brief): price=10_000, platform_fee=1_000, fee_atomic=10_000
+//   → creator 9_000, platform 1_000, fee_treasury 10_000, owner −20_000.
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -820,285 +827,291 @@ mod adapter_tests {
         token::Client::new(env, usdc_id).balance(addr)
     }
 
-    #[test]
-    fn pay_pulls_resource_and_fee_from_owner() {
-        let env = Env::default();
-        // mock_all_auths_allowing_non_root_auth is required because
-        // adapter.pay() -> paywall.distribute() -> keeper.require_auth()
-        // fires at non-root invocation depth. mock_all_auths only covers
-        // auth tied to the root invocation.
-        env.mock_all_auths_allowing_non_root_auth();
-
-        // ── token ────────────────────────────────────────────────────────────
-        let usdc_admin = Address::generate(&env);
-        let usdc_id = env.register_stellar_asset_contract_v2(usdc_admin).address();
-
-        // ── paywall_core ─────────────────────────────────────────────────────
-        // keeper = the entity that calls distribute (in prod: the relayer/MCP).
-        // Under mock_all_auths its require_auth() in distribute is satisfied.
-        let paywall_admin    = Address::generate(&env);
-        let paywall_platform = Address::generate(&env);
-        let keeper           = Address::generate(&env);
-        let paywall_id = env.register(PaywallContract, ());
-        let paywall_client = PaywallContractClient::new(&env, &paywall_id);
-        paywall_client.init(&paywall_admin, &paywall_platform, &keeper, &usdc_id);
-
-        // Register the domain: price=10_000 USDC-atomic, platform_fee=1_000.
-        // distribute splits: creator gets 9_000, platform gets 1_000.
-        let creator     = Address::generate(&env);
-        let domain      = String::from_str(&env, "example.com");
-        let price: i128 = 10_000;
-        let pfee: i128  = 1_000;
-        paywall_client.register(&creator, &domain, &price, &pfee);
-
-        // ── adapter ──────────────────────────────────────────────────────────
-        let fee_treasury    = Address::generate(&env);
-        let fee_atomic: i128 = 10_000; // 0.001 USDC
-        let adapter_id = env.register(VerivyxPayAdapter, ());
-        let adapter_client = VerivyxPayAdapterClient::new(&env, &adapter_id);
-        adapter_client.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic);
-
-        // ── owner: fund + approve adapter (spender) ──────────────────────────
-        let owner            = Address::generate(&env);
-        let owner_start: i128 = 1_000_000;
-        token::StellarAssetClient::new(&env, &usdc_id).mint(&owner, &owner_start);
-
-        // Allowance: owner approves adapter as spender for amount + fee
-        let allowance: i128 = price + fee_atomic; // 20_000
-        token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
-
-        // ── execute ──────────────────────────────────────────────────────────
-        let slug = String::from_str(&env, "article-1");
-        adapter_client.pay(&owner, &domain, &slug, &price);
-
-        // ── assertions ───────────────────────────────────────────────────────
-        // owner debited price + fee
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &owner),
-            owner_start - price - fee_atomic,
-            "owner balance mismatch"
-        );
-        // Verivyx fee landed in fee_treasury
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &fee_treasury),
-            fee_atomic,
-            "fee_treasury balance mismatch"
-        );
-        // paywall_core distributed: after distribute, paywall holds 0
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &paywall_id),
-            0,
-            "paywall balance should be 0 after distribute"
-        );
-        // creator received (price - platform_fee) = 9_000
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &creator),
-            price - pfee,
-            "creator share mismatch"
-        );
-        // paywall_platform received platform_fee = 1_000
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &paywall_platform),
-            pfee,
-            "paywall_platform balance mismatch"
-        );
-
-        std::println!("[PASS] pay_pulls_resource_and_fee_from_owner");
+    // Full fixture exposing every party we assert balances on. Registers token +
+    // paywall + adapter + funded owner; the adapter's platform is the SAME address
+    // as paywall_core's platform_address (init contract requires they match).
+    struct Fixture {
+        usdc_id: Address,
+        adapter: VerivyxPayAdapterClient<'static>,
+        adapter_id: Address,
+        owner: Address,
+        owner_start: i128,
+        creator: Address,
+        platform: Address,
+        fee_treasury: Address,
+        domain: String,
+        price: i128,
+        pfee: i128,
+        fee_atomic: i128,
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // P1d LAYER 2 — budget == SEP-41 allowance, end-to-end via the real adapter.
-    //
-    // The session budget is the USDC allowance the owner approves to the adapter.
-    // Each pay() debits amount + fee from that allowance; once exhausted,
-    // transfer_from fails. These prove (a) a pay within budget leaves allowance 0,
-    // and (b) spend beyond the allowance cap is rejected — and because the fee
-    // transfer is part of what consumes the cap, the fee can never be skipped.
-    // ══════════════════════════════════════════════════════════════════════════
-
-    // Shared fixture: register token + paywall + adapter + funded owner.
-    // Returns (env, usdc_id, adapter_client, owner, fee_treasury, domain, price, fee, creator, platform).
-    fn setup(env: &Env) -> (Address, VerivyxPayAdapterClient<'static>, Address, Address, String, i128, i128) {
+    fn setup(env: &Env) -> Fixture {
         let usdc_admin = Address::generate(env);
         let usdc_id = env.register_stellar_asset_contract_v2(usdc_admin).address();
 
-        let paywall_admin    = Address::generate(env);
-        let paywall_platform = Address::generate(env);
-        let keeper           = Address::generate(env);
+        // paywall_core: keeper is irrelevant now (no distribute call), but init
+        // still requires one. platform = the shared platform wallet.
+        let paywall_admin = Address::generate(env);
+        let platform      = Address::generate(env);
+        let keeper        = Address::generate(env);
         let paywall_id = env.register(PaywallContract, ());
         let paywall_client = PaywallContractClient::new(env, &paywall_id);
-        paywall_client.init(&paywall_admin, &paywall_platform, &keeper, &usdc_id);
+        paywall_client.init(&paywall_admin, &platform, &keeper, &usdc_id);
 
+        // Register domain: price=10_000, platform_fee=1_000 → creator_share 9_000.
         let creator     = Address::generate(env);
         let domain      = String::from_str(env, "example.com");
         let price: i128 = 10_000;
         let pfee: i128  = 1_000;
         paywall_client.register(&creator, &domain, &price, &pfee);
 
+        // adapter: platform MUST equal paywall_core's platform_address.
         let fee_treasury     = Address::generate(env);
-        let fee_atomic: i128 = 10_000;
+        let fee_atomic: i128 = 10_000; // 0.001 USDC
         let adapter_id = env.register(VerivyxPayAdapter, ());
-        let adapter_client = VerivyxPayAdapterClient::new(env, &adapter_id);
-        adapter_client.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic);
+        let adapter = VerivyxPayAdapterClient::new(env, &adapter_id);
+        adapter.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic, &platform);
 
         let owner             = Address::generate(env);
         let owner_start: i128 = 1_000_000;
         token::StellarAssetClient::new(env, &usdc_id).mint(&owner, &owner_start);
 
-        (usdc_id, adapter_client, owner, fee_treasury, domain, price, fee_atomic)
+        Fixture {
+            usdc_id, adapter, adapter_id, owner, owner_start,
+            creator, platform, fee_treasury, domain, price, pfee, fee_atomic,
+        }
     }
 
-    // TEST P1d-5 — pay within budget; allowance is exactly one amount+fee and
-    // ends at 0.
+    // ══════════════════════════════════════════════════════════════════════════
+    // TEST 1 — pay_splits_creator_platform_and_fee
+    //
+    // Proves the core split: with price=10_000, platform_fee=1_000, fee=10_000 the
+    // adapter credits creator 9_000, platform 1_000, fee_treasury 10_000 and debits
+    // owner 20_000 — all read from chain/storage, none from a caller amount. Also
+    // asserts nothing is held in the adapter or paywall (no pooled balance).
+    // ══════════════════════════════════════════════════════════════════════════
     #[test]
-    fn session_pays_within_budget() {
+    fn pay_splits_creator_platform_and_fee() {
+        let env = Env::default();
+        // mock_all_auths_allowing_non_root_auth: owner.require_auth() and the
+        // SAC transfer_from auth fire at non-root invocation depth.
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup(&env);
+
+        // Approve adapter (spender) for >= price + fee = 20_000.
+        let allowance: i128 = f.price + f.fee_atomic; // 20_000
+        token::Client::new(&env, &f.usdc_id)
+            .approve(&f.owner, &f.adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+        f.adapter.pay(&f.owner, &f.domain, &slug);
+
+        // creator credited price - platform_fee = 9_000
+        assert_eq!(
+            usdc_balance(&env, &f.usdc_id, &f.creator),
+            f.price - f.pfee,
+            "creator share mismatch (expected 9_000)"
+        );
+        // platform credited platform_fee = 1_000
+        assert_eq!(
+            usdc_balance(&env, &f.usdc_id, &f.platform),
+            f.pfee,
+            "platform fee mismatch (expected 1_000)"
+        );
+        // fee_treasury credited Verivyx fee = 10_000
+        assert_eq!(
+            usdc_balance(&env, &f.usdc_id, &f.fee_treasury),
+            f.fee_atomic,
+            "fee_treasury mismatch (expected 10_000)"
+        );
+        // owner debited price + fee = 20_000
+        assert_eq!(
+            usdc_balance(&env, &f.usdc_id, &f.owner),
+            f.owner_start - f.price - f.fee_atomic,
+            "owner debit mismatch (expected -20_000)"
+        );
+        // No pooled balance anywhere: adapter holds 0.
+        assert_eq!(
+            usdc_balance(&env, &f.usdc_id, &f.adapter_id),
+            0,
+            "adapter must hold no funds (direct split, no pool)"
+        );
+
+        std::println!("[PASS] pay_splits_creator_platform_and_fee: 9_000 / 1_000 / 10_000, owner -20_000");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // TEST 2 — pays_within_budget
+    //
+    // Allowance is exactly price + fee = 20_000. One pay succeeds and leaves the
+    // remaining owner→adapter allowance at exactly 0, proving the three legs
+    // consume the whole budget (no leg skipped, no leg double-charged).
+    // ══════════════════════════════════════════════════════════════════════════
+    #[test]
+    fn pays_within_budget() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
 
-        let (usdc_id, adapter_client, owner, fee_treasury, domain, price, fee_atomic) = setup(&env);
-        let adapter_id = adapter_client.address.clone();
-        let owner_start: i128 = usdc_balance(&env, &usdc_id, &owner);
+        let f = setup(&env);
 
-        // Budget = exactly one amount(10_000) + fee(10_000) = 20_000.
-        let allowance: i128 = price + fee_atomic; // 20_000
-        token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+        let allowance: i128 = f.price + f.fee_atomic; // 20_000
+        token::Client::new(&env, &f.usdc_id)
+            .approve(&f.owner, &f.adapter_id, &allowance, &(env.ledger().sequence() + 1000));
 
         let slug = String::from_str(&env, "article-1");
-        adapter_client.pay(&owner, &domain, &slug, &price);
+        f.adapter.pay(&f.owner, &f.domain, &slug);
 
-        // Owner debited exactly amount + fee.
+        // Owner debited exactly price + fee.
         assert_eq!(
-            usdc_balance(&env, &usdc_id, &owner),
-            owner_start - price - fee_atomic,
-            "owner debited amount + fee"
+            usdc_balance(&env, &f.usdc_id, &f.owner),
+            f.owner_start - f.price - f.fee_atomic,
+            "owner debited price + fee"
         );
-        // Fee landed in treasury.
-        assert_eq!(
-            usdc_balance(&env, &usdc_id, &fee_treasury),
-            fee_atomic,
-            "fee_treasury credited the flat fee"
-        );
-        // Budget fully consumed: remaining owner->adapter allowance is 0.
-        let remaining = token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id);
-        assert_eq!(remaining, 0, "allowance (budget) fully consumed");
+        // Budget fully consumed: remaining allowance is 0.
+        let remaining = token::Client::new(&env, &f.usdc_id).allowance(&f.owner, &f.adapter_id);
+        assert_eq!(remaining, 0, "allowance (budget) fully consumed to 0");
 
-        std::println!("[PASS] P1d: session pays within budget; allowance exhausted to 0");
+        std::println!("[PASS] pays_within_budget: allowance exhausted to 0");
     }
 
-    // TEST P1d-6 — over budget fails. Allowance = exactly one amount+fee; first
-    // pay succeeds and exhausts it, the SECOND pay must panic because the
-    // allowance (the budget cap) is exhausted — proving the cap holds and that
-    // the fee transfer (part of what consumes the cap) can never be skipped.
+    // ══════════════════════════════════════════════════════════════════════════
+    // TEST 3 — fee_cannot_be_skipped (over-budget on the fee leg)
+    //
+    // Allowance = 15_000 < price + fee (20_000). The first two legs consume
+    // 9_000 (creator) + 1_000 (platform) = 10_000, leaving 5_000. The third leg —
+    // the Verivyx fee of 10_000 — exceeds the remaining 5_000 and panics with the
+    // SAC exhausted-allowance error (#9). This isolates the fee leg as what blows
+    // the cap, proving the fee can never be skipped to fit a smaller budget.
+    // ══════════════════════════════════════════════════════════════════════════
     #[test]
-    // #9 is the SAC/SEP-41 token error for an exhausted allowance, raised by
-    // transfer_from inside pay() — proving the budget cap (not a setup error).
+    // #9 = SAC/SEP-41 exhausted-allowance error, raised by the fee leg's
+    // transfer_from — proving the fee line is what exceeds the budget.
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn fee_cannot_be_skipped() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup(&env);
+
+        // Enough for creator+platform (10_000) but not the fee (needs +10_000).
+        let allowance: i128 = 15_000; // < price + fee (20_000)
+        token::Client::new(&env, &f.usdc_id)
+            .approve(&f.owner, &f.adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+        // Legs 1+2 consume 10_000; leg 3 (fee 10_000) > remaining 5_000 → #9.
+        f.adapter.pay(&f.owner, &f.domain, &slug);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // TEST 4 — over_budget_fails (second pay past the cap)
+    //
+    // Allowance = exactly one price + fee. First pay succeeds and exhausts the
+    // allowance to 0 (asserted). The second pay's first leg hits transfer_from
+    // with a 0 allowance and panics with #9 — proving the budget cap holds across
+    // calls and that funds-side revoke / exhaustion blocks settlement.
+    // ══════════════════════════════════════════════════════════════════════════
+    #[test]
     #[should_panic(expected = "Error(Contract, #9)")]
     fn over_budget_fails() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
 
-        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, fee_atomic) = setup(&env);
-        let adapter_id = adapter_client.address.clone();
+        let f = setup(&env);
 
-        // Budget caps total spend at exactly one amount+fee.
-        let allowance: i128 = price + fee_atomic; // 20_000
-        token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+        let allowance: i128 = f.price + f.fee_atomic; // 20_000
+        token::Client::new(&env, &f.usdc_id)
+            .approve(&f.owner, &f.adapter_id, &allowance, &(env.ledger().sequence() + 1000));
 
         let slug = String::from_str(&env, "article-1");
 
         // First pay consumes the entire budget — succeeds.
-        adapter_client.pay(&owner, &domain, &slug, &price);
+        f.adapter.pay(&f.owner, &f.domain, &slug);
         assert_eq!(
-            token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id),
+            token::Client::new(&env, &f.usdc_id).allowance(&f.owner, &f.adapter_id),
             0,
-            "budget exhausted after first pay"
+            "budget exhausted to 0 after first pay (cap reached)"
         );
 
-        // Second pay must panic: transfer_from exceeds the (now 0) allowance.
-        adapter_client.pay(&owner, &domain, &slug, &price);
-    }
-
-    // TEST P1d-6b — fee cannot be skipped: allowance covers the resource amount
-    // but NOT the fee (15_000 < 20_000). Step-1 transfer_from consumes 10_000,
-    // leaving 5_000; step-2 fee transfer_from of 10_000 exceeds the remaining
-    // 5_000 and panics. This isolates the fee as the line that blows the cap.
-    #[test]
-    // #9 = SAC/SEP-41 exhausted-allowance error, raised by the step-2 fee
-    // transfer_from — proving the fee line is what blows the cap.
-    #[should_panic(expected = "Error(Contract, #9)")]
-    fn fee_cannot_be_skipped_over_budget() {
-        let env = Env::default();
-        env.mock_all_auths_allowing_non_root_auth();
-
-        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, _fee_atomic) = setup(&env);
-        let adapter_id = adapter_client.address.clone();
-
-        // Allowance below amount + fee: enough for the resource, not the fee.
-        let allowance: i128 = 15_000; // < price(10_000) + fee(10_000)
-        token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
-
-        let slug = String::from_str(&env, "article-1");
-        // Step-1 (10_000) ok, step-2 fee (10_000) > remaining 5_000 → panic.
-        adapter_client.pay(&owner, &domain, &slug, &price);
+        // Second pay: leg 1 transfer_from exceeds the (now 0) allowance → #9.
+        f.adapter.pay(&f.owner, &f.domain, &slug);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // P1e LAYER 2 — funds-side revocation: allowance 0 blocks pay.
+    // TEST 5 — unregistered_domain_panics
     //
-    // The session budget is the SEP-41 allowance the owner grants to the adapter.
-    // Revoking funds access = owner calls approve(owner, adapter, 0, expiry).
-    // Any subsequent adapter.pay() hits transfer_from with a zero allowance and
-    // panics with SAC error #9 (exhausted allowance). This proves that the
-    // funds-side revoke is instant and cannot be bypassed.
+    // pay() on a domain that get_creator returns None for must panic with
+    // "domain not registered" — the adapter refuses to move funds for a domain it
+    // has no authoritative price for.
     // ══════════════════════════════════════════════════════════════════════════
-
-    // TEST P1e-3 — revoke_allowance_zero_blocks_pay.
-    //
-    // Sequence:
-    //   1. Owner approves adapter with a generous allowance (20_000).
-    //   2. First pay(10_000) succeeds, proving the setup is correct.
-    //   3. Owner re-approves adapter to allowance = 0 (explicit revocation).
-    //   4. Second pay(10_000) panics with SAC exhausted-allowance error #9.
-    //
-    // #9 is the SAC/SEP-41 token error for transfer_from exceeding the
-    // approved allowance, proving the funds-side revoke (not a setup error).
     #[test]
-    #[should_panic(expected = "Error(Contract, #9)")]
-    fn revoke_allowance_zero_blocks_pay() {
+    #[should_panic(expected = "domain not registered")]
+    fn unregistered_domain_panics() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
 
-        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, fee_atomic) = setup(&env);
-        let adapter_id = adapter_client.address.clone();
+        let f = setup(&env);
 
-        // Step 1: owner grants a generous allowance — enough for two pays.
-        let allowance: i128 = (price + fee_atomic) * 2; // 40_000
+        // Generous allowance so the panic is NOT an allowance error.
+        let allowance: i128 = f.price + f.fee_atomic;
+        token::Client::new(&env, &f.usdc_id)
+            .approve(&f.owner, &f.adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        // A domain that was never registered → get_creator returns None.
+        let unknown = String::from_str(&env, "not-registered.example");
+        let slug = String::from_str(&env, "article-1");
+        f.adapter.pay(&f.owner, &unknown, &slug);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // TEST 6 — disabled_domain_panics
+    //
+    // Register then disable the domain via paywall_core::set_enabled (public,
+    // creator-auth — no modification to paywall_core needed). get_creator returns
+    // a CreatorData with enabled=false, so the adapter's assert!(cd.enabled) fires
+    // with "paywall disabled" and no funds move.
+    // ══════════════════════════════════════════════════════════════════════════
+    #[test]
+    #[should_panic(expected = "paywall disabled")]
+    fn disabled_domain_panics() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        // Build a paywall + adapter where we keep the paywall client + creator so
+        // we can disable the domain (setup() drops them, so inline the wiring).
+        let usdc_admin = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract_v2(usdc_admin).address();
+
+        let paywall_admin = Address::generate(&env);
+        let platform      = Address::generate(&env);
+        let keeper        = Address::generate(&env);
+        let paywall_id = env.register(PaywallContract, ());
+        let paywall_client = PaywallContractClient::new(&env, &paywall_id);
+        paywall_client.init(&paywall_admin, &platform, &keeper, &usdc_id);
+
+        let creator     = Address::generate(&env);
+        let domain      = String::from_str(&env, "example.com");
+        let price: i128 = 10_000;
+        let pfee: i128  = 1_000;
+        paywall_client.register(&creator, &domain, &price, &pfee);
+
+        // Disable the domain — creator authorizes (mock auth covers it).
+        paywall_client.set_enabled(&creator, &domain, &false);
+
+        let fee_treasury     = Address::generate(&env);
+        let fee_atomic: i128 = 10_000;
+        let adapter_id = env.register(VerivyxPayAdapter, ());
+        let adapter = VerivyxPayAdapterClient::new(&env, &adapter_id);
+        adapter.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic, &platform);
+
+        let owner = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &usdc_id).mint(&owner, &1_000_000);
         token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+            .approve(&owner, &adapter_id, &(price + fee_atomic), &(env.ledger().sequence() + 1000));
 
         let slug = String::from_str(&env, "article-1");
-
-        // Step 2: first pay succeeds, confirming the baseline works.
-        adapter_client.pay(&owner, &domain, &slug, &price);
-
-        // Step 3: owner explicitly revokes by setting allowance to 0.
-        // This models the funds-side revoke: the session can no longer move
-        // any funds through the adapter, even though the smart-account rule
-        // may still list the session signer.
-        token::Client::new(&env, &usdc_id)
-            .approve(&owner, &adapter_id, &0, &(env.ledger().sequence() + 1000));
-
-        // Confirm allowance is now 0.
-        let remaining = token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id);
-        assert_eq!(remaining, 0, "allowance must be 0 after revoke");
-
-        // Step 4: second pay panics with SAC exhausted-allowance error #9.
-        // transfer_from(owner, adapter, 10_000) fails because allowance = 0.
-        adapter_client.pay(&owner, &domain, &slug, &price);
-        // must panic with Error(Contract, #9)
+        // get_creator returns enabled=false → assert!(cd.enabled) panics.
+        adapter.pay(&owner, &domain, &slug);
     }
 }
