@@ -27,6 +27,11 @@ pub use stellar_accounts::smart_account::{
 };
 pub use stellar_accounts::policies::spending_limit::SpendingLimitAccountParams;
 
+// ~120 days at 5s/ledger on Stellar Testnet — mirrors paywall_core's LEDGER_TTL.
+// Extended at the start of every public method so the instance entry is never
+// archived while the adapter is in active use.
+const LEDGER_TTL: u32 = 2_073_600;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -72,6 +77,7 @@ impl VerivyxPayAdapter {
         fee_treasury: Address,
         fee_atomic: i128,
     ) {
+        env.storage().instance().extend_ttl(LEDGER_TTL, LEDGER_TTL);
         // Guard double-init
         if env.storage().instance().has(&DataKey::Usdc) {
             panic!("already initialized");
@@ -105,6 +111,7 @@ impl VerivyxPayAdapter {
         slug: String,
         amount: i128,
     ) {
+        env.storage().instance().extend_ttl(LEDGER_TTL, LEDGER_TTL);
         assert!(amount > 0, "amount must be > 0");
 
         let usdc: Address = env.storage().instance().get(&DataKey::Usdc)
