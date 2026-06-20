@@ -462,3 +462,112 @@ fn test_do_check_auth_with_policy_succeeds() {
 
 // Helper for IntoVal usage
 use soroban_sdk::IntoVal;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRODUCTION ADAPTER TEST
+// Verifies: adapter atomically pulls resource price + flat fee from owner via
+// SEP-41 allowance, then triggers paywall_core distribute end-to-end.
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod adapter_tests {
+    extern crate std;
+
+    use soroban_sdk::{
+        testutils::Address as _,
+        token, Address, Env, String,
+    };
+    use paywall_core::{PaywallContract, PaywallContractClient};
+    use crate::{VerivyxPayAdapter, VerivyxPayAdapterClient};
+
+    fn usdc_balance(env: &Env, usdc_id: &Address, addr: &Address) -> i128 {
+        token::Client::new(env, usdc_id).balance(addr)
+    }
+
+    #[test]
+    fn pay_pulls_resource_and_fee_from_owner() {
+        let env = Env::default();
+        // mock_all_auths_allowing_non_root_auth is required because
+        // adapter.pay() -> paywall.distribute() -> keeper.require_auth()
+        // fires at non-root invocation depth. mock_all_auths only covers
+        // auth tied to the root invocation.
+        env.mock_all_auths_allowing_non_root_auth();
+
+        // ── token ────────────────────────────────────────────────────────────
+        let usdc_admin = Address::generate(&env);
+        let usdc_id = env.register_stellar_asset_contract_v2(usdc_admin).address();
+
+        // ── paywall_core ─────────────────────────────────────────────────────
+        // keeper = the entity that calls distribute (in prod: the relayer/MCP).
+        // Under mock_all_auths its require_auth() in distribute is satisfied.
+        let paywall_admin    = Address::generate(&env);
+        let paywall_platform = Address::generate(&env);
+        let keeper           = Address::generate(&env);
+        let paywall_id = env.register(PaywallContract, ());
+        let paywall_client = PaywallContractClient::new(&env, &paywall_id);
+        paywall_client.init(&paywall_admin, &paywall_platform, &keeper, &usdc_id);
+
+        // Register the domain: price=10_000 USDC-atomic, platform_fee=1_000.
+        // distribute splits: creator gets 9_000, platform gets 1_000.
+        let creator     = Address::generate(&env);
+        let domain      = String::from_str(&env, "example.com");
+        let price: i128 = 10_000;
+        let pfee: i128  = 1_000;
+        paywall_client.register(&creator, &domain, &price, &pfee);
+
+        // ── adapter ──────────────────────────────────────────────────────────
+        let fee_treasury    = Address::generate(&env);
+        let fee_atomic: i128 = 10_000; // 0.001 USDC
+        let adapter_id = env.register(VerivyxPayAdapter, ());
+        let adapter_client = VerivyxPayAdapterClient::new(&env, &adapter_id);
+        adapter_client.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic);
+
+        // ── owner: fund + approve adapter (spender) ──────────────────────────
+        let owner            = Address::generate(&env);
+        let owner_start: i128 = 1_000_000;
+        token::StellarAssetClient::new(&env, &usdc_id).mint(&owner, &owner_start);
+
+        // Allowance: owner approves adapter as spender for amount + fee
+        let allowance: i128 = price + fee_atomic; // 20_000
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        // ── execute ──────────────────────────────────────────────────────────
+        let slug = String::from_str(&env, "article-1");
+        adapter_client.pay(&owner, &domain, &slug, &price);
+
+        // ── assertions ───────────────────────────────────────────────────────
+        // owner debited price + fee
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &owner),
+            owner_start - price - fee_atomic,
+            "owner balance mismatch"
+        );
+        // Verivyx fee landed in fee_treasury
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &fee_treasury),
+            fee_atomic,
+            "fee_treasury balance mismatch"
+        );
+        // paywall_core distributed: after distribute, paywall holds 0
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &paywall_id),
+            0,
+            "paywall balance should be 0 after distribute"
+        );
+        // creator received (price - platform_fee) = 9_000
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &creator),
+            price - pfee,
+            "creator share mismatch"
+        );
+        // paywall_platform received platform_fee = 1_000
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &paywall_platform),
+            pfee,
+            "paywall_platform balance mismatch"
+        );
+
+        std::println!("[PASS] pay_pulls_resource_and_fee_from_owner");
+    }
+}

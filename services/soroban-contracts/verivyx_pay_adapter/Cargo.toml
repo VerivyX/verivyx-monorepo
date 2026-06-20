@@ -2,7 +2,7 @@
 name = "verivyx-pay-adapter"
 version = "0.1.0"
 edition = "2021"
-description = "Spike: verify OpenZeppelin Stellar smart-account delegation API (NOT production code)"
+description = "Verivyx Pay Adapter — destination-locked settlement entry for non-custodial MCP payments"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,3 +17,4 @@ stellar-accounts = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 stellar-accounts = { workspace = true }
+paywall-core = { path = "../paywall_core", features = ["testutils"] }
