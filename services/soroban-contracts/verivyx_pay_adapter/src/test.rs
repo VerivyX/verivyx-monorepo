@@ -636,6 +636,170 @@ fn non_session_signer_cannot_pay() {
 use soroban_sdk::IntoVal;
 
 // ══════════════════════════════════════════════════════════════════════════════
+// P1e — REVOCATION TESTS
+//
+// Prove the owner can revoke a delegated session at will, via two complementary
+// mechanisms:
+//
+//   A. Smart-account revocation: owner removes the session signer (or the whole
+//      context rule) — the session key can no longer authorize, so do_check_auth
+//      fails with UnvalidatedContext (#3002).
+//
+//   B. Funds-side revocation: owner sets adapter allowance to 0 via SEP-41
+//      approve(..., 0) — even a call that reaches adapter.pay can move no funds.
+//      The SAC transfer_from fails with exhausted-allowance (#9).
+//
+// API signatures used (stellar-accounts 0.5.0):
+//   remove_signer(e: &Env, id: u32, signer: &Signer)
+//     Removes one signer from the rule identified by `id`.
+//     Panics with #3004 (NoSignersAndPolicies) if the signer being removed is
+//     the last signer and the rule has no policies. Therefore test P1e-1 adds
+//     a second dummy signer before removing the session signer — the rule still
+//     has one signer so the removal succeeds.
+//   remove_context_rule(e: &Env, id: u32)
+//     Removes the entire rule (and all associated storage) identified by `id`.
+//     Works regardless of how many signers or policies the rule has.
+//   Both functions take the rule id (u32) returned by add_context_rule.
+// ══════════════════════════════════════════════════════════════════════════════
+
+use stellar_accounts::smart_account::{remove_context_rule, remove_signer};
+
+// TEST P1e-1 — remove_signer disables the session.
+//
+// Setup: add a CallContract(adapter) rule with TWO signers (session + dummy).
+// A second signer is necessary because remove_signer panics with #3004 when
+// asked to remove the last signer and the rule has no policies.
+// Step 1: do_check_auth with the session signer → Ok (baseline).
+// Step 2: owner calls remove_signer(rule_id, session_signer).
+// Step 3: do_check_auth with ONLY the session signer's signature → #3002
+//   (UnvalidatedContext): the session signer is no longer in the rule's signer
+//   set, so no rule can validate the presented context+signature pair.
+//
+// NOTE: calling do_check_auth twice in the same as_contract frame causes
+// Error(Auth, ExistingValue) — "frame is already authorized". The same issue
+// described in the Test 5 note applies here. We therefore split setup, baseline
+// check, revoke, and guard check across four separate as_contract frames. State
+// written by one frame (e.g. add_context_rule storage) persists in the shared Env.
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn revoke_remove_signer_disables_session() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ()); // stands in for the adapter
+    let session_addr = Address::generate(&e);
+    let dummy_addr   = Address::generate(&e); // second signer so remove_signer is valid
+
+    // Share state across frames via outer-scope variables.
+    let session_signer = Signer::Delegated(session_addr.clone());
+    let dummy_signer   = Signer::Delegated(dummy_addr.clone());
+    let mut signers = Vec::new(&e);
+    signers.push_back(session_signer.clone());
+    signers.push_back(dummy_signer.clone());
+    let ctx = pay_context(&e, &adapter_addr);
+    let auth_contexts = Vec::from_array(&e, [ctx.clone()]);
+    let payload = e.crypto().sha256(&Bytes::from_array(&e, &[9u8; 32]));
+
+    // Frame 1: add the context rule; capture the rule id.
+    let rule_id = e.as_contract(&account_addr, || {
+        let rule = add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            None,
+            &signers,
+            &Map::new(&e),
+        );
+        rule.id
+    });
+
+    // Frame 2: baseline — session signer can authorize before revoke.
+    let sigs_before = dummy_signatures(&e, &signers);
+    let ok = e.as_contract(&account_addr, || {
+        do_check_auth(&e, &payload, &sigs_before, &auth_contexts)
+    });
+    assert!(ok.is_ok(), "Baseline: session should be authorized before revoke, got {:?}", ok);
+
+    // Frame 3: owner revokes the session signer.
+    // Dummy signer remains → rule stays valid (remove_signer does not error).
+    // After this call the rule's signer set is {dummy_signer} only.
+    e.as_contract(&account_addr, || {
+        remove_signer(&e, rule_id, &session_signer);
+    });
+
+    // Frame 4: after revocation, do_check_auth presenting ONLY the session
+    // signer's signature must fail with UnvalidatedContext (#3002).
+    // The session signer is no longer in the rule, so no rule matches.
+    let mut session_only = Vec::new(&e);
+    session_only.push_back(session_signer.clone());
+    let sigs_after = dummy_signatures(&e, &session_only);
+    e.as_contract(&account_addr, || {
+        let _ = do_check_auth(&e, &payload, &sigs_after, &auth_contexts);
+        // must panic with Error(Contract, #3002)
+    });
+}
+
+// TEST P1e-2 — remove_context_rule disables the session.
+//
+// Setup: add a CallContract(adapter) rule with ONE signer (the session key).
+// remove_context_rule(rule_id) removes the entire rule (all storage cleared).
+// do_check_auth then finds no matching rule → UnvalidatedContext (#3002).
+// This is the simpler revocation path when the session is the only signer.
+//
+// NOTE: same multi-frame split as P1e-1 to avoid Error(Auth, ExistingValue).
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn revoke_remove_context_rule_disables_session() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ());
+    let session_addr = Address::generate(&e);
+
+    let session_signer = Signer::Delegated(session_addr.clone());
+    let mut signers = Vec::new(&e);
+    signers.push_back(session_signer.clone());
+    let ctx = pay_context(&e, &adapter_addr);
+    let auth_contexts = Vec::from_array(&e, [ctx.clone()]);
+    let payload = e.crypto().sha256(&Bytes::from_array(&e, &[11u8; 32]));
+    let sigs = dummy_signatures(&e, &signers);
+
+    // Frame 1: add rule with a single signer; capture rule id.
+    let rule_id = e.as_contract(&account_addr, || {
+        let rule = add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            None,
+            &signers,
+            &Map::new(&e),
+        );
+        rule.id
+    });
+
+    // Frame 2: baseline — session can authorize before rule removal.
+    let ok = e.as_contract(&account_addr, || {
+        do_check_auth(&e, &payload, &sigs, &auth_contexts)
+    });
+    assert!(ok.is_ok(), "Baseline: session authorized before rule removal, got {:?}", ok);
+
+    // Frame 3: owner removes the entire context rule — all storage for this
+    // rule is cleaned up. Any subsequent do_check_auth for this context has
+    // no matching rule.
+    e.as_contract(&account_addr, || {
+        remove_context_rule(&e, rule_id);
+    });
+
+    // Frame 4: after rule removal — no rule covers the adapter context → #3002.
+    e.as_contract(&account_addr, || {
+        let _ = do_check_auth(&e, &payload, &sigs, &auth_contexts);
+        // must panic with Error(Contract, #3002)
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION ADAPTER TEST
 // Verifies: adapter atomically pulls resource price + flat fee from owner via
 // SEP-41 allowance, then triggers paywall_core distribute end-to-end.
@@ -880,5 +1044,61 @@ mod adapter_tests {
         let slug = String::from_str(&env, "article-1");
         // Step-1 (10_000) ok, step-2 fee (10_000) > remaining 5_000 → panic.
         adapter_client.pay(&owner, &domain, &slug, &price);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // P1e LAYER 2 — funds-side revocation: allowance 0 blocks pay.
+    //
+    // The session budget is the SEP-41 allowance the owner grants to the adapter.
+    // Revoking funds access = owner calls approve(owner, adapter, 0, expiry).
+    // Any subsequent adapter.pay() hits transfer_from with a zero allowance and
+    // panics with SAC error #9 (exhausted allowance). This proves that the
+    // funds-side revoke is instant and cannot be bypassed.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // TEST P1e-3 — revoke_allowance_zero_blocks_pay.
+    //
+    // Sequence:
+    //   1. Owner approves adapter with a generous allowance (20_000).
+    //   2. First pay(10_000) succeeds, proving the setup is correct.
+    //   3. Owner re-approves adapter to allowance = 0 (explicit revocation).
+    //   4. Second pay(10_000) panics with SAC exhausted-allowance error #9.
+    //
+    // #9 is the SAC/SEP-41 token error for transfer_from exceeding the
+    // approved allowance, proving the funds-side revoke (not a setup error).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn revoke_allowance_zero_blocks_pay() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, fee_atomic) = setup(&env);
+        let adapter_id = adapter_client.address.clone();
+
+        // Step 1: owner grants a generous allowance — enough for two pays.
+        let allowance: i128 = (price + fee_atomic) * 2; // 40_000
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+
+        // Step 2: first pay succeeds, confirming the baseline works.
+        adapter_client.pay(&owner, &domain, &slug, &price);
+
+        // Step 3: owner explicitly revokes by setting allowance to 0.
+        // This models the funds-side revoke: the session can no longer move
+        // any funds through the adapter, even though the smart-account rule
+        // may still list the session signer.
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &0, &(env.ledger().sequence() + 1000));
+
+        // Confirm allowance is now 0.
+        let remaining = token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id);
+        assert_eq!(remaining, 0, "allowance must be 0 after revoke");
+
+        // Step 4: second pay panics with SAC exhausted-allowance error #9.
+        // transfer_from(owner, adapter, 10_000) fails because allowance = 0.
+        adapter_client.pay(&owner, &domain, &slug, &price);
+        // must panic with Error(Contract, #9)
     }
 }
