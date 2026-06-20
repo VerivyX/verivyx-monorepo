@@ -56,9 +56,9 @@ Contract IDs and transaction hashes link to [stellar.expert](https://stellar.exp
 
 Registry sederhana untuk discovery domain. Subset dari `paywall_core`.
 
-### `smart_account`
+### `verivyx_pay_adapter`
 
-Account abstraction untuk agent wallet (future use).
+Destination-locked settlement adapter untuk non-custodial MCP payments. Tarik resource price + flat fee atomik dari owner via SEP-41 allowance, lalu trigger `paywall_core.distribute`.
 
 ---
 

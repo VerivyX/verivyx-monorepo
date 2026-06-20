@@ -125,8 +125,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
         let id = env.register(ServiceRegistry, ());
-        let client: ServiceRegistryClient<'static> =
-            unsafe { core::mem::transmute(ServiceRegistryClient::new(&env, &id)) };
+        let client: ServiceRegistryClient<'static> = ServiceRegistryClient::new(&env, &id);
         let admin = Address::generate(&env);
         client.init(&admin);
         (env, client, admin)
