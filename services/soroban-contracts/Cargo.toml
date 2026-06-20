@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "service_registry",
-    "paywall_core"
+    "paywall_core",
+    "verivyx_pay_adapter"
 ]
 resolver = "2"
 
