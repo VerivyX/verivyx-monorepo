@@ -530,7 +530,7 @@ app.post('/settle', requireInternalToken, async (req, res) => {
           throw new SettleValidationError('Soroban TX must have exactly one invokeHostFunction → invokeContract operation');
         }
 
-        const settlePath = classifySettlePath(invokedOp, ALLOWED_PAY_ADAPTERS, ALLOWED_PAYWALL_CONTRACTS);
+        const settlePath = classifySettlePath(invokedOp, ALLOWED_PAY_ADAPTERS);
 
         if (settlePath === SettlePath.ADAPTER) {
           // --- ADAPTER PATH (verivyx_pay_adapter.pay) ---

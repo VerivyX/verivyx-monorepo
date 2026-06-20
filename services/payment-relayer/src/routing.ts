@@ -36,11 +36,12 @@ export interface InvokedOp {
  *
  * Note: the assertAdapterAllowed / assertPaywallContractAllowed calls happen
  * in index.ts AFTER routing, not here. classifySettlePath only routes.
+ * The paywall allowlist is NOT a routing input — legacy-path enforcement
+ * is handled by assertPaywallContractAllowed in index.ts.
  */
 export function classifySettlePath(
   op: InvokedOp,
   allowedAdapters: Set<string>,
-  _allowedPaywalls: Set<string>,
 ): SettlePath {
   if (
     allowedAdapters.size > 0 &&

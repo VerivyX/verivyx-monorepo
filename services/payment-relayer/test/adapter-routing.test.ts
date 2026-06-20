@@ -65,13 +65,11 @@ const ADAPTER_ID = 'CDZ5KDP7UCRT4M5KKWSPZ6745AYEXJCFO5H6PJOV2B5ZCKXVHU726XEO';
 const PAYWALL_ID = 'CPAYWALL111111111111111111111111111111111111111111111111';
 
 const allowedAdapters = new Set([ADAPTER_ID]);
-const allowedPaywalls = new Set([PAYWALL_ID]);
 
 test('classifySettlePath: adapter contract + pay function → ADAPTER path', () => {
   const path = classifySettlePath(
     { contractId: ADAPTER_ID, functionName: 'pay' },
     allowedAdapters,
-    allowedPaywalls,
   );
   assert.equal(path, SettlePath.ADAPTER);
 });
@@ -82,7 +80,6 @@ test('classifySettlePath: adapter contract + wrong function → LEGACY path (not
   const path = classifySettlePath(
     { contractId: ADAPTER_ID, functionName: 'init' },
     allowedAdapters,
-    allowedPaywalls,
   );
   assert.equal(path, SettlePath.LEGACY);
 });
@@ -91,7 +88,6 @@ test('classifySettlePath: paywall contract + transfer function → LEGACY path',
   const path = classifySettlePath(
     { contractId: PAYWALL_ID, functionName: 'transfer' },
     allowedAdapters,
-    allowedPaywalls,
   );
   assert.equal(path, SettlePath.LEGACY);
 });
@@ -102,16 +98,14 @@ test('classifySettlePath: adapter contract not in allowlist → LEGACY path (fai
   const path = classifySettlePath(
     { contractId: 'CUNKNOWN', functionName: 'pay' },
     allowedAdapters,
-    allowedPaywalls,
   );
   assert.equal(path, SettlePath.LEGACY);
 });
 
-test('classifySettlePath: adapter path is correctly identified even with non-empty paywall allowlist', () => {
+test('classifySettlePath: adapter path is correctly identified regardless of paywall allowlist', () => {
   const path = classifySettlePath(
     { contractId: ADAPTER_ID, functionName: 'pay' },
     allowedAdapters,
-    new Set([PAYWALL_ID, ADAPTER_ID]), // adapter also in paywall set (should not matter)
   );
   assert.equal(path, SettlePath.ADAPTER);
 });
@@ -128,11 +122,10 @@ interface FakeOp {
 async function simulateSettle(
   op: FakeOp,
   adapters: Set<string>,
-  paywalls: Set<string>,
   distribute: () => Promise<void>,
   submitSponsor: () => Promise<string>,
 ): Promise<{ txHash: string; distributeCalled: boolean }> {
-  const path = classifySettlePath(op, adapters, paywalls);
+  const path = classifySettlePath(op, adapters);
 
   if (path === SettlePath.ADAPTER) {
     // Adapter path: allowlist assertion happens before submit
@@ -153,7 +146,6 @@ test('routing: adapter path does NOT call distribute', async () => {
   const result = await simulateSettle(
     { contractId: ADAPTER_ID, functionName: 'pay' },
     allowedAdapters,
-    allowedPaywalls,
     async () => { distributeCalled = true; },
     async () => 'tx-hash-adapter',
   );
@@ -167,7 +159,6 @@ test('routing: legacy path DOES call distribute', async () => {
   const result = await simulateSettle(
     { contractId: PAYWALL_ID, functionName: 'transfer' },
     allowedAdapters,
-    allowedPaywalls,
     async () => { distributeCalled = true; },
     async () => 'tx-hash-legacy',
   );
@@ -184,7 +175,6 @@ test('classifySettlePath: empty adapter allowlist → LEGACY (adapter.pay never 
   const path = classifySettlePath(
     { contractId: ADAPTER_ID, functionName: 'pay' },
     new Set(), // empty adapter allowlist
-    allowedPaywalls,
   );
   assert.equal(path, SettlePath.LEGACY, 'empty adapter allowlist must route to LEGACY, never ADAPTER');
 });
