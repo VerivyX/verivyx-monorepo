@@ -250,6 +250,12 @@ export type AppConfig = {
   readonly allowedHosts: readonly string[];
   /** Allowed Origin header values for /mcp (when an Origin is present). "*" disables. */
   readonly allowedOrigins: readonly string[];
+  /**
+   * verivyx_pay_adapter contract ID (C…).
+   * Optional: undefined when VERIVYX_PAY_ADAPTER_ID is not set (feature disabled).
+   * Used by session-key payment builder (wallet/sessionPayment.ts).
+   */
+  readonly payAdapterId: string | undefined;
 };
 
 let cached: AppConfig | undefined;
@@ -325,6 +331,7 @@ export function getConfig(): AppConfig {
       .map(o => o.trim().toLowerCase())
       .filter(Boolean),
     oauth,
+    payAdapterId: optionalEnv("VERIVYX_PAY_ADAPTER_ID"),
   };
 
   return cached;
