@@ -20,21 +20,14 @@
 //! price + platform fee are read live from `paywall_core` (also not caller args),
 //! so a caller cannot under- or over-pay the creator.
 //!
-//! This crate also re-exports the OpenZeppelin stellar-accounts types used by the
-//! P1b spike tests (those tests remain in `test.rs` and continue to pass).
+//! The P1b OZ spike tests in `test.rs` import stellar-accounts types directly
+//! from `stellar_accounts::` and do not rely on any re-exports here.
 #![no_std]
 
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype,
     token, vec, Address, Env, IntoVal, String, Symbol,
 };
-
-// ── Re-exports for the P1b OZ spike (test.rs uses them directly) ──────────────
-pub use stellar_accounts::smart_account::{
-    add_context_rule, add_policy, add_signer, do_check_auth, ContextRule, ContextRuleType,
-    Signatures, Signer,
-};
-pub use stellar_accounts::policies::spending_limit::SpendingLimitAccountParams;
 
 // ~120 days at 5s/ledger on Stellar Testnet — mirrors paywall_core's LEDGER_TTL.
 // Extended at the start of every public method so the instance entry is never
