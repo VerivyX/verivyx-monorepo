@@ -1065,6 +1065,54 @@ mod adapter_tests {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // TEST 7 — creator_info_mirror_matches_paywall_creator_data
+    //
+    // Coupling guard: proves that `CreatorInfo` (adapter-local mirror) and
+    // `paywall_core::CreatorData` (the authoritative type) share the same
+    // #[contracttype] XDR layout (field names, order, and types).
+    //
+    // Approach: construct a real `paywall_core::CreatorData` with known distinct
+    // values, serialize it to a Soroban `Val` via `into_val(&env)`, then decode
+    // that same `Val` back into `CreatorInfo` via `try_from_val`. Assert every
+    // field round-trips to the exact value that went in.
+    //
+    // This test FAILS to compile if `paywall_core::CreatorData` is removed from
+    // the adapter's dev-dependencies, and FAILS at runtime if either struct's
+    // field set, order, or types ever diverge — which is exactly the guard we want.
+    // ══════════════════════════════════════════════════════════════════════════
+    #[test]
+    fn creator_info_mirror_matches_paywall_creator_data() {
+        use soroban_sdk::{IntoVal, TryFromVal, Val};
+        use paywall_core::CreatorData;
+        use crate::CreatorInfo;
+
+        let env = Env::default();
+
+        let addr = Address::generate(&env);
+        let original = CreatorData {
+            address: addr.clone(),
+            price: 7,
+            platform_fee: 3,
+            enabled: true,
+        };
+
+        // Serialize the real CreatorData to a Val.
+        let val: Val = original.into_val(&env);
+
+        // Decode the same Val back into the adapter's CreatorInfo mirror.
+        let decoded = CreatorInfo::try_from_val(&env, &val)
+            .expect("CreatorInfo mirror should decode CreatorData Val");
+
+        // Assert every field round-trips correctly.
+        assert_eq!(decoded.address, addr,       "address field mismatch");
+        assert_eq!(decoded.price, 7,            "price field mismatch");
+        assert_eq!(decoded.platform_fee, 3,     "platform_fee field mismatch");
+        assert_eq!(decoded.enabled, true,       "enabled field mismatch");
+
+        std::println!("[PASS] creator_info_mirror_matches_paywall_creator_data: all fields round-trip");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // TEST 6 — disabled_domain_panics
     //
     // Register then disable the domain via paywall_core::set_enabled (public,

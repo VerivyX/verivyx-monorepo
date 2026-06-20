@@ -60,6 +60,10 @@ pub enum DataKey {
 // type — that would pull the whole contract into the adapter's WASM. A
 // `#[contracttype]` struct's XDR layout is determined solely by its field
 // names/order/types, so this decodes the same wire value.
+//
+// IMPORTANT: this struct MUST remain field-identical to `paywall_core::CreatorData`
+// (same field names, order, and types). The test `creator_info_mirror_matches_paywall_creator_data`
+// enforces this at test time — it will fail to compile or fail at runtime if the two diverge.
 #[contracttype]
 #[derive(Clone)]
 pub struct CreatorInfo {
@@ -185,7 +189,7 @@ impl VerivyxPayAdapter {
         assert!(cd.enabled, "paywall disabled");
 
         // price - platform_fee > 0 by paywall_core's register invariant
-        // (0 < platform_fee < price). No defensive branch needed.
+        // (0 <= platform_fee < price). No defensive branch needed.
         let creator_share = cd.price - cd.platform_fee;
         debug_assert!(creator_share > 0);
 
