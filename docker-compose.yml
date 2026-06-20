@@ -338,8 +338,17 @@ services:
       - HYDRA_ISSUER=${HYDRA_ISSUER:-}
       - HYDRA_JWKS_URL=${HYDRA_JWKS_URL:-}
       - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
+      # Wallet binding store — shared paywall_db (schema owner: auth-service).
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-paywall_db}?schema=public
+      # AES-256-GCM key for encrypting session signer secrets at rest.
+      # If unset the wallet-binding feature is disabled (functions throw a clear error).
+      # Generate: openssl rand -hex 32
+      - MCP_WALLET_ENC_KEY=${MCP_WALLET_ENC_KEY:-}
     ports:
       - "127.0.0.1:8088:8088"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - paywall_net
     restart: unless-stopped
