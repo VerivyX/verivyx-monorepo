@@ -114,6 +114,17 @@ impl VerivyxPayAdapter {
         env.storage().instance().extend_ttl(LEDGER_TTL, LEDGER_TTL);
         assert!(amount > 0, "amount must be > 0");
 
+        // ── Delegation gate ──────────────────────────────────────────────────
+        // `owner` is the user's OZ smart-account address. Requiring its auth makes
+        // the host invoke that smart account's `__check_auth` → `do_check_auth`,
+        // which enforces the session signer, the `CallContract(adapter)`
+        // destination-lock rule, and the rule's `valid_until` expiry. Without this
+        // call there is NO delegation gate — anyone who knew the adapter address
+        // and an existing allowance could drain `pay`. This is the single point
+        // that binds a settlement to a budget-capped, expiring, destination-locked
+        // session signer.
+        owner.require_auth();
+
         let usdc: Address = env.storage().instance().get(&DataKey::Usdc)
             .expect("not initialized");
         let paywall: Address = env.storage().instance().get(&DataKey::Paywall)
