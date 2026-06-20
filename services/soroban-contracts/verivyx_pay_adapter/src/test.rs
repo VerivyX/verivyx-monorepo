@@ -460,6 +460,178 @@ fn test_do_check_auth_with_policy_succeeds() {
     std::println!("[PASS] do_check_auth with policy: session signer + policy succeeds");
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// P1d LAYER 1 — Delegation gate, proven directly via do_check_auth.
+//
+// These model the OZ smart account's __check_auth path that adapter.pay() now
+// triggers via owner.require_auth(). The rule is destination-locked to the
+// adapter address, the only authorized signer is the delegated session key, and
+// the rule carries a valid_until expiry. Each test exercises one guard.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// TEST P1d-1 — session signer authorized for the adapter (happy path).
+// Rule locked to adapter_addr, session signer present, ledger <= valid_until.
+#[test]
+fn session_signer_authorized_for_adapter() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ()); // stands in for the adapter
+    let session_addr = Address::generate(&e);
+
+    e.ledger().set_sequence_number(100);
+
+    e.as_contract(&account_addr, || {
+        let session_signer = Signer::Delegated(session_addr.clone());
+        let mut signers = Vec::new(&e);
+        signers.push_back(session_signer.clone());
+
+        // Rule: destination-locked to the adapter, expires at ledger 200 (future).
+        add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            Some(200),
+            &signers,
+            &Map::new(&e),
+        );
+
+        // Auth context for a call to the adapter, while ledger (100) <= valid_until.
+        let ctx = pay_context(&e, &adapter_addr);
+        let auth_contexts = Vec::from_array(&e, [ctx]);
+        let sigs = dummy_signatures(&e, &signers);
+        let payload = e.crypto().sha256(&Bytes::from_array(&e, &[7u8; 32]));
+
+        let result = do_check_auth(&e, &payload, &sigs, &auth_contexts);
+        assert!(result.is_ok(), "Expected Ok for authorized session signer, got {:?}", result);
+    });
+
+    std::println!("[PASS] P1d: session signer authorized for adapter within validity window");
+}
+
+// TEST P1d-2 — wrong destination blocked.
+// Rule locked to adapter_addr, but auth context targets a DIFFERENT contract.
+// Must reject with UnvalidatedContext (#3002) — the destination lock.
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn wrong_destination_blocked() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ());
+    let other_addr = Address::generate(&e); // NOT the adapter
+    let session_addr = Address::generate(&e);
+
+    e.as_contract(&account_addr, || {
+        let session_signer = Signer::Delegated(session_addr.clone());
+        let mut signers = Vec::new(&e);
+        signers.push_back(session_signer.clone());
+
+        add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            None,
+            &signers,
+            &Map::new(&e),
+        );
+
+        // Context targets a contract the rule does NOT authorize → #3002.
+        let ctx = pay_context(&e, &other_addr);
+        let auth_contexts = Vec::from_array(&e, [ctx]);
+        let sigs = dummy_signatures(&e, &signers);
+        let payload = e.crypto().sha256(&Bytes::from_array(&e, &[7u8; 32]));
+
+        let _ = do_check_auth(&e, &payload, &sigs, &auth_contexts);
+    });
+}
+
+// TEST P1d-3 — expired delegation fails.
+// Same rule, but ledger is advanced PAST valid_until → no valid rule → #3002.
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn expired_delegation_fails() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ());
+    let session_addr = Address::generate(&e);
+
+    e.ledger().set_sequence_number(100);
+
+    e.as_contract(&account_addr, || {
+        let session_signer = Signer::Delegated(session_addr.clone());
+        let mut signers = Vec::new(&e);
+        signers.push_back(session_signer.clone());
+
+        // valid_until = 200 (future at creation).
+        add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            Some(200),
+            &signers,
+            &Map::new(&e),
+        );
+
+        // Advance ledger PAST valid_until — the rule is no longer valid.
+        e.ledger().set_sequence_number(201);
+
+        let ctx = pay_context(&e, &adapter_addr);
+        let auth_contexts = Vec::from_array(&e, [ctx]);
+        let sigs = dummy_signatures(&e, &signers);
+        let payload = e.crypto().sha256(&Bytes::from_array(&e, &[7u8; 32]));
+
+        let _ = do_check_auth(&e, &payload, &sigs, &auth_contexts);
+    });
+}
+
+// TEST P1d-4 — non-session signer cannot pay.
+// Signatures are provided for a signer that is NOT in the rule's signer set.
+// The rule's authorized signer never signs → context cannot be validated → #3002.
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn non_session_signer_cannot_pay() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let account_addr = e.register(MockAccount, ());
+    let adapter_addr = e.register(MockTarget, ());
+    let session_addr = Address::generate(&e); // the authorized session key
+    let intruder_addr = Address::generate(&e); // NOT in the rule
+
+    e.as_contract(&account_addr, || {
+        // Rule authorizes ONLY the session signer.
+        let session_signer = Signer::Delegated(session_addr.clone());
+        let mut signers = Vec::new(&e);
+        signers.push_back(session_signer.clone());
+
+        add_context_rule(
+            &e,
+            &ContextRuleType::CallContract(adapter_addr.clone()),
+            &String::from_str(&e, "session-rule"),
+            None,
+            &signers,
+            &Map::new(&e),
+        );
+
+        // Provide signatures ONLY for an intruder signer not present in the rule.
+        let intruder_signer = Signer::Delegated(intruder_addr.clone());
+        let mut intruder_set = Vec::new(&e);
+        intruder_set.push_back(intruder_signer);
+
+        let ctx = pay_context(&e, &adapter_addr);
+        let auth_contexts = Vec::from_array(&e, [ctx]);
+        let sigs = dummy_signatures(&e, &intruder_set);
+        let payload = e.crypto().sha256(&Bytes::from_array(&e, &[7u8; 32]));
+
+        let _ = do_check_auth(&e, &payload, &sigs, &auth_contexts);
+    });
+}
+
 // Helper for IntoVal usage
 use soroban_sdk::IntoVal;
 
@@ -569,5 +741,144 @@ mod adapter_tests {
         );
 
         std::println!("[PASS] pay_pulls_resource_and_fee_from_owner");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // P1d LAYER 2 — budget == SEP-41 allowance, end-to-end via the real adapter.
+    //
+    // The session budget is the USDC allowance the owner approves to the adapter.
+    // Each pay() debits amount + fee from that allowance; once exhausted,
+    // transfer_from fails. These prove (a) a pay within budget leaves allowance 0,
+    // and (b) spend beyond the allowance cap is rejected — and because the fee
+    // transfer is part of what consumes the cap, the fee can never be skipped.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Shared fixture: register token + paywall + adapter + funded owner.
+    // Returns (env, usdc_id, adapter_client, owner, fee_treasury, domain, price, fee, creator, platform).
+    fn setup(env: &Env) -> (Address, VerivyxPayAdapterClient<'static>, Address, Address, String, i128, i128) {
+        let usdc_admin = Address::generate(env);
+        let usdc_id = env.register_stellar_asset_contract_v2(usdc_admin).address();
+
+        let paywall_admin    = Address::generate(env);
+        let paywall_platform = Address::generate(env);
+        let keeper           = Address::generate(env);
+        let paywall_id = env.register(PaywallContract, ());
+        let paywall_client = PaywallContractClient::new(env, &paywall_id);
+        paywall_client.init(&paywall_admin, &paywall_platform, &keeper, &usdc_id);
+
+        let creator     = Address::generate(env);
+        let domain      = String::from_str(env, "example.com");
+        let price: i128 = 10_000;
+        let pfee: i128  = 1_000;
+        paywall_client.register(&creator, &domain, &price, &pfee);
+
+        let fee_treasury     = Address::generate(env);
+        let fee_atomic: i128 = 10_000;
+        let adapter_id = env.register(VerivyxPayAdapter, ());
+        let adapter_client = VerivyxPayAdapterClient::new(env, &adapter_id);
+        adapter_client.init(&usdc_id, &paywall_id, &fee_treasury, &fee_atomic);
+
+        let owner             = Address::generate(env);
+        let owner_start: i128 = 1_000_000;
+        token::StellarAssetClient::new(env, &usdc_id).mint(&owner, &owner_start);
+
+        (usdc_id, adapter_client, owner, fee_treasury, domain, price, fee_atomic)
+    }
+
+    // TEST P1d-5 — pay within budget; allowance is exactly one amount+fee and
+    // ends at 0.
+    #[test]
+    fn session_pays_within_budget() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (usdc_id, adapter_client, owner, fee_treasury, domain, price, fee_atomic) = setup(&env);
+        let adapter_id = adapter_client.address.clone();
+        let owner_start: i128 = usdc_balance(&env, &usdc_id, &owner);
+
+        // Budget = exactly one amount(10_000) + fee(10_000) = 20_000.
+        let allowance: i128 = price + fee_atomic; // 20_000
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+        adapter_client.pay(&owner, &domain, &slug, &price);
+
+        // Owner debited exactly amount + fee.
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &owner),
+            owner_start - price - fee_atomic,
+            "owner debited amount + fee"
+        );
+        // Fee landed in treasury.
+        assert_eq!(
+            usdc_balance(&env, &usdc_id, &fee_treasury),
+            fee_atomic,
+            "fee_treasury credited the flat fee"
+        );
+        // Budget fully consumed: remaining owner->adapter allowance is 0.
+        let remaining = token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id);
+        assert_eq!(remaining, 0, "allowance (budget) fully consumed");
+
+        std::println!("[PASS] P1d: session pays within budget; allowance exhausted to 0");
+    }
+
+    // TEST P1d-6 — over budget fails. Allowance = exactly one amount+fee; first
+    // pay succeeds and exhausts it, the SECOND pay must panic because the
+    // allowance (the budget cap) is exhausted — proving the cap holds and that
+    // the fee transfer (part of what consumes the cap) can never be skipped.
+    #[test]
+    // #9 is the SAC/SEP-41 token error for an exhausted allowance, raised by
+    // transfer_from inside pay() — proving the budget cap (not a setup error).
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn over_budget_fails() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, fee_atomic) = setup(&env);
+        let adapter_id = adapter_client.address.clone();
+
+        // Budget caps total spend at exactly one amount+fee.
+        let allowance: i128 = price + fee_atomic; // 20_000
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+
+        // First pay consumes the entire budget — succeeds.
+        adapter_client.pay(&owner, &domain, &slug, &price);
+        assert_eq!(
+            token::Client::new(&env, &usdc_id).allowance(&owner, &adapter_id),
+            0,
+            "budget exhausted after first pay"
+        );
+
+        // Second pay must panic: transfer_from exceeds the (now 0) allowance.
+        adapter_client.pay(&owner, &domain, &slug, &price);
+    }
+
+    // TEST P1d-6b — fee cannot be skipped: allowance covers the resource amount
+    // but NOT the fee (15_000 < 20_000). Step-1 transfer_from consumes 10_000,
+    // leaving 5_000; step-2 fee transfer_from of 10_000 exceeds the remaining
+    // 5_000 and panics. This isolates the fee as the line that blows the cap.
+    #[test]
+    // #9 = SAC/SEP-41 exhausted-allowance error, raised by the step-2 fee
+    // transfer_from — proving the fee line is what blows the cap.
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn fee_cannot_be_skipped_over_budget() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (usdc_id, adapter_client, owner, _fee_treasury, domain, price, _fee_atomic) = setup(&env);
+        let adapter_id = adapter_client.address.clone();
+
+        // Allowance below amount + fee: enough for the resource, not the fee.
+        let allowance: i128 = 15_000; // < price(10_000) + fee(10_000)
+        token::Client::new(&env, &usdc_id)
+            .approve(&owner, &adapter_id, &allowance, &(env.ledger().sequence() + 1000));
+
+        let slug = String::from_str(&env, "article-1");
+        // Step-1 (10_000) ok, step-2 fee (10_000) > remaining 5_000 → panic.
+        adapter_client.pay(&owner, &domain, &slug, &price);
     }
 }
