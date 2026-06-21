@@ -464,16 +464,14 @@ export interface DelegateOpts {
 }
 
 export interface DelegateResult {
-  /** TX hash of add_context_rule. */
+  /** TX hash of the single atomic add_context_rule (rule + signer + spending-limit policy). */
   ruleTxHash: string;
-  /** TX hash of add_policy. */
-  policyTxHash: string;
   /**
-   * The rule id returned by add_context_rule (query via get_context_rules).
-   * Pass to revoke(). delegate() throws before returning if this could not be
-   * resolved, so on a successful return this is always a valid rule id.
+   * The rule id of the verivyx-session rule (queried via get_context_rules after
+   * creation), needed later for revoke(). Best-effort: null if the post-create
+   * query failed (the delegation itself still succeeded; revoke can re-query).
    */
-  ruleId: number;
+  ruleId: number | null;
 }
 
 /**
@@ -518,7 +516,17 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
 
   const server = getRpcServer();
 
-  // ── Step 1: add_context_rule ─────────────────────────────────────────────
+  // ── Single ATOMIC delegation tx: add_context_rule with the spending-limit policy
+  //    installed in the same call (OZ add_context_rule's 5th arg is a
+  //    Map<policyAddress, installParam>). This replaces the old 2-tx flow
+  //    (add_context_rule + separate add_policy) — one owner signature, one fee.
+
+  const policiesMap = xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: new Address(SPENDING_LIMIT_POLICY_ADDRESS).toScVal(),
+      val: spendingLimitParams(budgetAtomic, periodLedgers), // SpendingLimitAccountParams
+    }),
+  ]);
 
   const opRule = Operation.invokeContractFunction({
     contract: smartAccount,
@@ -528,7 +536,7 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
       nativeToScVal('verivyx-session', { type: 'string' }),
       optU32(validUntilLedger),
       vecSigners([signerDelegated(sessionPubkey)]),
-      xdr.ScVal.scvMap([]), // empty policies — added separately via add_policy
+      policiesMap, // spending-limit policy installed atomically with the rule
     ],
   });
 
@@ -542,7 +550,8 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
     label: 'add_context_rule',
   });
 
-  // Query get_context_rules to extract the ruleId for the verivyx-session rule.
+  // Query get_context_rules to extract the ruleId for the verivyx-session rule
+  // (needed later for revoke). Best-effort — non-fatal if it fails.
   let ruleId: number | null = null;
   try {
     const opGet = Operation.invokeContractFunction({
@@ -573,35 +582,9 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
     // Non-fatal: ruleId will be null. Caller can re-query or pass a known ruleId to revoke().
   }
 
-  // ── Step 2: add_policy ────────────────────────────────────────────────────
-
-  if (ruleId == null) {
-    throw new Error(
-      'delegate: could not resolve the new context-rule id; aborting before add_policy to avoid attaching the budget to the wrong rule',
-    );
-  }
-
-  const opPolicy = Operation.invokeContractFunction({
-    contract: smartAccount,
-    function: 'add_policy',
-    args: [
-      nativeToScVal(ruleId >>> 0, { type: 'u32' }), // rule_id u32
-      new Address(SPENDING_LIMIT_POLICY_ADDRESS).toScVal(), // policy contract
-      spendingLimitParams(budgetAtomic, periodLedgers), // SpendingLimitAccountParams
-    ],
-  });
-
-  const policyTxHash = await submitWithOwnerAuth({
-    server,
-    networkPassphrase: STELLAR_NETWORK,
-    sourceAddress: ownerAddress,
-    smartAccount,
-    ownerAddress,
-    op: opPolicy,
-    label: 'add_policy',
-  });
-
-  return { ruleTxHash, policyTxHash, ruleId };
+  // The spending-limit policy was installed atomically inside add_context_rule
+  // above — no separate add_policy tx (saves the user an extra signature + fee).
+  return { ruleTxHash, ruleId };
 }
 
 // ── revoke ────────────────────────────────────────────────────────────────────

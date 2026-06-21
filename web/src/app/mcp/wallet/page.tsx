@@ -286,7 +286,7 @@ export default function WalletPage() {
       await walletApi.confirmBinding({
         smartAccount: smartAccountAddr,
         budgetAtomic: budgetAtomic.toString(),
-        expiryLedger: validUntilLedger,
+        expiryLedger: String(validUntilLedger),
       });
 
       const approxExpiryDate = ledgerToApproxDate(validUntilLedger, currentLedger);

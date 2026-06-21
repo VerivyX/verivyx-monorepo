@@ -342,8 +342,9 @@ export type WalletBindingRequest = {
   smartAccount: string;
   /** Budget in USDC atomic units (i128 as string — avoids JSON number precision loss). */
   budgetAtomic: string;
-  /** Expiry ledger number. */
-  expiryLedger: number;
+  /** Expiry ledger sequence as an integer STRING (the MCP /wallet/binding endpoint
+   * validates a positive-integer string, so we never send a JSON number here). */
+  expiryLedger: string;
 };
 
 export type WalletBindingResponse = {
