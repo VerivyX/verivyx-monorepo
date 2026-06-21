@@ -21,6 +21,7 @@
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { Pool } from "pg";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -142,10 +143,9 @@ let _singletonQuerier: Querier | undefined;
 
 function getSingletonQuerier(): Querier {
   if (_singletonQuerier) return _singletonQuerier;
-  // Lazy dynamic import of pg so tests (which inject a fake) never touch pg.
-  // We use a sync require-style approach: pg Pool is created once and cached.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Pool } = require("pg") as typeof import("pg");
+  // pg is imported statically (ESM) — `require` is not defined under tsx/ESM at
+  // runtime. The Pool is still constructed lazily (only when a real DB call is
+  // made); unit tests inject a fake querier and never reach this path.
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
     throw new Error("Missing required environment variable: DATABASE_URL");
