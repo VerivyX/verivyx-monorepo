@@ -178,24 +178,24 @@ export async function getBinding(
 
   const q = querier ?? getSingletonQuerier();
   const result = await q.query(
-    `SELECT oauth_sub, smart_account, session_signer_pubkey, session_signer_secret_enc, budget_atomic, expiry_ledger
+    `SELECT "oauthSub", "smartAccount", "sessionSignerPubkey", "sessionSignerSecretEnc", "budgetAtomic", "expiryLedger"
      FROM "McpWallet"
-     WHERE oauth_sub = $1`,
+     WHERE "oauthSub" = $1`,
     [sub],
   );
 
   if (result.rows.length === 0) return null;
 
   const row = result.rows[0];
-  const sessionSignerSecret = decryptSecret(row.session_signer_secret_enc as string);
+  const sessionSignerSecret = decryptSecret(row.sessionSignerSecretEnc as string);
 
   return {
-    oauthSub: row.oauth_sub as string,
-    smartAccount: row.smart_account as string,
-    sessionSignerPubkey: row.session_signer_pubkey as string,
+    oauthSub: row.oauthSub as string,
+    smartAccount: row.smartAccount as string,
+    sessionSignerPubkey: row.sessionSignerPubkey as string,
     sessionSignerSecret,
-    budgetAtomic: BigInt(row.budget_atomic as string),
-    expiryLedger: BigInt(row.expiry_ledger as string),
+    budgetAtomic: BigInt(row.budgetAtomic as string),
+    expiryLedger: BigInt(row.expiryLedger as string),
   };
 }
 
@@ -215,14 +215,14 @@ export async function upsertBinding(
   const q = querier ?? getSingletonQuerier();
   await q.query(
     `INSERT INTO "McpWallet"
-       (oauth_sub, smart_account, session_signer_pubkey, session_signer_secret_enc, budget_atomic, expiry_ledger)
+       ("oauthSub", "smartAccount", "sessionSignerPubkey", "sessionSignerSecretEnc", "budgetAtomic", "expiryLedger")
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (oauth_sub) DO UPDATE SET
-       smart_account              = EXCLUDED.smart_account,
-       session_signer_pubkey      = EXCLUDED.session_signer_pubkey,
-       session_signer_secret_enc  = EXCLUDED.session_signer_secret_enc,
-       budget_atomic              = EXCLUDED.budget_atomic,
-       expiry_ledger              = EXCLUDED.expiry_ledger`,
+     ON CONFLICT ("oauthSub") DO UPDATE SET
+       "smartAccount"             = EXCLUDED."smartAccount",
+       "sessionSignerPubkey"      = EXCLUDED."sessionSignerPubkey",
+       "sessionSignerSecretEnc"   = EXCLUDED."sessionSignerSecretEnc",
+       "budgetAtomic"             = EXCLUDED."budgetAtomic",
+       "expiryLedger"             = EXCLUDED."expiryLedger"`,
     [
       binding.oauthSub,
       binding.smartAccount,

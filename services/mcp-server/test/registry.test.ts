@@ -25,24 +25,27 @@ import {
 // In-memory fake querier
 // ---------------------------------------------------------------------------
 // Mirrors the two queries registry.ts issues:
-//   SELECT ... FROM "McpWallet" WHERE oauth_sub = $1
-//   INSERT ... ON CONFLICT (oauth_sub) DO UPDATE ...
-// The fake keeps a Map<oauthSub, rowObject>.
+//   SELECT "oauthSub", ... FROM "McpWallet" WHERE "oauthSub" = $1
+//   INSERT INTO "McpWallet" ("oauthSub", ...) ON CONFLICT ("oauthSub") DO UPDATE ...
+// pg preserves the case of quoted identifiers and returns row keys with exactly
+// the case written in the query — so row keys are camelCase (oauthSub, etc.).
 
-function makeFakeQuerier(): { querier: Querier; store: Map<string, Record<string, unknown>> } {
+function makeFakeQuerier(): { querier: Querier; store: Map<string, Record<string, unknown>>; sqls: string[] } {
   const store = new Map<string, Record<string, unknown>>();
+  const sqls: string[] = [];
   const querier: Querier = {
     async query(sql: string, params: unknown[]) {
+      sqls.push(sql);
       if (/INSERT/i.test(sql)) {
-        // upsert: (oauth_sub, smart_account, session_signer_pubkey, session_signer_secret_enc, budget_atomic, expiry_ledger)
+        // upsert: ("oauthSub", "smartAccount", "sessionSignerPubkey", "sessionSignerSecretEnc", "budgetAtomic", "expiryLedger")
         const [sub, smartAccount, pubkey, secretEnc, budget, expiry] = params as string[];
         store.set(sub, {
-          oauth_sub: sub,
-          smart_account: smartAccount,
-          session_signer_pubkey: pubkey,
-          session_signer_secret_enc: secretEnc,
-          budget_atomic: budget,
-          expiry_ledger: expiry,
+          oauthSub: sub,
+          smartAccount,
+          sessionSignerPubkey: pubkey,
+          sessionSignerSecretEnc: secretEnc,
+          budgetAtomic: budget,
+          expiryLedger: expiry,
         });
         return { rows: [] };
       } else if (/SELECT/i.test(sql)) {
@@ -53,7 +56,7 @@ function makeFakeQuerier(): { querier: Querier; store: Map<string, Record<string
       return { rows: [] };
     },
   };
-  return { querier, store };
+  return { querier, store, sqls };
 }
 
 const sample: WalletBinding = {
@@ -87,7 +90,7 @@ test("stored secret column is NOT the plaintext", async () => {
   await upsertBinding(sample, querier);
   const row = store.get(sample.oauthSub);
   assert.ok(row, "row must exist after upsert");
-  const stored = row.session_signer_secret_enc as string;
+  const stored = row.sessionSignerSecretEnc as string;
   assert.notEqual(stored, sample.sessionSignerSecret, "column must be ciphertext, not plaintext");
 });
 
@@ -126,4 +129,84 @@ test("getBinding throws when MCP_WALLET_ENC_KEY is unset", async () => {
   } finally {
     if (savedKey !== undefined) process.env.MCP_WALLET_ENC_KEY = savedKey;
   }
+});
+
+// ---------------------------------------------------------------------------
+// SQL guard: column names must match the "McpWallet" migration exactly
+// ---------------------------------------------------------------------------
+// These tests assert that the SQL strings issued by upsertBinding and
+// getBinding reference the quoted camelCase identifiers from migration
+// 0006_mcp_wallets/migration.sql. The fake querier captures every SQL string
+// so we can verify without a live DB. This prevents recurrence of the
+// snake_case vs camelCase mismatch that caused "column does not exist" at
+// runtime (Postgres folds unquoted identifiers to lowercase; the migration
+// used quoted identifiers so the live table has camelCase columns).
+
+test("upsert SQL references quoted camelCase column names from McpWallet migration", async () => {
+  const { querier, sqls } = makeFakeQuerier();
+  await upsertBinding(sample, querier);
+
+  const insertSql = sqls.find(s => /INSERT/i.test(s));
+  assert.ok(insertSql, "upsertBinding must issue an INSERT statement");
+
+  // Required camelCase quoted column names
+  const requiredColumns = [
+    '"oauthSub"',
+    '"smartAccount"',
+    '"sessionSignerPubkey"',
+    '"sessionSignerSecretEnc"',
+    '"budgetAtomic"',
+    '"expiryLedger"',
+  ];
+  for (const col of requiredColumns) {
+    assert.ok(
+      insertSql.includes(col),
+      `INSERT SQL must contain ${col} — got:\n${insertSql}`,
+    );
+  }
+
+  // Must NOT contain unquoted snake_case names that Postgres folds to lowercase
+  const forbiddenSnakeCase = [
+    "oauth_sub",
+    "smart_account",
+    "session_signer_pubkey",
+    "session_signer_secret_enc",
+    "budget_atomic",
+    "expiry_ledger",
+  ];
+  for (const bad of forbiddenSnakeCase) {
+    assert.ok(
+      !insertSql.includes(bad),
+      `INSERT SQL must NOT contain snake_case identifier "${bad}" — got:\n${insertSql}`,
+    );
+  }
+});
+
+test("select SQL references quoted camelCase column names from McpWallet migration", async () => {
+  const { querier, sqls } = makeFakeQuerier();
+  await getBinding("nonexistent-sub", querier);
+
+  const selectSql = sqls.find(s => /SELECT/i.test(s));
+  assert.ok(selectSql, "getBinding must issue a SELECT statement");
+
+  const requiredColumns = [
+    '"oauthSub"',
+    '"smartAccount"',
+    '"sessionSignerPubkey"',
+    '"sessionSignerSecretEnc"',
+    '"budgetAtomic"',
+    '"expiryLedger"',
+  ];
+  for (const col of requiredColumns) {
+    assert.ok(
+      selectSql.includes(col),
+      `SELECT SQL must contain ${col} — got:\n${selectSql}`,
+    );
+  }
+
+  // WHERE clause must also use quoted camelCase
+  assert.ok(
+    selectSql.includes('"oauthSub" = $1'),
+    `SELECT WHERE clause must use "oauthSub" = $1 — got:\n${selectSql}`,
+  );
 });

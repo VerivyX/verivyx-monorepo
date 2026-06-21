@@ -7,7 +7,7 @@ import { chargeStellarFee } from "../fee/stellar.js";
 import { chargeStellarFeeNonCustodial } from "../fee/stellarNonCustodial.js";
 import type { FeeReceipt } from "../fee/types.js";
 import { assertPublicHttpsUrl } from "../ssrf.js";
-import { STELLAR_NETWORK_TO_PASSPHRASE } from "../core/stellar/constants.js";
+import { getNetworkPassphrase, getRpcUrl } from "../core/stellar/utils.js";
 import { setupStellarRail, setupStellarRailNonCustodial, stellarInfo } from "./stellar.js";
 import { setupEvmRail, type EvmRail } from "./evm.js";
 import { chargeSolanaFee, setupSolanaRail, solanaInfo, type SolanaRail } from "./solana.js";
@@ -280,8 +280,8 @@ export async function createPaymentService(opts?: {
             usdcContract: cfg.stellar.usdcContract,
             feeAtomic,
             feeUsdc: cfg.feeUsdc,
-            networkPassphrase: STELLAR_NETWORK_TO_PASSPHRASE.get(cfg.stellar.network) ?? "Test SDF Network ; September 2015",
-            rpcUrl: cfg.stellar.rpcUrl ?? "https://soroban-testnet.stellar.org",
+            networkPassphrase: getNetworkPassphrase(cfg.stellar.network),
+            rpcUrl: getRpcUrl(cfg.stellar.network, { url: cfg.stellar.rpcUrl }),
             network: cfg.stellar.network,
             sponsorSecret: cfg.stellarSecretKey,
           });

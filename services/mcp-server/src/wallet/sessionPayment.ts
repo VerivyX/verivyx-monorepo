@@ -25,7 +25,6 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
-import { assembleTransaction } from "@stellar/stellar-sdk/rpc";
 
 // ---------------------------------------------------------------------------
 // ed25519 signature ScVal
