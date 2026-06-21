@@ -21,7 +21,7 @@ async function friendbot(pub) {
   const url = `https://friendbot.stellar.org/?addr=${encodeURIComponent(pub)}`;
   const r = await fetch(url);
   const body = await r.text();
-  if (!r.ok && !body.includes("op_already_exists") && !body.includes("createAccountAlreadyExist")) {
+  if (!r.ok && !body.includes("op_already_exists") && !body.includes("createAccountAlreadyExist") && !body.includes("account already funded")) {
     throw new Error(`friendbot failed ${r.status}: ${body.slice(0, 300)}`);
   }
   return true;
