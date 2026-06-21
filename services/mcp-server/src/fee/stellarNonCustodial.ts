@@ -15,6 +15,7 @@
 
 import {
   Account,
+  BASE_FEE,
   Keypair,
   Transaction,
   TransactionBuilder,
@@ -56,77 +57,68 @@ async function defaultSubmit(
   // of the tx source account.
   const placeholderTx = TransactionBuilder.fromXDR(txXdr, networkPassphrase) as Transaction;
 
-  // Re-source: build a new tx with the sponsor account as source so the sequence is valid.
-  // We re-use the same ops from the placeholder tx XDR-level (via envelope manipulation)
-  // to guarantee the signed auth entries in the op body survive unchanged.
+  // Re-source with the sponsor account as source (valid sequence). Build the tx WITH the
+  // op (the InvokeHostFunction op already carries the signed auth in its body — auth is
+  // op-level, independent of the tx source). Building WITH the op (not a 0-op build +
+  // envelope graft) is what lets assembleTransaction compute the fee correctly — the old
+  // 0-op-graft path produced txInsufficientFee. Mirrors smartAccount.ts submitWithOwnerAuth.
+  // Take the raw xdr.Operation from the placeholder envelope (its body carries the signed
+  // auth) — addOperation accepts an xdr.Operation and preserves the auth verbatim.
+  const op = placeholderTx.toEnvelope().v1().tx().operations()[0];
   const reSourced = new TransactionBuilder(
     new Account(sponsorAccount.accountId(), sponsorAccount.sequenceNumber()),
     {
-      fee: "12000000",
+      // Inclusion-fee base; assembleTransaction sets the real fee (inclusion + Soroban resource).
+      fee: BASE_FEE,
       networkPassphrase,
     },
   )
+    .addOperation(op)
     .setTimeout(120)
     .build();
 
-  // Graft the ops from the placeholder tx into the re-sourced tx envelope.
-  // Auth is stored inside each op's body (invokeHostFunctionOp().auth()), so it
-  // survives this XDR-level copy without any further manipulation.
-  {
-    const envPlaceholder = placeholderTx.toEnvelope();
-    const envReSourced = reSourced.toEnvelope();
-    envReSourced.v1().tx().operations(
-      envPlaceholder.v1().tx().operations(),
-    );
-    // Rebuild the Transaction object from the mutated envelope so it carries the ops.
-    const rebuilt = new Transaction(envReSourced, networkPassphrase);
-    // Simulate the re-sourced tx (with auth already in the op body) to get accurate
-    // resource fees + footprint. assembleTransaction adds the resource fee without
-    // touching the auth entries.
-    const sim = await server.simulateTransaction(rebuilt);
-    if (rpc.Api.isSimulationError(sim)) {
-      throw new Error(`fee simulate error: ${sim.error}`);
-    }
-    let prepared = assembleTransaction(rebuilt, sim).build();
-
-    // Defensive guard from the spike (05-session-pay.js lines 62-64):
-    // if assembleTransaction cleared auth (it shouldn't), re-attach from the source tx.
-    {
-      const env2 = prepared.toEnvelope();
-      const opBody = env2.v1().tx().operations()[0].body().invokeHostFunctionOp();
-      if (opBody.auth().length === 0) {
-        const auth0 = envPlaceholder.v1().tx().operations()[0].body().invokeHostFunctionOp().auth();
-        opBody.auth(auth0);
-        prepared = new Transaction(env2, networkPassphrase);
-      }
-    }
-
-    // MCP wallet signs as tx source / gas sponsor.
-    prepared.sign(sponsorKp);
-
-    const send = await server.sendTransaction(prepared);
-    if (send.status === "ERROR") {
-      const detail = send.errorResult?.toXDR?.("base64") ?? JSON.stringify(send);
-      throw new Error(`fee tx send ERROR: ${detail}`);
-    }
-
-    // Poll until finalized. GetTransactionStatus has: SUCCESS, FAILED, NOT_FOUND.
-    // NOT_FOUND means the transaction has not yet been processed (still pending).
-    const deadline = Date.now() + 90_000;
-    let got = await server.getTransaction(send.hash);
-    while (got.status === rpc.Api.GetTransactionStatus.NOT_FOUND && Date.now() < deadline) {
-      await new Promise<void>(r => setTimeout(r, 2_000));
-      got = await server.getTransaction(send.hash);
-    }
-    if (got.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-      const xdrDetail = got.status === rpc.Api.GetTransactionStatus.FAILED
-        ? (got as { resultXdr?: xdr.TransactionResult }).resultXdr?.toXDR?.("base64") ?? ""
-        : `(status: ${got.status})`;
-      throw new Error(`fee tx ${got.status}: ${send.hash}\n${xdrDetail}`);
-    }
-
-    return { hash: send.hash };
+  // Simulate (auth already in the op body) → assembleTransaction sets resource fee + footprint.
+  const sim = await server.simulateTransaction(reSourced);
+  if (rpc.Api.isSimulationError(sim)) {
+    throw new Error(`fee simulate error: ${sim.error}`);
   }
+  let prepared = assembleTransaction(reSourced, sim).build();
+
+  // Defensive: if assembleTransaction cleared auth (it shouldn't), re-attach from the placeholder.
+  {
+    const env2 = prepared.toEnvelope();
+    const opBody = env2.v1().tx().operations()[0].body().invokeHostFunctionOp();
+    if (opBody.auth().length === 0) {
+      const auth0 = placeholderTx.toEnvelope().v1().tx().operations()[0].body().invokeHostFunctionOp().auth();
+      opBody.auth(auth0);
+      prepared = new Transaction(env2, networkPassphrase);
+    }
+  }
+
+  // MCP wallet signs as tx source / gas sponsor.
+  prepared.sign(sponsorKp);
+
+  const send = await server.sendTransaction(prepared);
+  if (send.status === "ERROR") {
+    const detail = send.errorResult?.toXDR?.("base64") ?? JSON.stringify(send);
+    throw new Error(`fee tx send ERROR: ${detail}`);
+  }
+
+  // Poll until finalized. GetTransactionStatus: SUCCESS, FAILED, NOT_FOUND (pending).
+  const deadline = Date.now() + 90_000;
+  let got = await server.getTransaction(send.hash);
+  while (got.status === rpc.Api.GetTransactionStatus.NOT_FOUND && Date.now() < deadline) {
+    await new Promise<void>(r => setTimeout(r, 2_000));
+    got = await server.getTransaction(send.hash);
+  }
+  if (got.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    const xdrDetail = got.status === rpc.Api.GetTransactionStatus.FAILED
+      ? (got as { resultXdr?: xdr.TransactionResult }).resultXdr?.toXDR?.("base64") ?? ""
+      : `(status: ${got.status})`;
+    throw new Error(`fee tx ${got.status}: ${send.hash}\n${xdrDetail}`);
+  }
+
+  return { hash: send.hash };
 }
 
 // ---------------------------------------------------------------------------
