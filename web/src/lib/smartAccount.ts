@@ -24,6 +24,7 @@
 
 import {
   Address,
+  authorizeEntry,
   hash,
   nativeToScVal,
   Operation,
@@ -210,41 +211,41 @@ export function ed25519SignatureScVal(
 async function signEntryWithFreighter(
   entry: xdr.SorobanAuthorizationEntry,
   networkPassphrase: string,
+  ownerAddress: string,
+  validUntilLedger: number,
 ): Promise<xdr.SorobanAuthorizationEntry> {
   // [BV-1] Freighter is browser-only — dynamic import avoids SSR errors.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const freighter = await import('@stellar/freighter-api' as any);
 
-  const entryXdr = entry.toXDR('base64');
-
-  // [BV-1] Call Freighter signAuthEntry — return shape is ambiguous across versions.
-  const result = await freighter.signAuthEntry(entryXdr, { networkPassphrase });
-
-  if (result && typeof result === 'object' && 'signedAuthEntry' in result) {
-    // v6 documented shape: { signedAuthEntry: string | null, signerAddress, error? }
-    const signed = (result as { signedAuthEntry: string | null }).signedAuthEntry;
-    if (!signed) {
-      throw new Error(
-        '[BV-1] Freighter signAuthEntry returned null — user rejected or an error occurred.',
-      );
-    }
-    return xdr.SorobanAuthorizationEntry.fromXDR(signed, 'base64');
-  }
-
-  if (result instanceof Uint8Array || Buffer.isBuffer(result)) {
-    // Older docs shape — raw bytes are a signature hash, not a full XDR entry.
-    // Freighter signed the preimage hash; we reconstruct the entry with those bytes.
-    // [BV-1] This path requires knowing the address to build ed25519SignatureScVal.
-    // If this branch is hit, file a bug and update to use the v6 shape instead.
-    throw new Error(
-      '[BV-1] Freighter returned raw signature bytes. ' +
-        'Upgrade to @stellar/freighter-api ^6 or handle the return shape manually. ' +
-        'See smartAccount.ts signEntryWithFreighter() for the reconstruction approach.',
-    );
-  }
-
-  throw new Error(
-    `[BV-1] Unknown Freighter signAuthEntry return shape: ${JSON.stringify(result)}`,
+  // Canonical signing path: the SDK's authorizeEntry() builds the
+  // HashIdPreimageSorobanAuthorization from this entry (its nonce + rootInvocation
+  // + validUntil + networkId), hands it to our SigningCallback, then assembles the
+  // signed entry in the correct account-signature format. Freighter's signAuthEntry
+  // takes the PREIMAGE xdr and returns the signature (base64 in `signedAuthEntry`),
+  // NOT the full entry — so we feed it the preimage and return {signature, publicKey}.
+  return authorizeEntry(
+    entry,
+    async (preimage: xdr.HashIdPreimage) => {
+      const res = await freighter.signAuthEntry(preimage.toXDR('base64'), {
+        address: ownerAddress,
+        networkPassphrase,
+      });
+      // Surface Freighter's REAL error (the previous code hid it behind a generic message).
+      if (res?.error) {
+        const e = typeof res.error === 'string' ? res.error : JSON.stringify(res.error);
+        throw new Error(`[BV-1] Freighter signAuthEntry error: ${e}`);
+      }
+      if (!res?.signedAuthEntry) {
+        throw new Error('[BV-1] Freighter signAuthEntry returned no signature (user rejected?).');
+      }
+      return {
+        signature: Buffer.from(res.signedAuthEntry, 'base64'),
+        publicKey: ownerAddress,
+      };
+    },
+    validUntilLedger,
+    networkPassphrase,
   );
 }
 
@@ -794,8 +795,14 @@ async function submitWithOwnerAuth(opts: OwnerAuthOpts): Promise<string> {
       rootInvocation: delegatedInvocation,
     });
 
-    // [BV-1] Sign the owner entry via Freighter signAuthEntry.
-    const signedOwnerEntry = await signEntryWithFreighter(ownerPreEntry, networkPassphrase);
+    // [BV-1] Sign the owner entry via Freighter (authorizeEntry builds the preimage,
+    // Freighter signs it, the SDK assembles the signed account-credential entry).
+    const signedOwnerEntry = await signEntryWithFreighter(
+      ownerPreEntry,
+      networkPassphrase,
+      ownerAddress,
+      expirationLedger,
+    );
     signedAuths.push(signedOwnerEntry);
   }
 
