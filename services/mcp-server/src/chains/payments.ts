@@ -2,10 +2,12 @@ import { wrapFetchWithPayment, x402Client, x402HTTPClient } from "@x402/fetch";
 
 import { getConfig } from "../config.js";
 import { logger } from "../logger.js";
-import { addDecimalStrings, atomsToDecimalString } from "../money.js";
+import { addDecimalStrings, atomsToDecimalString, decimalToBaseUnits } from "../money.js";
 import { chargeStellarFee } from "../fee/stellar.js";
+import { chargeStellarFeeNonCustodial } from "../fee/stellarNonCustodial.js";
 import type { FeeReceipt } from "../fee/types.js";
 import { assertPublicHttpsUrl } from "../ssrf.js";
+import { STELLAR_NETWORK_TO_PASSPHRASE } from "../core/stellar/constants.js";
 import { setupStellarRail, setupStellarRailNonCustodial, stellarInfo } from "./stellar.js";
 import { setupEvmRail, type EvmRail } from "./evm.js";
 import { chargeSolanaFee, setupSolanaRail, solanaInfo, type SolanaRail } from "./solana.js";
@@ -116,8 +118,8 @@ export async function createPaymentService(opts?: {
    * Non-custodial mode: pay the resource from the caller's OWN smart account via the
    * delegated session key (standard x402). Registers the non-custodial Stellar rail
    * instead of the custodial one; Stellar-only (the binding is a Stellar smart account).
-   * The custodial service FEE is SKIPPED on this path (it would debit the wrong wallet)
-   * and marked `non_custodial_fee_pending` — the real non-custodial fee is a later task.
+   * The service fee is also charged non-custodially: a delegated USDC.transfer from the
+   * smart account to the fee treasury, gas-sponsored by the MCP wallet.
    */
   nonCustodial?: { smartAccountId: string; sessionSecret: string };
   /**
@@ -265,11 +267,28 @@ export async function createPaymentService(opts?: {
 
     if (paymentMade && response.ok) {
       if (isNonCustodial) {
-        // Do NOT charge the custodial fee on the non-custodial path — chargeFee debits
-        // the MCP's own wallet, which is wrong when the resource was paid from the
-        // caller's smart account. The real non-custodial fee is a separate task.
-        feeReceipt = null;
-        feeError = "non_custodial_fee_pending";
+        // Charge the Verivyx service fee from the caller's smart account to the fee
+        // treasury, authorized by the session key, gas-sponsored by the MCP wallet.
+        // A fee submit error is recorded but does NOT fail the pay — the resource was
+        // already paid and served. Mirror the custodial try/catch below.
+        const feeAtomic = decimalToBaseUnits(cfg.feeUsdc, cfg.stellar.usdcDecimals).toString();
+        try {
+          feeReceipt = await chargeStellarFeeNonCustodial({
+            smartAccountId: opts!.nonCustodial!.smartAccountId,
+            sessionSecret: opts!.nonCustodial!.sessionSecret,
+            feeTreasury: cfg.stellar.feeTreasury,
+            usdcContract: cfg.stellar.usdcContract,
+            feeAtomic,
+            feeUsdc: cfg.feeUsdc,
+            networkPassphrase: STELLAR_NETWORK_TO_PASSPHRASE.get(cfg.stellar.network) ?? "Test SDF Network ; September 2015",
+            rpcUrl: cfg.stellar.rpcUrl ?? "https://soroban-testnet.stellar.org",
+            network: cfg.stellar.network,
+            sponsorSecret: cfg.stellarSecretKey,
+          });
+        } catch (error) {
+          feeError = error instanceof Error ? error.message : "non-custodial fee charge failed";
+          logger.error({ url: input.url, err: feeError }, "non-custodial service fee charge failed");
+        }
       } else if (!chain) {
         feeError = "could not determine settlement network; service fee not charged";
         logger.warn({ url: input.url }, feeError);
