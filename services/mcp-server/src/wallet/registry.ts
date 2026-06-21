@@ -163,7 +163,12 @@ function getSingletonQuerier(): Querier {
 
 /**
  * Retrieves a wallet binding for the given OAuth sub, decrypting the session secret.
- * Returns null if no binding exists for this sub.
+ * Returns null if:
+ *   - No row exists for this sub, OR
+ *   - The row is in pending state (smartAccount === "") — not yet a usable binding.
+ *
+ * The pay path uses this function and must treat both cases identically (no-wallet).
+ * Use getWalletStatus to read raw rows including pending state.
  *
  * @param sub - Hydra OAuth subject identifier
  * @param querier - Optional injected querier (defaults to singleton pg Pool)
@@ -187,6 +192,11 @@ export async function getBinding(
   if (result.rows.length === 0) return null;
 
   const row = result.rows[0];
+
+  // Pending row: session key issued but no smart account linked yet.
+  // Return null so the pay path treats this as no-wallet (same as no row).
+  if ((row.smartAccount as string) === "") return null;
+
   const sessionSignerSecret = decryptSecret(row.sessionSignerSecretEnc as string);
 
   return {
@@ -197,6 +207,104 @@ export async function getBinding(
     budgetAtomic: BigInt(row.budgetAtomic as string),
     expiryLedger: BigInt(row.expiryLedger as string),
   };
+}
+
+/** Raw row from McpWallet — secret is NOT decrypted (suitable for status reads). */
+export type WalletStatusRow = {
+  oauthSub: string;
+  smartAccount: string;
+  sessionSignerPubkey: string;
+  budgetAtomic: bigint;
+  expiryLedger: bigint;
+};
+
+/**
+ * Retrieves a wallet binding for the given OAuth sub, decrypting the session secret.
+ * Returns null if no binding exists OR if the row is pending (smartAccount === "").
+ *
+ * A pending row (session key issued but no smart account linked yet) is NOT a usable
+ * binding — the pay path must keep treating it as no-wallet. Use getWalletStatus to
+ * read the raw row including pending rows.
+ *
+ * @param sub - Hydra OAuth subject identifier
+ * @param querier - Optional injected querier (defaults to singleton pg Pool)
+ */
+
+/**
+ * Retrieves the raw wallet status row for a given OAuth sub WITHOUT decrypting the secret.
+ * Returns null if no row exists (but returns the row even if pending / smartAccount="").
+ *
+ * Use this for the /wallet/status endpoint where you need to see the pending state.
+ *
+ * @param sub - Hydra OAuth subject identifier
+ * @param querier - Optional injected querier (defaults to singleton pg Pool)
+ */
+export async function getWalletStatus(
+  sub: string,
+  querier?: Querier,
+): Promise<WalletStatusRow | null> {
+  getEncKey();
+
+  const q = querier ?? getSingletonQuerier();
+  const result = await q.query(
+    `SELECT "oauthSub", "smartAccount", "sessionSignerPubkey", "budgetAtomic", "expiryLedger"
+     FROM "McpWallet"
+     WHERE "oauthSub" = $1`,
+    [sub],
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0];
+  return {
+    oauthSub: row.oauthSub as string,
+    smartAccount: row.smartAccount as string,
+    sessionSignerPubkey: row.sessionSignerPubkey as string,
+    budgetAtomic: BigInt(row.budgetAtomic as string),
+    expiryLedger: BigInt(row.expiryLedger as string),
+  };
+}
+
+/**
+ * Deletes the wallet binding row for the given sub (revoke).
+ * Idempotent: no-op if no row exists.
+ *
+ * @param sub - Hydra OAuth subject identifier
+ * @param querier - Optional injected querier (defaults to singleton pg Pool)
+ */
+export async function deleteBinding(
+  sub: string,
+  querier?: Querier,
+): Promise<void> {
+  const q = querier ?? getSingletonQuerier();
+  await q.query(`DELETE FROM "McpWallet" WHERE "oauthSub" = $1`, [sub]);
+}
+
+/**
+ * Partial update: sets smartAccount, budgetAtomic, and expiryLedger on an existing row
+ * WITHOUT touching the encrypted session secret. Used by POST /wallet/binding to confirm
+ * an on-chain delegation while preserving the existing session keypair.
+ *
+ * @param sub - Hydra OAuth subject identifier
+ * @param smartAccount - Stellar contract C-address of the user's smart account
+ * @param budgetAtomic - Delegation spending limit in USDC atomic units
+ * @param expiryLedger - Delegation valid_until ledger sequence number
+ * @param querier - Optional injected querier (defaults to singleton pg Pool)
+ */
+export async function bindWallet(
+  sub: string,
+  smartAccount: string,
+  budgetAtomic: bigint,
+  expiryLedger: bigint,
+  querier?: Querier,
+): Promise<void> {
+  const q = querier ?? getSingletonQuerier();
+  await q.query(
+    `UPDATE "McpWallet"
+     SET "smartAccount" = $2, "budgetAtomic" = $3, "expiryLedger" = $4
+     WHERE "oauthSub" = $1`,
+    [sub, smartAccount, budgetAtomic.toString(), expiryLedger.toString()],
+  );
 }
 
 /**

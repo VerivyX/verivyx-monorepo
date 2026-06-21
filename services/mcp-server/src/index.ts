@@ -12,7 +12,14 @@ import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildProtectedResourceMetadata } from "./oauth.js";
-import { getBinding } from "./wallet/registry.js";
+import { buildWalletRouter } from "./wallet/endpoints.js";
+import {
+  bindWallet,
+  deleteBinding,
+  getBinding,
+  getWalletStatus,
+  upsertBinding,
+} from "./wallet/registry.js";
 
 async function main(): Promise<void> {
   const cfg = getConfig();
@@ -196,6 +203,21 @@ async function main(): Promise<void> {
 
   app.get("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
   app.delete("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
+
+  // Wallet lifecycle endpoints (Plan 3 T1): session-signer, binding, status, revoke.
+  // Mounted behind requireMcpAuth; handlers reject non-oauth callers with 403.
+  if (cfg.oauth) {
+    const walletRouter = buildWalletRouter({
+      getBinding,
+      getWalletStatus,
+      upsertBinding,
+      bindWallet: (sub, smartAccount, budgetAtomic, expiryLedger) =>
+        bindWallet(sub, smartAccount, budgetAtomic, expiryLedger),
+      deleteBinding,
+    });
+    app.use("/wallet", requireMcpAuth, walletRouter);
+    logger.info("wallet endpoints mounted at /wallet (OAuth only)");
+  }
 
   // Liveness — no secrets.
   app.get("/healthz", (_req, res) => {
