@@ -165,7 +165,7 @@ async function main(): Promise<void> {
           sessionPayments = payments;
           break;
       }
-      const server = buildMcpServer(sessionPayments);
+      const server = buildMcpServer(sessionPayments, { isNonCustodial: mode === "noncustodial" });
       await server.connect(transport);
     } else {
       res.status(400).json({

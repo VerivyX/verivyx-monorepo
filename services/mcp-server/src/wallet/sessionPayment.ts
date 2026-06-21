@@ -279,7 +279,18 @@ export async function buildDelegatedInvocation(opts: BuildDelegatedInvocationOpt
     const tx = TransactionBuilder.fromXDR(txXdr, networkPassphrase) as import("@stellar/stellar-sdk").Transaction;
     const sim = await server.simulateTransaction(tx);
     if (rpc.Api.isSimulationError(sim)) {
-      throw new Error(`simulate error (${contractId}.${functionName}): ${sim.error}`);
+      const err = new Error(`simulate error (${contractId}.${functionName}): ${sim.error}`);
+      // Attach diagnostic events as string[] (best-effort) so the caller can map
+      // budget vs expiry via mapSettlementError. sim.events is xdr.DiagnosticEvent[].
+      try {
+        (err as NodeJS.ErrnoException & { diagnostics?: string[] }).diagnostics =
+          (sim.events ?? []).map((e) => {
+            try { return e.toXDR("hex"); } catch { return String(e); }
+          });
+      } catch {
+        // Diagnostics not critical — proceed without them
+      }
+      throw err;
     }
     const auth = (sim.result?.auth ?? []) as xdr.SorobanAuthorizationEntry[];
     return { auth, latestLedger: sim.latestLedger };
