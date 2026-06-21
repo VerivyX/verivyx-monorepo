@@ -469,9 +469,10 @@ export interface DelegateResult {
   policyTxHash: string;
   /**
    * The rule id returned by add_context_rule (query via get_context_rules).
-   * Pass to revoke(). May be null if the post-rule query fails (non-fatal).
+   * Pass to revoke(). delegate() throws before returning if this could not be
+   * resolved, so on a successful return this is always a valid rule id.
    */
-  ruleId: number | null;
+  ruleId: number;
 }
 
 /**
@@ -573,11 +574,17 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
 
   // ── Step 2: add_policy ────────────────────────────────────────────────────
 
+  if (ruleId == null) {
+    throw new Error(
+      'delegate: could not resolve the new context-rule id; aborting before add_policy to avoid attaching the budget to the wrong rule',
+    );
+  }
+
   const opPolicy = Operation.invokeContractFunction({
     contract: smartAccount,
     function: 'add_policy',
     args: [
-      nativeToScVal((ruleId ?? 0) >>> 0, { type: 'u32' }), // rule_id u32
+      nativeToScVal(ruleId >>> 0, { type: 'u32' }), // rule_id u32
       new Address(SPENDING_LIMIT_POLICY_ADDRESS).toScVal(), // policy contract
       spendingLimitParams(budgetAtomic, periodLedgers), // SpendingLimitAccountParams
     ],
