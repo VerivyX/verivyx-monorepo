@@ -206,7 +206,7 @@ export function signDelegated(opts: SignDelegatedOpts): xdr.SorobanAuthorization
 }
 
 // ---------------------------------------------------------------------------
-// buildSessionPayment
+// SimulateFn type (shared by all builders)
 // ---------------------------------------------------------------------------
 
 export type SimulateFn = (txXdr: string) => Promise<{
@@ -214,15 +214,21 @@ export type SimulateFn = (txXdr: string) => Promise<{
   latestLedger: number;
 }>;
 
-export type BuildSessionPaymentOpts = {
-  /** Adapter contract ID (C…). Defaults to VERIVYX_PAY_ADAPTER_ID env var. */
-  adapterId: string;
+// ---------------------------------------------------------------------------
+// buildDelegatedInvocation — op-agnostic core builder
+// ---------------------------------------------------------------------------
+
+export type BuildDelegatedInvocationOpts = {
+  /** The contract to call (C…) */
+  contractId: string;
+  /** The contract function name */
+  functionName: string;
+  /** The ScVal args for the function */
+  args: xdr.ScVal[];
   /** The smart account address (C…) */
   smartAccountId: string;
   /** The session key secret (S…) */
   sessionSecret: string;
-  domain: string;
-  slug: string;
   /** e.g. "Test SDF Network ; September 2015" */
   networkPassphrase: string;
   /** Soroban RPC URL (used only when simulate is not injected) */
@@ -235,29 +241,30 @@ export type BuildSessionPaymentOpts = {
 };
 
 /**
- * Builds a verivyx_pay_adapter.pay(owner, domain, slug) transaction
- * authorized solely by the delegated session key.
+ * Builds a session-key-authorized transaction for ANY contract invocation.
+ *
+ * Generalizes the proven buildSessionPayment flow (op, args) → op-agnostic.
+ * The auth machinery (signDelegated, two-entry tree) is identical for any invocation.
  *
  * Flow (mirrors 05-session-pay.js):
- *   1. Build the adapter.pay invokeContractFunction op.
+ *   1. Build the invokeContractFunction op with the given contract + function + args.
  *   2. Simulate (no auth) → discover smart-account auth entry + latestLedger.
  *   3. expirationLedger = latestLedger + 100.
  *   4. signDelegated → two-entry auth tree.
  *   5. Attach signed auth to op.
- *   6. assembleTransaction (sets footprint / fees from sim).
- *   7. Re-attach auth if assembleTransaction stripped it (known caveat).
- *   8. Return tx XDR with source = placeholder (sequence 0).
+ *   6. Rebuild tx with signed auth and re-simulate to get accurate fees.
+ *   7. Return tx XDR with source = placeholder (sequence 0).
  *      The relayer rebuilds source + fee-sponsors + submits.
  *
  * @returns base64 XDR of the assembled transaction envelope.
  */
-export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promise<string> {
+export async function buildDelegatedInvocation(opts: BuildDelegatedInvocationOpts): Promise<string> {
   const {
-    adapterId,
+    contractId,
+    functionName,
+    args,
     smartAccountId,
     sessionSecret,
-    domain,
-    slug,
     networkPassphrase,
     rpcUrl,
     simulate: injectSimulate,
@@ -272,18 +279,11 @@ export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promis
     const tx = TransactionBuilder.fromXDR(txXdr, networkPassphrase) as import("@stellar/stellar-sdk").Transaction;
     const sim = await server.simulateTransaction(tx);
     if (rpc.Api.isSimulationError(sim)) {
-      throw new Error(`adapter.pay simulate error: ${sim.error}`);
+      throw new Error(`simulate error (${contractId}.${functionName}): ${sim.error}`);
     }
     const auth = (sim.result?.auth ?? []) as xdr.SorobanAuthorizationEntry[];
     return { auth, latestLedger: sim.latestLedger };
   });
-
-  // ---- Build the pay op args -------------------------------------------------
-  const payArgs: xdr.ScVal[] = [
-    new Address(smartAccountId).toScVal(),
-    nativeToScVal(domain, { type: "string" }),
-    nativeToScVal(slug, { type: "string" }),
-  ];
 
   // ---- Placeholder source account (sequence 0; relayer rebuilds) -------------
   // We use the session public key as a convenient well-formed G-address. Sequence
@@ -293,9 +293,9 @@ export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promis
 
   // ---- Step 1: build no-auth tx to simulate ---------------------------------
   const op = Operation.invokeContractFunction({
-    contract: adapterId,
-    function: "pay",
-    args: payArgs,
+    contract: contractId,
+    function: functionName,
+    args,
   });
 
   const simTx = new TransactionBuilder(placeholderAccount, {
@@ -325,9 +325,9 @@ export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promis
   // Build a fresh op with the signed auth embedded, then re-simulate to get
   // accurate resource fees and the final footprint.
   const opWithAuth = Operation.invokeContractFunction({
-    contract: adapterId,
-    function: "pay",
-    args: payArgs,
+    contract: contractId,
+    function: functionName,
+    args,
     auth: signedAuth,
   });
 
@@ -351,24 +351,144 @@ export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promis
   // because we already have the signed auth we computed.
   void resimLedger;
 
-  // assembleTransaction needs the raw SimulateTransactionResponse, but our inject
-  // interface returns a simplified form. When using the injected simulate fn we
-  // reconstruct a minimal fake response for assembleTransaction; when using the
-  // real network server the real SimulateTransactionResponse was already discarded.
-  //
-  // For the relayer use-case (no inject) the re-simulation produces the real sim
-  // response; for the test use-case we attach signed auth directly to the built tx.
-  //
-  // Simpler approach used here: use the op-with-auth tx as-is and call
-  // assembleTransaction only when the real server is available. In the injected
-  // path we skip assembleTransaction (the relayer will re-simulate anyway).
-  //
-  // To keep the code path uniform across both modes, we return the tx XDR with
-  // the signed auth already attached. The relayer is responsible for re-simulating
-  // to get accurate fees before submission.
-
   // Return the tx XDR with signed auth already in the op.
+  // The relayer is responsible for re-simulating to get accurate fees before submission.
   return authTx.toEnvelope().toXDR("base64");
+}
+
+// ---------------------------------------------------------------------------
+// buildSessionPayment — thin wrapper over buildDelegatedInvocation (adapter.pay)
+// ---------------------------------------------------------------------------
+
+export type BuildSessionPaymentOpts = {
+  /** Adapter contract ID (C…). Defaults to VERIVYX_PAY_ADAPTER_ID env var. */
+  adapterId: string;
+  /** The smart account address (C…) */
+  smartAccountId: string;
+  /** The session key secret (S…) */
+  sessionSecret: string;
+  domain: string;
+  slug: string;
+  /** e.g. "Test SDF Network ; September 2015" */
+  networkPassphrase: string;
+  /** Soroban RPC URL (used only when simulate is not injected) */
+  rpcUrl: string;
+  /**
+   * Optional injectable simulate function for offline/unit testing.
+   * When omitted, a real rpc.Server call is used.
+   */
+  simulate?: SimulateFn;
+};
+
+/**
+ * Builds a verivyx_pay_adapter.pay(owner, domain, slug) transaction
+ * authorized solely by the delegated session key.
+ *
+ * This is a thin wrapper over buildDelegatedInvocation that constructs the
+ * adapter.pay op args and delegates the proven auth build flow.
+ *
+ * @returns base64 XDR of the assembled transaction envelope.
+ */
+export async function buildSessionPayment(opts: BuildSessionPaymentOpts): Promise<string> {
+  const {
+    adapterId,
+    smartAccountId,
+    sessionSecret,
+    domain,
+    slug,
+    networkPassphrase,
+    rpcUrl,
+    simulate,
+  } = opts;
+
+  const payArgs: xdr.ScVal[] = [
+    new Address(smartAccountId).toScVal(),
+    nativeToScVal(domain, { type: "string" }),
+    nativeToScVal(slug, { type: "string" }),
+  ];
+
+  return buildDelegatedInvocation({
+    contractId: adapterId,
+    functionName: "pay",
+    args: payArgs,
+    smartAccountId,
+    sessionSecret,
+    networkPassphrase,
+    rpcUrl,
+    simulate,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// buildStandardTransferPayment — standard x402 exact-scheme USDC transfer
+// ---------------------------------------------------------------------------
+
+export type BuildStandardTransferPaymentOpts = {
+  /** USDC contract ID (SEP-41 SAC, C…) */
+  usdcContractId: string;
+  /** The smart account address (C…) — the x402 payer `from` */
+  smartAccountId: string;
+  /** The recipient address (G… or C…) — the x402 `payTo` */
+  payTo: string;
+  /** Transfer amount in USDC stroops (string or bigint) */
+  amount: string | bigint;
+  /** The session key secret (S…) */
+  sessionSecret: string;
+  /** e.g. "Test SDF Network ; September 2015" */
+  networkPassphrase: string;
+  /** Soroban RPC URL (used only when simulate is not injected) */
+  rpcUrl: string;
+  /**
+   * Optional injectable simulate function for offline/unit testing.
+   * When omitted, a real rpc.Server call is used.
+   */
+  simulate?: SimulateFn;
+};
+
+/**
+ * Builds a standard x402 exact-scheme USDC.transfer(from=smartAccount, to=payTo, amount)
+ * transaction authorized solely by the delegated session key.
+ *
+ * This produces the standard x402 payment payload (`{ transaction: <xdr> }`) that any
+ * x402 facilitator / resource server can settle. The smart account's OZ session delegation
+ * (spending_limit policy + valid_until expiry) enforces budget and expiry on-chain at settle.
+ *
+ * The two-entry delegated auth tree (Entry A: SA Signatures map + Entry B: session-key
+ * __check_auth) is identical to the adapter.pay flow — proven on testnet (tx 10f4fe6f…).
+ *
+ * @returns base64 XDR of the assembled transaction envelope (the `transaction` field value).
+ */
+export async function buildStandardTransferPayment(opts: BuildStandardTransferPaymentOpts): Promise<string> {
+  const {
+    usdcContractId,
+    smartAccountId,
+    payTo,
+    amount,
+    sessionSecret,
+    networkPassphrase,
+    rpcUrl,
+    simulate,
+  } = opts;
+
+  const amountBigInt = typeof amount === "string" ? BigInt(amount) : amount;
+
+  // USDC.transfer args: (from: Address, to: Address, amount: i128)
+  const transferArgs: xdr.ScVal[] = [
+    new Address(smartAccountId).toScVal(),
+    new Address(payTo).toScVal(),
+    nativeToScVal(amountBigInt, { type: "i128" }),
+  ];
+
+  return buildDelegatedInvocation({
+    contractId: usdcContractId,
+    functionName: "transfer",
+    args: transferArgs,
+    smartAccountId,
+    sessionSecret,
+    networkPassphrase,
+    rpcUrl,
+    simulate,
+  });
 }
 
 // ---------------------------------------------------------------------------

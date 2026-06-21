@@ -22,6 +22,8 @@ import {
   signaturesScVal,
   signDelegated,
   buildSessionPayment,
+  buildDelegatedInvocation,
+  buildStandardTransferPayment,
 } from "../src/wallet/sessionPayment.js";
 
 // ---------------------------------------------------------------------------
@@ -507,4 +509,256 @@ test("buildSessionPayment: injected simulate → tx XDR decodes to invokeHostFun
     "__check_auth",
     "Entry B rootInvocation is __check_auth",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Test 5: buildDelegatedInvocation — op-agnostic builder (underlying core)
+// ---------------------------------------------------------------------------
+
+// Fixture: USDC contract (testnet SAC from the spike findings)
+const USDC_CONTRACT_ID = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+// Fixture: payTo G-address (fresh trustlined recipient from the spike)
+const PAY_TO = "GBJFBJYNVBKAH7X2ZC6WWVSVUUVZZMLOWE4F7OL22W6ENJABI7I2H2ML";
+// Fixture: amount = 0.1 USDC (1_000_000 stroops per USDC)
+const TRANSFER_AMOUNT = 1_000_000n;
+
+/**
+ * Build a canned smart-account auth entry for a USDC.transfer invocation.
+ * Mimics what the Soroban host returns from simulating transfer(from=SA, to=payTo, amount).
+ */
+function makeTransferAuthEntry(nonce: bigint = 77665544n): xdr.SorobanAuthorizationEntry {
+  const rootInvocation = new xdr.SorobanAuthorizedInvocation({
+    function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+      new xdr.InvokeContractArgs({
+        contractAddress: Address.fromString(USDC_CONTRACT_ID).toScAddress(),
+        functionName: "transfer",
+        args: [
+          Address.fromString(SMART_ACCOUNT_ID).toScVal(),
+          Address.fromString(PAY_TO).toScVal(),
+          xdr.ScVal.scvI128(new xdr.Int128Parts({
+            hi: xdr.Int64.fromString("0"),
+            lo: xdr.Uint64.fromString(TRANSFER_AMOUNT.toString()),
+          })),
+        ],
+      }),
+    ),
+    subInvocations: [],
+  });
+
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+      new xdr.SorobanAddressCredentials({
+        address: Address.fromString(SMART_ACCOUNT_ID).toScAddress(),
+        nonce: xdr.Int64.fromString(nonce.toString()),
+        signatureExpirationLedger: 0,
+        signature: xdr.ScVal.scvVoid(),
+      }),
+    ),
+    rootInvocation,
+  });
+}
+
+test("buildDelegatedInvocation: parameterized op → tx XDR with correct contract + function + args + two-entry auth tree", async () => {
+  const EXPIRATION_BASE = 2000;
+  const NONCE = 77665544n;
+
+  const cannedAuth = makeTransferAuthEntry(NONCE);
+  const injectSimulate = async (_txXdr: string) => ({
+    auth: [cannedAuth],
+    latestLedger: EXPIRATION_BASE,
+  });
+
+  // Transfer args: from=SA, to=payTo, amount (i128)
+  const transferArgs: xdr.ScVal[] = [
+    Address.fromString(SMART_ACCOUNT_ID).toScVal(),
+    Address.fromString(PAY_TO).toScVal(),
+    xdr.ScVal.scvI128(new xdr.Int128Parts({
+      hi: xdr.Int64.fromString("0"),
+      lo: xdr.Uint64.fromString(TRANSFER_AMOUNT.toString()),
+    })),
+  ];
+
+  const txXdr = await buildDelegatedInvocation({
+    contractId: USDC_CONTRACT_ID,
+    functionName: "transfer",
+    args: transferArgs,
+    smartAccountId: SMART_ACCOUNT_ID,
+    sessionSecret: SESSION_SECRET,
+    networkPassphrase: NETWORK_PASSPHRASE,
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    simulate: injectSimulate,
+  });
+
+  assert.ok(typeof txXdr === "string" && txXdr.length > 0, "returned non-empty XDR string");
+
+  const tx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
+  assert.equal(tx.operations.length, 1, "tx has exactly 1 operation");
+  assert.equal(tx.operations[0].type, "invokeHostFunction", "operation type is invokeHostFunction");
+
+  const env = tx.toEnvelope();
+  const invokeOp = env.v1().tx().operations()[0].body().invokeHostFunctionOp();
+
+  // Verify host function: invokeContract calling USDC.transfer
+  const hostFn = invokeOp.hostFunction();
+  assert.equal(hostFn.switch().name, "hostFunctionTypeInvokeContract");
+  const contractArgs = hostFn.invokeContract();
+  const calledContract = Address.fromScAddress(contractArgs.contractAddress()).toString();
+  assert.equal(calledContract, USDC_CONTRACT_ID, "invokes USDC contract");
+  assert.equal(contractArgs.functionName().toString(), "transfer", 'function name is "transfer"');
+
+  const args = contractArgs.args();
+  assert.equal(args.length, 3, "transfer has 3 args: [from, to, amount]");
+
+  // Arg 0: from = smartAccountId
+  assert.equal(args[0].switch().name, "scvAddress", "arg[0] is Address (from)");
+  const fromAddr = Address.fromScAddress(args[0].address()).toString();
+  assert.equal(fromAddr, SMART_ACCOUNT_ID, "arg[0] from == smartAccountId");
+
+  // Arg 1: to = payTo
+  assert.equal(args[1].switch().name, "scvAddress", "arg[1] is Address (to)");
+  const toAddr = Address.fromScAddress(args[1].address()).toString();
+  assert.equal(toAddr, PAY_TO, "arg[1] to == payTo");
+
+  // Arg 2: amount (i128)
+  assert.equal(args[2].switch().name, "scvI128", "arg[2] is i128 (amount)");
+  const amountLo = BigInt(args[2].i128().lo().toString());
+  assert.equal(amountLo, TRANSFER_AMOUNT, "arg[2] amount matches");
+
+  // Verify two-entry auth tree
+  const authEntries = invokeOp.auth();
+  assert.equal(authEntries.length, 2, "op has 2 auth entries (Entry A + Entry B)");
+
+  // Entry A: smart account
+  const eA = authEntries[0];
+  assert.equal(eA.credentials().switch().name, "sorobanCredentialsAddress");
+  const addrA = Address.fromScAddress(eA.credentials().address().address()).toString();
+  assert.equal(addrA, SMART_ACCOUNT_ID, "Entry A is smart account");
+  assert.equal(
+    eA.credentials().address().signatureExpirationLedger(),
+    EXPIRATION_BASE + 100,
+    "Entry A expiration = latestLedger + 100",
+  );
+
+  // Entry B: session key / delegated
+  const eB = authEntries[1];
+  assert.equal(eB.credentials().switch().name, "sorobanCredentialsAddress");
+  const addrB = Address.fromScAddress(eB.credentials().address().address()).toString();
+  assert.equal(addrB, SESSION_PUBKEY, "Entry B is session pubkey");
+  assert.equal(
+    eB.rootInvocation().function().contractFn().functionName().toString(),
+    "__check_auth",
+    "Entry B rootInvocation is __check_auth",
+  );
+  // Entry B targets the smart account contract
+  const entryBContractAddr = Address.fromScAddress(
+    eB.rootInvocation().function().contractFn().contractAddress()
+  ).toString();
+  assert.equal(entryBContractAddr, SMART_ACCOUNT_ID, "Entry B __check_auth targets smart account");
+});
+
+// ---------------------------------------------------------------------------
+// Test 6: buildStandardTransferPayment — standard x402 exact-scheme transfer
+// ---------------------------------------------------------------------------
+
+test("buildStandardTransferPayment: USDC.transfer(SA → payTo, amount) with delegated two-entry auth tree", async () => {
+  const EXPIRATION_BASE = 3000;
+  const NONCE = 99001122n;
+  const AMOUNT_STR = "500000"; // 0.05 USDC
+
+  const cannedAuth = makeTransferAuthEntry(NONCE);
+  const injectSimulate = async (_txXdr: string) => ({
+    auth: [cannedAuth],
+    latestLedger: EXPIRATION_BASE,
+  });
+
+  const txXdr = await buildStandardTransferPayment({
+    usdcContractId: USDC_CONTRACT_ID,
+    smartAccountId: SMART_ACCOUNT_ID,
+    payTo: PAY_TO,
+    amount: AMOUNT_STR,
+    sessionSecret: SESSION_SECRET,
+    networkPassphrase: NETWORK_PASSPHRASE,
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    simulate: injectSimulate,
+  });
+
+  assert.ok(typeof txXdr === "string" && txXdr.length > 0, "returned non-empty XDR string");
+
+  const tx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
+  assert.equal(tx.operations.length, 1, "tx has exactly 1 operation");
+  assert.equal(tx.operations[0].type, "invokeHostFunction", "operation is invokeHostFunction");
+
+  const env = tx.toEnvelope();
+  const invokeOp = env.v1().tx().operations()[0].body().invokeHostFunctionOp();
+
+  // Verify: invokeContract targeting USDC, function "transfer"
+  const hostFn = invokeOp.hostFunction();
+  assert.equal(hostFn.switch().name, "hostFunctionTypeInvokeContract");
+  const contractArgs = hostFn.invokeContract();
+  const calledContract = Address.fromScAddress(contractArgs.contractAddress()).toString();
+  assert.equal(calledContract, USDC_CONTRACT_ID, "calls USDC contract");
+  assert.equal(contractArgs.functionName().toString(), "transfer", 'function is "transfer"');
+
+  // Verify args: [from=SA (Address), to=payTo (Address), amount (i128)]
+  const args = contractArgs.args();
+  assert.equal(args.length, 3, "transfer takes 3 args");
+
+  assert.equal(args[0].switch().name, "scvAddress", "arg[0] is Address");
+  const fromAddr = Address.fromScAddress(args[0].address()).toString();
+  assert.equal(fromAddr, SMART_ACCOUNT_ID, "arg[0] from == smartAccountId");
+
+  assert.equal(args[1].switch().name, "scvAddress", "arg[1] is Address");
+  const toAddr = Address.fromScAddress(args[1].address()).toString();
+  assert.equal(toAddr, PAY_TO, "arg[1] to == payTo");
+
+  assert.equal(args[2].switch().name, "scvI128", "arg[2] is i128");
+  const amountI128Lo = BigInt(args[2].i128().lo().toString());
+  assert.equal(amountI128Lo, BigInt(AMOUNT_STR), "arg[2] amount matches (low bits)");
+  const amountI128Hi = BigInt(args[2].i128().hi().toString());
+  assert.equal(amountI128Hi, 0n, "arg[2] amount hi bits are 0 (small amount)");
+
+  // Verify two-entry auth tree (same structure as adapter.pay)
+  const authEntries = invokeOp.auth();
+  assert.equal(authEntries.length, 2, "op has 2 auth entries: Entry A (SA) + Entry B (session)");
+
+  // Entry A: smart account credential
+  const eA = authEntries[0];
+  assert.equal(eA.credentials().switch().name, "sorobanCredentialsAddress");
+  const eAAddr = Address.fromScAddress(eA.credentials().address().address()).toString();
+  assert.equal(eAAddr, SMART_ACCOUNT_ID, "Entry A address is smart account");
+  assert.equal(
+    eA.credentials().address().signatureExpirationLedger(),
+    EXPIRATION_BASE + 100,
+    "Entry A expirationLedger = latestLedger + 100",
+  );
+  // Entry A signature is the Signatures map with the Delegated session signer
+  const sigA = eA.credentials().address().signature();
+  assert.equal(sigA.switch().name, "scvVec", "Entry A signature is Signatures scvVec");
+  const sigAMap = sigA.vec()![0].map()!;
+  assert.equal(sigAMap.length, 1, "Signatures map has 1 Delegated entry");
+  const sigAKeyVec = sigAMap[0].key().vec()!;
+  assert.equal(sigAKeyVec[0].sym().toString(), "Delegated", "Signatures key is Delegated");
+  const delegatedSignerAddr = Address.fromScAddress(sigAKeyVec[1].address()).toString();
+  assert.equal(delegatedSignerAddr, SESSION_PUBKEY, "Delegated signer is session pubkey");
+
+  // Entry B: session-key credential with __check_auth rootInvocation
+  const eB = authEntries[1];
+  assert.equal(eB.credentials().switch().name, "sorobanCredentialsAddress");
+  const eBAddr = Address.fromScAddress(eB.credentials().address().address()).toString();
+  assert.equal(eBAddr, SESSION_PUBKEY, "Entry B address is session pubkey");
+  assert.equal(
+    eB.rootInvocation().function().contractFn().functionName().toString(),
+    "__check_auth",
+    "Entry B rootInvocation is __check_auth",
+  );
+  const eBContractAddr = Address.fromScAddress(
+    eB.rootInvocation().function().contractFn().contractAddress()
+  ).toString();
+  assert.equal(eBContractAddr, SMART_ACCOUNT_ID, "Entry B __check_auth targets smart account");
+
+  // Verify the __check_auth arg (the SA signature payload hash — 32 bytes)
+  const checkAuthArgs = eB.rootInvocation().function().contractFn().args();
+  assert.equal(checkAuthArgs.length, 1, "__check_auth has 1 arg");
+  assert.equal(checkAuthArgs[0].switch().name, "scvBytes", "__check_auth arg is bytes");
+  assert.equal(checkAuthArgs[0].bytes().length, 32, "__check_auth arg is 32-byte hash");
 });
