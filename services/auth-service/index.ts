@@ -320,6 +320,7 @@ type PublicUser = {
   apiKey: string | null;
   role: string;
   paywallEnabled: boolean;
+  mcpEarlyAccess: boolean;
   createdAt?: Date;
 };
 
@@ -334,6 +335,7 @@ function shapeUser(u: {
   apiKey: string | null;
   role: string;
   paywallEnabled: boolean;
+  mcpEarlyAccess: boolean;
   createdAt?: Date;
 }): PublicUser {
   return {
@@ -349,6 +351,7 @@ function shapeUser(u: {
     apiKey: u.apiKey,
     role: u.role,
     paywallEnabled: u.paywallEnabled,
+    mcpEarlyAccess: u.mcpEarlyAccess,
     createdAt: u.createdAt,
   };
 }
@@ -1268,7 +1271,7 @@ app.get('/api/v1/admin/creators', adminGuard, async (_req: AuthedRequest, res: R
     select: {
       id: true, email: true, domain: true, stellar_address: true,
       emailVerified: true, pricePerRequest: true, platformFee: true, apiKey: true,
-      paywallEnabled: true, createdAt: true, role: true,
+      paywallEnabled: true, mcpEarlyAccess: true, createdAt: true, role: true,
       events: {
         where: { createdAt: { gte: since7d } },
         select: { type: true, amountUsdc: true },
@@ -1390,6 +1393,44 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
 });
 
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8088';
+
+// Admin: grant or revoke per-user MCP early-access flag (invitation control).
+// Body: { userId?: number; email?: string; grant: boolean }
+// Resolves the user by userId (preferred) or email. Also syncs McpWaitlist.invited.
+app.post('/api/v1/admin/mcp/early-access', adminGuard, async (req: AuthedRequest, res: Response) => {
+  const { userId, email, grant } = req.body ?? {};
+  if (typeof grant !== 'boolean') {
+    return res.status(400).json({ error: '`grant` (boolean) is required' });
+  }
+  if (userId == null && typeof email !== 'string') {
+    return res.status(400).json({ error: 'Provide `userId` or `email`' });
+  }
+
+  let user: { id: number; email: string } | null = null;
+  try {
+    if (userId != null) {
+      user = await prisma.user.findUnique({ where: { id: Number(userId) }, select: { id: true, email: true } });
+    } else {
+      user = await prisma.user.findUnique({ where: { email: (email as string).trim().toLowerCase() }, select: { id: true, email: true } });
+    }
+  } catch (err) {
+    console.error('mcp/early-access lookup error:', err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  try {
+    await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: grant } });
+    // Best-effort: keep McpWaitlist.invited in sync if the user's email appears there.
+    await prisma.mcpWaitlist.updateMany({ where: { email: user.email }, data: { invited: grant } }).catch(() => {});
+    await logAdminAction(req.userId!, 'mcp_early_access', String(user.id), { grant });
+    res.json({ ok: true, userId: user.id, email: user.email, mcpEarlyAccess: grant });
+  } catch (err) {
+    console.error('mcp/early-access update error:', err instanceof Error ? err.message : err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Admin: MCP early-access waitlist.
 app.get('/api/v1/admin/mcp-waitlist', adminGuard, async (_req: AuthedRequest, res: Response) => {
