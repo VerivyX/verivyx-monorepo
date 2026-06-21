@@ -42,15 +42,19 @@ export type WalletRegistryOps = {
 
 type McpUser =
   | { kind: "oauth"; sub: string }
+  | { kind: "dashboard"; sub: string }
   | { kind: "key"; label: string };
 
 /**
- * Extracts the OAuth sub from the request or sends a 403 and returns null.
+ * Extracts the user sub from the request for wallet endpoints.
+ * Accepts kind:"oauth" (Hydra JWT) and kind:"dashboard" (auth-service HS256 token) —
+ * both carry a real user sub = String(user.id).
+ * Rejects kind:"key" (static API key has no user identity) with 403.
  * Call at the start of every wallet endpoint handler.
  */
 function requireOAuthSub(req: Request, res: Response): string | null {
   const user = (req as Request & { mcpUser?: McpUser }).mcpUser;
-  if (!user || user.kind !== "oauth") {
+  if (!user || user.kind === "key") {
     res.status(403).json({ error: "wallet endpoints require user OAuth" });
     return null;
   }

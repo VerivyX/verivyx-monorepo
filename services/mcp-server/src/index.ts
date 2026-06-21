@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 
-import { requireInternalToken, requireMcpAuth } from "./auth.js";
+import { requireInternalToken, requireMcpAuth, requireUserAuth } from "./auth.js";
 import { createPaymentService } from "./chains/payments.js";
 import { chooseStellarPaymentMode } from "./chains/routing.js";
 import { getConfig } from "./config.js";
@@ -205,8 +205,13 @@ async function main(): Promise<void> {
   app.delete("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
 
   // Wallet lifecycle endpoints (Plan 3 T1): session-signer, binding, status, revoke.
-  // Mounted behind requireMcpAuth; handlers reject non-oauth callers with 403.
-  if (cfg.oauth) {
+  // Mounted behind requireUserAuth which accepts Hydra OAuth JWTs (agents) OR the
+  // dashboard auth-service HS256 token (browser). Static API keys are rejected (403).
+  // Note: cfg.oauth is not required — dashboard auth alone is sufficient when
+  // HYDRA_ISSUER is unset but JWT_SECRET is set. Mount unconditionally so the
+  // dashboard path always works; requireUserAuth returns 401 when neither secret
+  // is configured.
+  {
     const walletRouter = buildWalletRouter({
       getBinding,
       getWalletStatus,
@@ -215,8 +220,8 @@ async function main(): Promise<void> {
         bindWallet(sub, smartAccount, budgetAtomic, expiryLedger),
       deleteBinding,
     });
-    app.use("/wallet", requireMcpAuth, walletRouter);
-    logger.info("wallet endpoints mounted at /wallet (OAuth only)");
+    app.use("/wallet", requireUserAuth, walletRouter);
+    logger.info("wallet endpoints mounted at /wallet (Hydra OAuth or dashboard token)");
   }
 
   // Liveness — no secrets.

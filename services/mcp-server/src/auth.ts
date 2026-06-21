@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { jwtVerify } from "jose";
 
 import { matchApiKey } from "./apiKeys.js";
 import { getConfig } from "./config.js";
@@ -70,6 +71,70 @@ export async function requireMcpAuth(req: Request, res: Response, next: NextFunc
   }
 
   // 4. Neither auth method succeeded.
+  if (cfg.oauth) {
+    res.set("WWW-Authenticate", wwwAuthenticateValue(prmUrl));
+  }
+  res.status(401).json({ error: "unauthorized" });
+}
+
+/**
+ * User-auth middleware for the /wallet/* endpoints.
+ * Accepts EITHER:
+ *   1. A Hydra-issued Bearer JWT (Authorization: Bearer <token>) — validated via JWKS.
+ *      On success → req.mcpUser = { kind:"oauth", sub: claims.sub } (String(user.id))
+ *   2. A dashboard auth-service HS256 JWT (Authorization: Bearer <token>, audience "creator")
+ *      — validated with JWT_SECRET via jose. Requires claim id:number.
+ *      On success → req.mcpUser = { kind:"dashboard", sub: String(payload.id) }
+ *
+ * Static API keys (X-Verivyx-MCP-Key) are NOT accepted here — they carry no user identity.
+ * If neither path verifies → 401.
+ *
+ * NOTE: do NOT call this on the /mcp pay path — use requireMcpAuth there.
+ */
+export async function requireUserAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const cfg = getConfig();
+
+  // 1. Extract bearer token.
+  const bearer = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+
+  if (bearer) {
+    // 2a. Try Hydra OAuth JWT (RS256 / JWKS).
+    if (verifier) {
+      try {
+        const claims = await verifier(bearer);
+        (req as Request & { mcpUser?: { kind: "oauth"; sub: string } }).mcpUser = {
+          kind: "oauth",
+          sub: claims.sub,
+        };
+        next();
+        return;
+      } catch {
+        // Fall through to dashboard token check.
+      }
+    }
+
+    // 2b. Try dashboard auth-service HS256 token.
+    if (cfg.dashboardJwtSecret) {
+      try {
+        const key = new TextEncoder().encode(cfg.dashboardJwtSecret);
+        const { payload } = await jwtVerify(bearer, key, { audience: "creator" });
+        if (typeof payload["id"] !== "number") {
+          throw new Error("missing numeric id claim");
+        }
+        const sub = String(payload["id"]);
+        (req as Request & { mcpUser?: { kind: "dashboard"; sub: string } }).mcpUser = {
+          kind: "dashboard",
+          sub,
+        };
+        next();
+        return;
+      } catch {
+        // Fall through to 401.
+      }
+    }
+  }
+
+  // 3. Neither auth method succeeded.
   if (cfg.oauth) {
     res.set("WWW-Authenticate", wwwAuthenticateValue(prmUrl));
   }

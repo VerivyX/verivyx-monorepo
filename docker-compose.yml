@@ -354,6 +354,10 @@ services:
       - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
       # Wallet binding store — shared paywall_db (schema owner: auth-service).
       - DATABASE_URL=postgresql://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-paywall_db}?schema=public
+      # Shared auth-service HS256 secret. When set, /wallet/* also accepts the dashboard
+      # paywall_token (audience "creator", claim id:number → sub=String(id)) so the
+      # browser dashboard can create wallet bindings without a Hydra OAuth token.
+      - JWT_SECRET=${JWT_SECRET:-}
       # AES-256-GCM key for encrypting session signer secrets at rest.
       # If unset the wallet-binding feature is disabled (functions throw a clear error).
       # Generate: openssl rand -hex 32

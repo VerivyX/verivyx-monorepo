@@ -236,6 +236,10 @@ export type AppConfig = {
   readonly internalToken: string;
   /** OAuth 2.1 / Hydra resource server config. Present only when HYDRA_ISSUER is set. */
   readonly oauth: { readonly issuer: string; readonly jwksUrl: string; readonly resourceUri: string } | undefined;
+  /** Shared HS256 secret from auth-service (JWT_SECRET). When set, /wallet/* also accepts
+   * dashboard paywall_token JWTs (audience "creator", claim id:number → sub=String(id)).
+   * When unset, only the Hydra OAuth path works for /wallet/*. */
+  readonly dashboardJwtSecret: string | undefined;
   readonly feeUsdc: string;
   readonly stellarSecretKey: string;
   readonly stellar: StellarChainConfig;
@@ -331,6 +335,7 @@ export function getConfig(): AppConfig {
       .map(o => o.trim().toLowerCase())
       .filter(Boolean),
     oauth,
+    dashboardJwtSecret: optionalEnv("JWT_SECRET"),
     payAdapterId: optionalEnv("VERIVYX_PAY_ADAPTER_ID"),
   };
 
