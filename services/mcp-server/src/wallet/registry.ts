@@ -23,6 +23,17 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { Pool } from "pg";
 
+/**
+ * pg returns NUMERIC/DECIMAL columns as decimal strings (e.g. Prisma `Decimal`
+ * with scale 30 → "0.000000000000000000000000000000"). budgetAtomic stores an
+ * INTEGER atomic-USDC value, so `BigInt(...)` on the raw string throws on the
+ * fractional part. Strip the fraction (always zero) before converting.
+ */
+function numericToBigInt(v: unknown): bigint {
+  const intPart = String(v).split(".")[0];
+  return BigInt(intPart === "" || intPart === "-0" || intPart === "-" ? "0" : intPart);
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -204,8 +215,8 @@ export async function getBinding(
     smartAccount: row.smartAccount as string,
     sessionSignerPubkey: row.sessionSignerPubkey as string,
     sessionSignerSecret,
-    budgetAtomic: BigInt(row.budgetAtomic as string),
-    expiryLedger: BigInt(row.expiryLedger as string),
+    budgetAtomic: numericToBigInt(row.budgetAtomic),
+    expiryLedger: numericToBigInt(row.expiryLedger),
   };
 }
 
@@ -260,8 +271,8 @@ export async function getWalletStatus(
     oauthSub: row.oauthSub as string,
     smartAccount: row.smartAccount as string,
     sessionSignerPubkey: row.sessionSignerPubkey as string,
-    budgetAtomic: BigInt(row.budgetAtomic as string),
-    expiryLedger: BigInt(row.expiryLedger as string),
+    budgetAtomic: numericToBigInt(row.budgetAtomic),
+    expiryLedger: numericToBigInt(row.expiryLedger),
   };
 }
 
