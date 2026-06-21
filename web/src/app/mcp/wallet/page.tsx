@@ -34,6 +34,7 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowLeft,
+  Bell,
   CheckCircle,
   Coins,
   ExternalLink,
@@ -44,13 +45,14 @@ import {
   RefreshCw,
   Shield,
   ShieldOff,
+  Sparkles,
   Timer,
   Wallet,
   X,
   Zap,
 } from 'lucide-react';
 
-import { clearSession, getStoredUser, walletApi, type WalletStatusResponse } from '@/lib/api';
+import { api, clearSession, getStoredUser, walletApi, type WalletStatusResponse } from '@/lib/api';
 import {
   connectWallet,
   createOrConnectAccount,
@@ -69,6 +71,14 @@ const STELLAR_RPC_URL =
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type PageView = 'connect' | 'delegate' | 'manage';
+
+/**
+ * Three possible early-access states:
+ *   'loading'  — still fetching /auth/me
+ *   'waitlist' — user does NOT have mcpEarlyAccess; show join-waitlist view
+ *   'granted'  — user has mcpEarlyAccess; show connect/delegate/manage flow
+ */
+type EarlyAccessState = 'loading' | 'waitlist' | 'granted';
 
 interface ActiveBinding {
   smartAccount: string;
@@ -113,11 +123,53 @@ function truncateAddr(addr: string): string {
 export default function WalletPage() {
   const router = useRouter();
 
-  // ── Auth guard ──────────────────────────────────────────────────────────────
+  // ── Early-access gate ───────────────────────────────────────────────────────
+  // We call api.me() on every mount to get a FRESH user record (not relying on
+  // the possibly-stale getStoredUser() cache for the mcpEarlyAccess flag).
+  const [earlyAccess, setEarlyAccess] = useState<EarlyAccessState>('loading');
+  const [waitlistDone, setWaitlistDone] = useState(false);
+  const [waitlistBusy, setWaitlistBusy] = useState(false);
+  const [waitlistError, setWaitlistError] = useState<string | null>(null);
+
+  // Cached user email for the waitlist join button.
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
   useEffect(() => {
-    const stored = getStoredUser();
-    if (!stored) router.replace('/login');
+    let cancelled = false;
+    async function checkEarlyAccess() {
+      // Fast path: check stored token first.
+      const stored = getStoredUser();
+      if (!stored) {
+        router.replace('/login');
+        return;
+      }
+      try {
+        const { user } = await api.me();
+        if (cancelled) return;
+        setUserEmail(user.email);
+        setEarlyAccess(user.mcpEarlyAccess === true ? 'granted' : 'waitlist');
+      } catch {
+        // Network error or 401 — redirect to login.
+        if (!cancelled) router.replace('/login');
+      }
+    }
+    checkEarlyAccess();
+    return () => { cancelled = true; };
   }, [router]);
+
+  const handleJoinWaitlist = useCallback(async () => {
+    if (!userEmail || waitlistBusy) return;
+    setWaitlistError(null);
+    setWaitlistBusy(true);
+    try {
+      await api.joinMcpWaitlist(userEmail);
+      setWaitlistDone(true);
+    } catch (err) {
+      setWaitlistError(err instanceof Error ? err.message : 'Failed to join waitlist. Try again.');
+    } finally {
+      setWaitlistBusy(false);
+    }
+  }, [userEmail, waitlistBusy]);
 
   // ── Global state ────────────────────────────────────────────────────────────
   const [view, setView] = useState<PageView>('connect');
@@ -176,6 +228,9 @@ export default function WalletPage() {
 
   // ── On load: check wallet status ────────────────────────────────────────────
   useEffect(() => {
+    // Skip wallet status check if early-access not yet resolved or not granted.
+    if (earlyAccess !== 'granted') return;
+
     let cancelled = false;
     async function checkStatus() {
       setStatusLoading(true);
@@ -201,7 +256,13 @@ export default function WalletPage() {
           setSmartAccountAddr(status.smartAccount);
           setView('manage');
         }
-      } catch {
+      } catch (err) {
+        // 403 early_access_required: a race between EA grant revocation and page load.
+        // Fall back to the waitlist view so the user is never stranded.
+        if (err instanceof Error && err.message === 'early_access_required') {
+          if (!cancelled) setEarlyAccess('waitlist');
+          return;
+        }
         // 401 expected until auth reconciliation — silently stay on connect view.
         // Do not surface as an error banner on initial load.
       } finally {
@@ -210,7 +271,7 @@ export default function WalletPage() {
     }
     checkStatus();
     return () => { cancelled = true; };
-  }, [fetchCurrentLedger]);
+  }, [earlyAccess, fetchCurrentLedger]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -301,6 +362,11 @@ export default function WalletPage() {
       showToast('Delegation active — MCP can now pay on your behalf');
       setView('manage');
     } catch (err) {
+      // 403 early_access_required: EA was revoked mid-flow; fall back to waitlist view.
+      if (err instanceof Error && err.message === 'early_access_required') {
+        setEarlyAccess('waitlist');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Delegation failed');
     } finally {
       setDelegating(false);
@@ -327,6 +393,11 @@ export default function WalletPage() {
       showToast('Delegation revoked — session key deactivated');
       setView('connect');
     } catch (err) {
+      // 403 early_access_required: fall back to waitlist view.
+      if (err instanceof Error && err.message === 'early_access_required') {
+        setEarlyAccess('waitlist');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Revoke failed');
     } finally {
       setRevoking(false);
@@ -340,12 +411,132 @@ export default function WalletPage() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  if (statusLoading) {
+  // ── Loading: early-access check or wallet status ───────────────────────────
+  if (earlyAccess === 'loading' || (earlyAccess === 'granted' && statusLoading)) {
     return (
       <div className="grid min-h-screen place-items-center bg-white text-[var(--color-ink-500)]">
         <div className="flex items-center gap-3 text-sm">
-          <RefreshCw size={16} className="animate-spin" /> Checking wallet status…
+          <RefreshCw size={16} className="animate-spin" />
+          {earlyAccess === 'loading' ? 'Checking access…' : 'Checking wallet status…'}
         </div>
+      </div>
+    );
+  }
+
+  // ── Waitlist view: user does not have mcpEarlyAccess ───────────────────────
+  if (earlyAccess === 'waitlist') {
+    return (
+      <div className="min-h-screen bg-[var(--color-cream-50)]">
+        {/* Top bar (same as granted flow) */}
+        <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
+          <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
+            <div className="flex items-center gap-3">
+              <LogoMark size={32} />
+              <div>
+                <p className="text-sm font-semibold tracking-tight">Verivyx</p>
+                <p className="text-xs text-[var(--color-ink-500)]">MCP wallet</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Link href="/dashboard" className="btn-ghost text-sm">
+                <ArrowLeft size={14} /> Dashboard
+              </Link>
+              <button onClick={handleLogout} className="btn-primary text-sm">
+                <LogOut size={14} /> Logout
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="mx-auto max-w-5xl px-6 py-10">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+              Non-custodial · Soroban Testnet
+            </p>
+            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Agent Wallet</h1>
+          </div>
+
+          <div className="mt-10 grid grid-cols-1 gap-6 xl:grid-cols-3">
+            {/* Main card */}
+            <div className="surface-card xl:col-span-2 p-8">
+              <div className="flex items-center gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--color-stellar-yellow-soft)] text-[var(--color-ink-900)]">
+                  <Sparkles size={18} />
+                </span>
+                <div>
+                  <span className="tag-chip bg-[var(--color-stellar-violet-soft)] text-[var(--color-ink-900)] text-xs">
+                    Early access
+                  </span>
+                </div>
+              </div>
+
+              <h2 className="mt-5 text-xl font-semibold tracking-tight">
+                Non-custodial agent payments are in early access
+              </h2>
+              <p className="mt-3 text-sm text-[var(--color-ink-500)]">
+                The MCP wallet — link your Stellar smart account so the Verivyx MCP can pay x402
+                resources on your behalf — is currently available to early-access members only.
+                Join the waitlist and we&apos;ll enable your account as soon as a spot opens.
+              </p>
+
+              <div className="mt-8">
+                {waitlistDone ? (
+                  <div className="flex items-start gap-3 rounded-xl border border-[var(--color-stellar-mint)]/30 bg-[var(--color-stellar-mint)]/10 px-4 py-4">
+                    <CheckCircle size={18} className="mt-0.5 shrink-0 text-[var(--color-stellar-mint)]" />
+                    <div>
+                      <p className="text-sm font-semibold">You&apos;re on the waitlist</p>
+                      <p className="mt-1 text-xs text-[var(--color-ink-500)]">
+                        We&apos;ll enable your account soon. Check your inbox for a confirmation email.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <button
+                      onClick={handleJoinWaitlist}
+                      disabled={waitlistBusy}
+                      className="btn-yellow self-start disabled:opacity-60"
+                    >
+                      {waitlistBusy ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Bell size={16} />
+                      )}
+                      {waitlistBusy ? 'Joining…' : 'Join the waitlist'}
+                    </button>
+                    {waitlistError && (
+                      <p className="text-xs text-[var(--color-stellar-rose)]">{waitlistError}</p>
+                    )}
+                    {userEmail && (
+                      <p className="text-xs text-[var(--color-ink-400)]">
+                        We&apos;ll notify <span className="font-medium">{userEmail}</span> when your account is enabled.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Info sidebar */}
+            <div className="flex flex-col gap-4">
+              <InfoCard
+                icon={<Shield size={16} />}
+                title="Non-custodial"
+                body="Funds stay in your smart account. Verivyx only signs payments you explicitly authorize via a budget cap."
+              />
+              <InfoCard
+                icon={<KeyRound size={16} />}
+                title="Revocable any time"
+                body="Once granted, the delegation has an on-chain expiry and can be revoked with one transaction. No waiting period."
+              />
+              <InfoCard
+                icon={<Coins size={16} />}
+                title="x402 native"
+                body="Built on the open HTTP 402 standard. Pay for any x402 resource across Stellar, Base, and Solana."
+              />
+            </div>
+          </div>
+        </main>
       </div>
     );
   }

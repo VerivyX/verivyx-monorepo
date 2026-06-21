@@ -16,6 +16,8 @@ export type CreatorUser = {
   paywallEnabled: boolean;
   createdAt?: string;
   role?: 'ADMIN' | 'CREATOR';
+  /** True once the user has been granted MCP non-custodial wallet early access. */
+  mcpEarlyAccess?: boolean;
 };
 
 export type AdminStats = {
@@ -237,6 +239,16 @@ export const api = {
     request<{ status: string }>(`/api/v1/mcp-waitlist`, {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+
+  // Authenticated variant — used from the dashboard where the user is already logged in.
+  // Passes an empty turnstileToken; the backend skips validation when TURNSTILE_SECRET
+  // is not configured (dev/staging). In production this may require a backend update
+  // to accept an auth-service JWT as an alternative to the Turnstile token.
+  joinMcpWaitlist: (email: string) =>
+    request<{ status: string }>(`/api/v1/mcp-waitlist`, {
+      method: 'POST',
+      body: JSON.stringify({ email, turnstileToken: '' }),
     }),
 
   adminMcpWaitlist: () =>
