@@ -1,6 +1,7 @@
 import type { x402Client } from "@x402/core/client";
 
 import { ExactStellarScheme } from "../core/stellar/exact/client/scheme.js";
+import { NonCustodialExactStellarScheme } from "../core/stellar/exact/client/nonCustodialScheme.js";
 import { createEd25519Signer } from "../core/stellar/signer.js";
 import type { StellarChainConfig } from "../config.js";
 
@@ -16,6 +17,29 @@ export function setupStellarRail(client: x402Client, config: StellarChainConfig,
     new ExactStellarScheme(signer, config.rpcUrl ? { url: config.rpcUrl } : undefined),
   );
   return { address: signer.address };
+}
+
+/**
+ * Build a NON-CUSTODIAL Stellar rail: the caller pays the resource from THEIR OWN
+ * smart account via the delegated session key (standard x402). No MCP-owned signer
+ * is involved on this path. `address` reports the caller's smart account (the payer)
+ * for diagnostics.
+ */
+export function setupStellarRailNonCustodial(
+  client: x402Client,
+  config: StellarChainConfig,
+  smartAccountId: string,
+  sessionSecret: string,
+): StellarRail {
+  client.register(
+    "stellar:*",
+    new NonCustodialExactStellarScheme({
+      smartAccountId,
+      sessionSecret,
+      rpcConfig: config.rpcUrl ? { url: config.rpcUrl } : undefined,
+    }),
+  );
+  return { address: smartAccountId };
 }
 
 export function stellarInfo(config: StellarChainConfig, address: string, feeUsdc: string): Record<string, unknown> {

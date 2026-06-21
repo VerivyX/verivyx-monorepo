@@ -7,10 +7,12 @@ import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middlewar
 
 import { requireInternalToken, requireMcpAuth } from "./auth.js";
 import { createPaymentService } from "./chains/payments.js";
+import { chooseStellarPaymentMode } from "./chains/routing.js";
 import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildProtectedResourceMetadata } from "./oauth.js";
+import { getBinding } from "./wallet/registry.js";
 
 async function main(): Promise<void> {
   const cfg = getConfig();
@@ -110,12 +112,59 @@ async function main(): Promise<void> {
           delete owners[transport.sessionId];
         }
       };
-      // Internal per-session wallet override (e.g. the playground pool). Gated by
-      // the same API key; pays from the caller's session wallet, Stellar-only.
+      // Choose the per-request payment service. OAuth callers pay non-custodially
+      // from their own linked wallet; static-key callers keep the legacy paths
+      // (playground per-session override via x-session-stellar-secret, else the
+      // custodial MCP wallet). See chooseStellarPaymentMode for all branches.
       const sessionSecret = (req.headers["x-session-stellar-secret"] as string | undefined)?.trim();
-      const sessionPayments = sessionSecret
-        ? await createPaymentService({ stellarSecretKey: sessionSecret, stellarOnly: true })
-        : payments;
+      const mcpUser = (req as Request & {
+        mcpUser?: { kind: "oauth"; sub: string } | { kind: "key"; label: string };
+      }).mcpUser;
+
+      // OAuth callers: look up their wallet binding (impure). getBinding throws if
+      // MCP_WALLET_ENC_KEY is unset → treat as "no binding" and fall back safely so
+      // the request never crashes.
+      let hasBinding = false;
+      let binding: Awaited<ReturnType<typeof getBinding>> = null;
+      if (mcpUser?.kind === "oauth") {
+        try {
+          binding = await getBinding(mcpUser.sub);
+          hasBinding = binding !== null;
+        } catch (error) {
+          logger.warn(
+            { err: String(error), sub: mcpUser.sub },
+            "wallet binding lookup failed; treating caller as no_wallet_linked",
+          );
+          hasBinding = false;
+        }
+      }
+
+      const mode = chooseStellarPaymentMode(mcpUser, hasBinding, !!sessionSecret);
+
+      let sessionPayments;
+      switch (mode) {
+        case "noncustodial":
+          sessionPayments = await createPaymentService({
+            nonCustodial: {
+              smartAccountId: binding!.smartAccount,
+              sessionSecret: binding!.sessionSignerSecret,
+            },
+          });
+          break;
+        case "no_wallet_linked":
+          sessionPayments = await createPaymentService({ noWalletLinked: true });
+          break;
+        case "session_override":
+          sessionPayments = await createPaymentService({
+            stellarSecretKey: sessionSecret,
+            stellarOnly: true,
+          });
+          break;
+        case "custodial":
+        default:
+          sessionPayments = payments;
+          break;
+      }
       const server = buildMcpServer(sessionPayments);
       await server.connect(transport);
     } else {

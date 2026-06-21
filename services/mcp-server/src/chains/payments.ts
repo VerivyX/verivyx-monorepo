@@ -6,7 +6,7 @@ import { addDecimalStrings, atomsToDecimalString } from "../money.js";
 import { chargeStellarFee } from "../fee/stellar.js";
 import type { FeeReceipt } from "../fee/types.js";
 import { assertPublicHttpsUrl } from "../ssrf.js";
-import { setupStellarRail, stellarInfo } from "./stellar.js";
+import { setupStellarRail, setupStellarRailNonCustodial, stellarInfo } from "./stellar.js";
 import { setupEvmRail, type EvmRail } from "./evm.js";
 import { chargeSolanaFee, setupSolanaRail, solanaInfo, type SolanaRail } from "./solana.js";
 
@@ -112,15 +112,42 @@ function networkOf(receipt: unknown): string | null {
 export async function createPaymentService(opts?: {
   stellarSecretKey?: string;
   stellarOnly?: boolean;
+  /**
+   * Non-custodial mode: pay the resource from the caller's OWN smart account via the
+   * delegated session key (standard x402). Registers the non-custodial Stellar rail
+   * instead of the custodial one; Stellar-only (the binding is a Stellar smart account).
+   * The custodial service FEE is SKIPPED on this path (it would debit the wrong wallet)
+   * and marked `non_custodial_fee_pending` — the real non-custodial fee is a later task.
+   */
+  nonCustodial?: { smartAccountId: string; sessionSecret: string };
+  /**
+   * OAuth caller with no linked wallet: a Stellar `pay` must NOT silently use the
+   * custodial MCP wallet — it returns a structured `no_wallet_linked` error instead.
+   * `quote` still works so the caller can see what a payment would cost.
+   */
+  noWalletLinked?: boolean;
 }): Promise<PaymentService> {
   const cfg = getConfig();
   const stellarSecret = opts?.stellarSecretKey ?? cfg.stellarSecretKey;
+  const isNonCustodial = !!opts?.nonCustodial;
+  const noWalletLinked = !!opts?.noWalletLinked;
   const client = new x402Client();
 
-  const stellarRail = setupStellarRail(client, cfg.stellar, stellarSecret);
+  // Non-custodial is Stellar-only (the binding is a Stellar smart account); when set,
+  // treat like stellarOnly (no EVM/Solana rails on this path).
+  const stellarOnly = opts?.stellarOnly || isNonCustodial;
+
+  const stellarRail = isNonCustodial
+    ? setupStellarRailNonCustodial(
+        client,
+        cfg.stellar,
+        opts!.nonCustodial!.smartAccountId,
+        opts!.nonCustodial!.sessionSecret,
+      )
+    : setupStellarRail(client, cfg.stellar, stellarSecret);
   let evmRail: EvmRail | null = null;
   let solanaRail: SolanaRail | null = null;
-  if (!opts?.stellarOnly) {
+  if (!stellarOnly) {
     if (cfg.evm) {
       evmRail = setupEvmRail(client, cfg.evm);
     }
@@ -194,6 +221,32 @@ export async function createPaymentService(opts?: {
 
   async function pay(input: PayInput): Promise<PayResult> {
     await assertUrlAllowed(input.url);
+
+    // OAuth caller without a linked wallet: never pay a Stellar resource from the
+    // custodial MCP wallet. Probe the resource; if it requires a Stellar payment,
+    // surface a structured `no_wallet_linked` error so the caller links a wallet.
+    if (noWalletLinked) {
+      const q = await quote(input);
+      if (q.paymentRequired && (q.chain === null || q.chain.startsWith("stellar:"))) {
+        return {
+          url: input.url,
+          method: input.method,
+          status: 402,
+          ok: false,
+          paymentMade: false,
+          chain: q.chain,
+          paymentReceipt: null,
+          feeReceipt: null,
+          feeError: "no_wallet_linked",
+          response: {
+            error: "no_wallet_linked",
+            message:
+              "No wallet is linked to your account. Connect a Verivyx wallet in the dashboard to pay from your own smart account.",
+          },
+        };
+      }
+    }
+
     const response = await fetchWithPayment(input.url, buildInit(input));
     const rawBody = await response.text();
     const parsedBody = tryParseBody(rawBody, response.headers.get("content-type"));
@@ -211,7 +264,13 @@ export async function createPaymentService(opts?: {
     let feeError: string | null = null;
 
     if (paymentMade && response.ok) {
-      if (!chain) {
+      if (isNonCustodial) {
+        // Do NOT charge the custodial fee on the non-custodial path — chargeFee debits
+        // the MCP's own wallet, which is wrong when the resource was paid from the
+        // caller's smart account. The real non-custodial fee is a separate task.
+        feeReceipt = null;
+        feeError = "non_custodial_fee_pending";
+      } else if (!chain) {
         feeError = "could not determine settlement network; service fee not charged";
         logger.warn({ url: input.url }, feeError);
       } else {
