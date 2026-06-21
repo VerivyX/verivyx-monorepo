@@ -192,6 +192,19 @@ services:
         - NEXT_PUBLIC_TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
         # Playground API origin. Empty → same-origin (nginx proxies /api/v1/playground/*).
         - NEXT_PUBLIC_PLAYGROUND_API=${PLAYGROUND_PUBLIC_API:-}
+        # ── Non-custodial wallet / Plan 3 ────────────────────────────────────
+        # MCP server public base URL (for wallet/* endpoints). Browser-facing.
+        - NEXT_PUBLIC_MCP_BASE_URL=${MCP_PUBLIC_URL:-}
+        # Stellar network passphrase. Defaults to testnet in smartAccount.ts.
+        - NEXT_PUBLIC_STELLAR_NETWORK=${STELLAR_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}
+        # Soroban RPC URL. Defaults to testnet in smartAccount.ts.
+        - NEXT_PUBLIC_STELLAR_RPC_URL=${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+        # USDC SAC contract ID on the target network.
+        - NEXT_PUBLIC_USDC_CONTRACT_ID=${USDC_CONTRACT_ID:-CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA}
+        # OZ smart account WASM hash (uploaded to the target network).
+        - NEXT_PUBLIC_OZ_ACCOUNT_WASM_HASH=${OZ_ACCOUNT_WASM_HASH:-40276717b7227725be75ad66ec2214aa95a29b47b36679a90f165be3f8fe09cb}
+        # Deployed spending_limit Policy contract address.
+        - NEXT_PUBLIC_SPENDING_LIMIT_POLICY_ADDRESS=${SPENDING_LIMIT_POLICY_ADDRESS:-CBGLHQVGQEWBWW6JJXKLLMQZL3G4ENHFRBORLAUO2ZYVAJ2EZWYVMZC2}
     environment:
       - NEXT_PUBLIC_API_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}
       - NEXT_PUBLIC_EMBED_URL=${API_PUBLIC_URL:?API_PUBLIC_URL is required}

@@ -298,6 +298,121 @@ export const api = {
   adminLogs: () => request<{ logs: AdminLog[] }>(`/api/v1/admin/logs`),
 };
 
+// ── Wallet API (non-custodial MCP binding) ────────────────────────────────────
+//
+// All endpoints require the user's Hydra OAuth / session token as Bearer.
+// MCP_BASE points to the MCP server (NEXT_PUBLIC_MCP_BASE_URL, e.g. http://localhost:8088).
+
+const MCP_BASE =
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_MCP_BASE_URL) || '';
+
+async function mcpRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${MCP_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader(),
+      ...(init?.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+  if (!res.ok) {
+    const errField =
+      data && typeof data === 'object' && 'error' in data
+        ? (data as { error?: string }).error
+        : undefined;
+    throw new Error(errField || `MCP request failed with ${res.status}`);
+  }
+  return data as T;
+}
+
+export type SessionSignerResponse = {
+  /** ed25519 G-address of the session signer (add as Delegated on the context rule). */
+  sessionPubkey: string;
+};
+
+export type WalletBindingRequest = {
+  /** The OZ smart account C-address. */
+  smartAccount: string;
+  /** Budget in USDC atomic units (i128 as string — avoids JSON number precision loss). */
+  budgetAtomic: string;
+  /** Expiry ledger number. */
+  expiryLedger: number;
+};
+
+export type WalletBindingResponse = {
+  status: string;
+  binding?: {
+    smartAccount: string;
+    budgetAtomic: string;
+    expiryLedger: number;
+    sessionPubkey: string;
+  };
+};
+
+export type WalletStatusResponse = {
+  linked: boolean;
+  smartAccount?: string;
+  sessionPubkey?: string;
+  budgetAtomic?: string;
+  expiryLedger?: number;
+  /** Remaining budget in USDC atomic units (if the MCP tracks spending). */
+  remainingBudget?: string;
+};
+
+export type WalletRevokeResponse = {
+  status: string;
+};
+
+export const walletApi = {
+  /**
+   * Issue (or retrieve an existing) session ed25519 signer for the authenticated user.
+   * Idempotent — returns the same sessionPubkey on repeated calls.
+   *
+   * The returned sessionPubkey is what you pass to smartAccount.delegate() as sessionPubkey.
+   *
+   * POST {MCP_BASE}/wallet/session-signer
+   * Bearer = the user's Hydra OAuth token (localStorage paywall_token).
+   */
+  issueSessionSigner: () =>
+    mcpRequest<SessionSignerResponse>('/wallet/session-signer', { method: 'POST' }),
+
+  /**
+   * Confirm the wallet binding after delegate() succeeds on-chain.
+   * Records the smart account + budget + expiry on the MCP server.
+   *
+   * POST {MCP_BASE}/wallet/binding
+   * Body: { smartAccount, budgetAtomic (as string), expiryLedger }
+   */
+  confirmBinding: (body: WalletBindingRequest) =>
+    mcpRequest<WalletBindingResponse>('/wallet/binding', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * Get the current wallet binding status for the authenticated user.
+   * Returns linked=false if no binding exists.
+   *
+   * GET {MCP_BASE}/wallet/status
+   */
+  walletStatus: () => mcpRequest<WalletStatusResponse>('/wallet/status'),
+
+  /**
+   * Revoke the wallet binding on the MCP server side.
+   * Call AFTER remove_context_rule on-chain (revoke() from smartAccount.ts) succeeds.
+   *
+   * POST {MCP_BASE}/wallet/revoke
+   */
+  revokeBinding: () => mcpRequest<WalletRevokeResponse>('/wallet/revoke', { method: 'POST' }),
+};
+
 export function saveSession(token: string, user: CreatorUser) {
   localStorage.setItem('paywall_token', token);
   localStorage.setItem('paywall_user', JSON.stringify(user));
