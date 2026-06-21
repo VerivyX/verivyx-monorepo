@@ -319,6 +319,32 @@ export async function bindWallet(
 }
 
 /**
+ * Checks whether the user identified by `sub` has been granted early access
+ * to the non-custodial MCP wallet feature (mcpEarlyAccess flag in the shared User table).
+ *
+ * @param sub - Hydra OAuth subject identifier (String(user.id)); must be numeric.
+ * @param querier - Optional injected querier (defaults to singleton pg Pool).
+ * @returns true only if the User row exists and mcpEarlyAccess is true.
+ *   Returns false for non-numeric subs (guard: no query issued) or missing rows.
+ */
+export async function isEarlyAccessGranted(
+  sub: string,
+  querier?: Querier,
+): Promise<boolean> {
+  // Guard: sub must be a non-empty string of digits (String(user.id))
+  if (!/^\d+$/.test(sub)) return false;
+
+  const q = querier ?? getSingletonQuerier();
+  const result = await q.query(
+    `SELECT "mcpEarlyAccess" FROM "User" WHERE id = $1`,
+    [Number(sub)],
+  );
+
+  if (result.rows.length === 0) return false;
+  return result.rows[0].mcpEarlyAccess === true;
+}
+
+/**
  * Upserts a wallet binding, encrypting the session secret before storage.
  * The plaintext sessionSignerSecret NEVER touches the DB column.
  *

@@ -26,6 +26,11 @@ import type { WalletBinding, WalletStatusRow } from "./registry.js";
 export type WalletRegistryOps = {
   getBinding(sub: string): Promise<WalletBinding | null>;
   getWalletStatus(sub: string): Promise<WalletStatusRow | null>;
+  /**
+   * Returns true only if the user (identified by sub = String(user.id)) has been
+   * granted early access to the non-custodial wallet feature (mcpEarlyAccess flag).
+   */
+  isEarlyAccessGranted(sub: string): Promise<boolean>;
   /** Full upsert — always re-encrypts the session secret. Used on session-signer issuance. */
   upsertBinding(binding: WalletBinding): Promise<void>;
   /**
@@ -97,12 +102,21 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // POST /wallet/session-signer
   // Issue a per-user ed25519 session keypair and return the pubkey.
   // Idempotent: if a session pubkey already exists for this sub, return it unchanged.
+  // Gated: requires mcpEarlyAccess=true on the User row.
   // --------------------------------------------------------------------------
   router.post("/session-signer", async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
 
     try {
+      if (!(await ops.isEarlyAccessGranted(sub))) {
+        res.status(403).json({
+          error: "early_access_required",
+          detail: "Your account is not yet enabled for non-custodial MCP wallets. Join the early-access waitlist.",
+        });
+        return;
+      }
+
       // Check for an existing session row (pending or bound)
       const existing = await ops.getWalletStatus(sub);
       if (existing && existing.sessionSignerPubkey) {
@@ -138,10 +152,24 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // Confirm on-chain delegation: fill smartAccount/budget/expiry onto existing session row.
   // Requires a prior session-signer row (409 if absent).
   // Uses bindWallet to preserve the existing encrypted session secret.
+  // Gated: requires mcpEarlyAccess=true on the User row.
   // --------------------------------------------------------------------------
   router.post("/binding", async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
+
+    try {
+      if (!(await ops.isEarlyAccessGranted(sub))) {
+        res.status(403).json({
+          error: "early_access_required",
+          detail: "Your account is not yet enabled for non-custodial MCP wallets. Join the early-access waitlist.",
+        });
+        return;
+      }
+    } catch (err) {
+      res.status(500).json({ error: "internal_error", detail: String(err) });
+      return;
+    }
 
     const { smartAccount, budgetAtomic, expiryLedger } = (req.body ?? {}) as Record<string, unknown>;
 

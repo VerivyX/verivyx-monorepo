@@ -17,7 +17,7 @@ process.env.INTERNAL_TOKEN = "test-internal-token";
 process.env.PLATFORM_STELLAR_ADDRESS = "GDUMMY000000000000000000000000000000000000000000000000000000";
 
 import type { Querier } from "../src/wallet/registry.js";
-import { getBinding, getWalletStatus } from "../src/wallet/registry.js";
+import { getBinding, getWalletStatus, isEarlyAccessGranted } from "../src/wallet/registry.js";
 import {
   buildWalletRouter,
   type WalletRegistryOps,
@@ -29,7 +29,13 @@ import { createServer } from "node:http";
 // In-memory fake registry store for endpoint tests
 // ---------------------------------------------------------------------------
 
-function makeFakeStore(): {
+/**
+ * makeFakeStore builds an in-memory registry for endpoint tests.
+ *
+ * @param earlyAccess - Whether the fake User row has mcpEarlyAccess=true (default true).
+ *   Set to false to test the early-access gate (403 path).
+ */
+function makeFakeStore(earlyAccess = true): {
   ops: WalletRegistryOps;
   querier: Querier;
   store: Map<string, Record<string, unknown>>;
@@ -62,6 +68,14 @@ function makeFakeStore(): {
         store.delete(sub);
         return { rows: [] };
       } else if (/SELECT/i.test(sql)) {
+        // Distinguish between McpWallet SELECT (oauthSub param) and User SELECT (id param).
+        // The User early-access query is: SELECT "mcpEarlyAccess" FROM "User" WHERE id = $1
+        // We detect it by looking for the "User" table or "mcpEarlyAccess" column in the SQL.
+        if (/FROM\s+"User"/i.test(sql)) {
+          // Always return a User row for any numeric id — mcpEarlyAccess reflects the option.
+          return { rows: [{ mcpEarlyAccess: earlyAccess }] };
+        }
+        // McpWallet SELECT: keyed by oauthSub
         const [sub] = params as string[];
         const row = store.get(sub);
         return { rows: row ? [row] : [] };
@@ -73,6 +87,7 @@ function makeFakeStore(): {
   const ops: WalletRegistryOps = {
     getBinding: (sub) => getBinding(sub, querier),
     getWalletStatus: (sub) => getWalletStatus(sub, querier),
+    isEarlyAccessGranted: (sub) => isEarlyAccessGranted(sub, querier),
     upsertBinding: async (binding) => {
       const { upsertBinding } = await import("../src/wallet/registry.js");
       return upsertBinding(binding, querier);
@@ -293,7 +308,7 @@ test("POST /wallet/session-signer returns a valid ed25519 G-pubkey for oauth cal
   const { status, body } = await callEndpoint({
     method: "POST",
     path: "/session-signer",
-    mcpUser: { kind: "oauth", sub: "user:oauth:alice" },
+    mcpUser: { kind: "oauth", sub: "1001" },
     ops,
   });
   assert.equal(status, 200, `expected 200, got ${status}: ${JSON.stringify(body)}`);
@@ -310,7 +325,7 @@ test("POST /wallet/session-signer does NOT include the session secret in respons
   const { body } = await callEndpoint({
     method: "POST",
     path: "/session-signer",
-    mcpUser: { kind: "oauth", sub: "user:oauth:secret-check" },
+    mcpUser: { kind: "oauth", sub: "1002" },
     ops,
   });
   const bodyStr = JSON.stringify(body);
@@ -327,7 +342,7 @@ test("POST /wallet/session-signer does NOT include the session secret in respons
 
 test("POST /wallet/session-signer is idempotent — second call returns same pubkey", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:idempotent-test";
+  const sub = "1003";
 
   const { body: body1 } = await callEndpoint({
     method: "POST",
@@ -358,7 +373,7 @@ test("POST /wallet/binding without prior session-signer returns 409 no_session_s
   const { status, body } = await callEndpoint({
     method: "POST",
     path: "/binding",
-    mcpUser: { kind: "oauth", sub: "user:oauth:no-session-yet" },
+    mcpUser: { kind: "oauth", sub: "1004" },
     body: {
       smartAccount: "C" + "A".repeat(55),
       budgetAtomic: "5000000",
@@ -375,7 +390,7 @@ test("POST /wallet/binding without prior session-signer returns 409 no_session_s
 
 test("POST /wallet/binding after session-signer returns 200 linked", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:bind-success";
+  const sub = "1005";
 
   // First: issue session signer
   await callEndpoint({
@@ -404,7 +419,7 @@ test("POST /wallet/binding after session-signer returns 200 linked", async () =>
 
 test("POST /wallet/binding validates smartAccount is a C-address", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:bind-validate";
+  const sub = "1006";
 
   await callEndpoint({
     method: "POST",
@@ -429,7 +444,7 @@ test("POST /wallet/binding validates smartAccount is a C-address", async () => {
 
 test("POST /wallet/binding validates budgetAtomic is a positive integer string", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:bind-validate-budget";
+  const sub = "1007";
 
   await callEndpoint({
     method: "POST",
@@ -461,7 +476,7 @@ test("GET /wallet/status reflects pending state (no session-signer yet)", async 
   const { status, body } = await callEndpoint({
     method: "GET",
     path: "/status",
-    mcpUser: { kind: "oauth", sub: "user:oauth:status-pending" },
+    mcpUser: { kind: "oauth", sub: "1008" },
     ops,
   });
   assert.equal(status, 200);
@@ -472,7 +487,7 @@ test("GET /wallet/status reflects pending state (no session-signer yet)", async 
 
 test("GET /wallet/status reflects pending after session-signer (not yet bound)", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:status-session-only";
+  const sub = "1009";
 
   await callEndpoint({
     method: "POST",
@@ -495,7 +510,7 @@ test("GET /wallet/status reflects pending after session-signer (not yet bound)",
 
 test("GET /wallet/status reflects bound state after binding confirmed", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:status-bound";
+  const sub = "1010";
 
   await callEndpoint({
     method: "POST",
@@ -527,7 +542,7 @@ test("GET /wallet/status reflects bound state after binding confirmed", async ()
 
 test("GET /wallet/status does NOT expose session secret", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:status-nosecret";
+  const sub = "1011";
 
   await callEndpoint({
     method: "POST",
@@ -553,7 +568,7 @@ test("GET /wallet/status does NOT expose session secret", async () => {
 
 test("POST /wallet/revoke clears the binding and status returns unlinked", async () => {
   const { ops } = makeFakeStore();
-  const sub = "user:oauth:revoke-full";
+  const sub = "1012";
 
   // Set up bound state
   await callEndpoint({ method: "POST", path: "/session-signer", mcpUser: { kind: "oauth", sub }, ops });
@@ -591,9 +606,154 @@ test("POST /wallet/revoke on a non-existent binding returns 200 unlinked (idempo
   const { status, body } = await callEndpoint({
     method: "POST",
     path: "/revoke",
-    mcpUser: { kind: "oauth", sub: "user:oauth:never-existed" },
+    mcpUser: { kind: "oauth", sub: "1013" },
     ops,
   });
   assert.equal(status, 200);
   assert.equal(body.status, "unlinked");
+});
+
+// ---------------------------------------------------------------------------
+// isEarlyAccessGranted unit tests
+// ---------------------------------------------------------------------------
+
+test("isEarlyAccessGranted returns true when User row has mcpEarlyAccess=true", async () => {
+  // Fake querier that always returns mcpEarlyAccess=true for numeric ids
+  const querier: Querier = {
+    async query(_sql, _params) {
+      return { rows: [{ mcpEarlyAccess: true }] };
+    },
+  };
+  const result = await isEarlyAccessGranted("42", querier);
+  assert.equal(result, true, "must return true when mcpEarlyAccess=true");
+});
+
+test("isEarlyAccessGranted returns false when User row has mcpEarlyAccess=false", async () => {
+  const querier: Querier = {
+    async query(_sql, _params) {
+      return { rows: [{ mcpEarlyAccess: false }] };
+    },
+  };
+  const result = await isEarlyAccessGranted("7", querier);
+  assert.equal(result, false, "must return false when mcpEarlyAccess=false");
+});
+
+test("isEarlyAccessGranted returns false when no User row found", async () => {
+  const querier: Querier = {
+    async query(_sql, _params) {
+      return { rows: [] };
+    },
+  };
+  const result = await isEarlyAccessGranted("99", querier);
+  assert.equal(result, false, "must return false when user row is missing");
+});
+
+test("isEarlyAccessGranted returns false for non-numeric sub", async () => {
+  // querier must NOT be called for non-numeric sub
+  let queryCalled = false;
+  const querier: Querier = {
+    async query(_sql, _params) {
+      queryCalled = true;
+      return { rows: [{ mcpEarlyAccess: true }] };
+    },
+  };
+  const result = await isEarlyAccessGranted("not-a-number", querier);
+  assert.equal(result, false, "non-numeric sub must return false");
+  assert.equal(queryCalled, false, "querier must not be called for non-numeric sub");
+});
+
+test("isEarlyAccessGranted returns false for empty string sub", async () => {
+  let queryCalled = false;
+  const querier: Querier = {
+    async query(_sql, _params) {
+      queryCalled = true;
+      return { rows: [{ mcpEarlyAccess: true }] };
+    },
+  };
+  const result = await isEarlyAccessGranted("", querier);
+  assert.equal(result, false, "empty sub must return false");
+  assert.equal(queryCalled, false, "querier must not be called for empty sub");
+});
+
+// ---------------------------------------------------------------------------
+// Early-access gate: POST /wallet/session-signer and POST /wallet/binding
+// are gated on mcpEarlyAccess=true; GET /wallet/status and POST /wallet/revoke
+// are NOT gated (safe to call regardless of early-access state).
+// ---------------------------------------------------------------------------
+
+test("POST /wallet/session-signer returns 403 early_access_required when mcpEarlyAccess=false", async () => {
+  const { ops } = makeFakeStore(false); // earlyAccess=false
+  const { status, body } = await callEndpoint({
+    method: "POST",
+    path: "/session-signer",
+    mcpUser: { kind: "oauth", sub: "42" },
+    ops,
+  });
+  assert.equal(status, 403, `expected 403, got ${status}: ${JSON.stringify(body)}`);
+  assert.equal(body.error, "early_access_required", `error must be early_access_required — got: ${JSON.stringify(body)}`);
+});
+
+test("POST /wallet/session-signer proceeds (200) when mcpEarlyAccess=true", async () => {
+  const { ops } = makeFakeStore(true); // earlyAccess=true
+  const { status, body } = await callEndpoint({
+    method: "POST",
+    path: "/session-signer",
+    mcpUser: { kind: "oauth", sub: "42" },
+    ops,
+  });
+  assert.equal(status, 200, `expected 200, got ${status}: ${JSON.stringify(body)}`);
+  assert.ok(typeof body.sessionPubkey === "string", "must return sessionPubkey");
+});
+
+test("POST /wallet/binding returns 403 early_access_required when mcpEarlyAccess=false", async () => {
+  const { ops } = makeFakeStore(false); // earlyAccess=false
+  const { status, body } = await callEndpoint({
+    method: "POST",
+    path: "/binding",
+    mcpUser: { kind: "oauth", sub: "42" },
+    body: { smartAccount: "C" + "A".repeat(55), budgetAtomic: "5000000", expiryLedger: "99999" },
+    ops,
+  });
+  assert.equal(status, 403, `expected 403, got ${status}: ${JSON.stringify(body)}`);
+  assert.equal(body.error, "early_access_required", `error must be early_access_required — got: ${JSON.stringify(body)}`);
+});
+
+test("POST /wallet/binding proceeds (200/409) when mcpEarlyAccess=true (no prior session → 409)", async () => {
+  const { ops } = makeFakeStore(true); // earlyAccess=true
+  const { status, body } = await callEndpoint({
+    method: "POST",
+    path: "/binding",
+    mcpUser: { kind: "oauth", sub: "42" },
+    body: { smartAccount: "C" + "A".repeat(55), budgetAtomic: "5000000", expiryLedger: "99999" },
+    ops,
+  });
+  // Gets past the early-access gate → hits the no_session_signer check (409)
+  assert.equal(status, 409, `expected 409 (past gate, no session signer), got ${status}: ${JSON.stringify(body)}`);
+  assert.equal(body.error, "no_session_signer");
+});
+
+test("GET /wallet/status is ungated — succeeds regardless of mcpEarlyAccess=false", async () => {
+  const { ops } = makeFakeStore(false); // earlyAccess=false
+  const { status, body } = await callEndpoint({
+    method: "GET",
+    path: "/status",
+    mcpUser: { kind: "oauth", sub: "42" },
+    ops,
+  });
+  // Must not return 403 early_access_required — must proceed normally (200)
+  assert.equal(status, 200, `status must be ungated (200), got ${status}: ${JSON.stringify(body)}`);
+  assert.notEqual(body.error, "early_access_required", "status must not be gated by early-access");
+});
+
+test("POST /wallet/revoke is ungated — succeeds regardless of mcpEarlyAccess=false", async () => {
+  const { ops } = makeFakeStore(false); // earlyAccess=false
+  const { status, body } = await callEndpoint({
+    method: "POST",
+    path: "/revoke",
+    mcpUser: { kind: "oauth", sub: "42" },
+    ops,
+  });
+  // Must not return 403 early_access_required — revoke is always safe (cleanup)
+  assert.equal(status, 200, `revoke must be ungated (200), got ${status}: ${JSON.stringify(body)}`);
+  assert.notEqual(body.error, "early_access_required", "revoke must not be gated by early-access");
 });

@@ -202,7 +202,7 @@ test("sub-consistency: a binding upserted under hydraSub is found by the same ke
 test("wallet endpoints accept kind:dashboard caller (session-signer)", async () => {
   // Lazy import to avoid top-level side effects before env is set.
   const { buildWalletRouter } = await import("../src/wallet/endpoints.js");
-  const { getBinding, getWalletStatus, upsertBinding } = await import("../src/wallet/registry.js");
+  const { getBinding, getWalletStatus, isEarlyAccessGranted, upsertBinding } = await import("../src/wallet/registry.js");
 
   // Minimal in-memory store.
   const store = new Map<string, Record<string, unknown>>();
@@ -213,6 +213,10 @@ test("wallet endpoints accept kind:dashboard caller (session-signer)", async () 
         store.set(sub, { oauthSub: sub, smartAccount, sessionSignerPubkey: pubkey, sessionSignerSecretEnc: secretEnc, budgetAtomic: budget, expiryLedger: expiry });
         return { rows: [] };
       } else if (/SELECT/i.test(sql)) {
+        // User early-access query: SELECT "mcpEarlyAccess" FROM "User" WHERE id = $1
+        if (/FROM\s+"User"/i.test(sql)) {
+          return { rows: [{ mcpEarlyAccess: true }] };
+        }
         const [sub] = params as string[];
         const row = store.get(sub);
         return { rows: row ? [row] : [] };
@@ -228,6 +232,7 @@ test("wallet endpoints accept kind:dashboard caller (session-signer)", async () 
   const ops = {
     getBinding: (sub: string) => getBinding(sub, querier),
     getWalletStatus: (sub: string) => getWalletStatus(sub, querier),
+    isEarlyAccessGranted: (sub: string) => isEarlyAccessGranted(sub, querier),
     upsertBinding: (binding: Parameters<typeof upsertBinding>[0]) => upsertBinding(binding, querier),
     bindWallet: async () => {},
     deleteBinding: async (sub: string) => { await querier.query(`DELETE FROM "McpWallet" WHERE "oauthSub" = $1`, [sub]); },
@@ -269,6 +274,7 @@ test("wallet endpoints: kind:key caller is still rejected with 403", async () =>
   const ops = {
     getBinding: async () => null,
     getWalletStatus: async () => null,
+    isEarlyAccessGranted: async () => false,
     upsertBinding: async () => {},
     bindWallet: async () => {},
     deleteBinding: async () => {},

@@ -18,6 +18,7 @@ import {
   deleteBinding,
   getBinding,
   getWalletStatus,
+  isEarlyAccessGranted,
   upsertBinding,
 } from "./wallet/registry.js";
 
@@ -215,6 +216,7 @@ async function main(): Promise<void> {
     const walletRouter = buildWalletRouter({
       getBinding,
       getWalletStatus,
+      isEarlyAccessGranted,
       upsertBinding,
       bindWallet: (sub, smartAccount, budgetAtomic, expiryLedger) =>
         bindWallet(sub, smartAccount, budgetAtomic, expiryLedger),
