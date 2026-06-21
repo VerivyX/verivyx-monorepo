@@ -85,6 +85,37 @@ test("upsertBinding then getBinding returns the same binding", async () => {
   assert.equal(result.expiryLedger, sample.expiryLedger);
 });
 
+test("getBinding parses pg Decimal-format budgetAtomic (scale-30 string) to bigint", async () => {
+  // REGRESSION: pg returns a Prisma `Decimal` column as a scale-30 string, e.g.
+  // "5000000.000000000000000000000000000000". `BigInt(...)` throws on the fraction
+  // ("Cannot convert ... to a BigInt"). The fake querier in other tests stores the
+  // raw integer string, so it never reproduced this — here we return the real format.
+  const encSecret = encryptSecret(sample.sessionSignerSecret);
+  const querier: Querier = {
+    async query(sql: string) {
+      if (/SELECT/i.test(sql)) {
+        return {
+          rows: [
+            {
+              oauthSub: sample.oauthSub,
+              smartAccount: sample.smartAccount,
+              sessionSignerPubkey: sample.sessionSignerPubkey,
+              sessionSignerSecretEnc: encSecret,
+              budgetAtomic: "5000000.000000000000000000000000000000",
+              expiryLedger: "99999",
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+  const result = await getBinding(sample.oauthSub, querier);
+  assert.ok(result !== null, "expected a non-null binding");
+  assert.equal(result.budgetAtomic, 5_000_000n, "Decimal-format budgetAtomic must parse to bigint");
+  assert.equal(result.expiryLedger, 99999n);
+});
+
 test("stored secret column is NOT the plaintext", async () => {
   const { querier, store } = makeFakeQuerier();
   await upsertBinding(sample, querier);
