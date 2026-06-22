@@ -315,8 +315,20 @@ export default function WalletPage() {
 
   /** Step 2: validate + delegate budget to MCP session signer. */
   const handleDelegate = async () => {
-    if (!ownerAddress || !smartAccountAddr) return;
     setError(null);
+    // Ensure Freighter is connected (needed when re-authorizing from the manage view,
+    // where ownerAddress isn't set until the user reconnects after a page load).
+    let owner = ownerAddress;
+    if (!owner) {
+      try {
+        owner = await connectWallet();
+        setOwnerAddress(owner);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Connect your Freighter wallet first.');
+        return;
+      }
+    }
+    if (!owner || !smartAccountAddr) return;
 
     const validation = validateDelegation({ budgetUsdc: budgetInput, days: Number(daysInput) });
     if (!validation.ok) {
@@ -338,7 +350,7 @@ export default function WalletPage() {
         sessionPubkey,
         budgetAtomic,
         validUntilLedger,
-        ownerAddress,
+        ownerAddress: owner,
       });
 
       setLastRuleId(delegateResult.ruleId);
@@ -926,6 +938,34 @@ export default function WalletPage() {
                     )
                   }
                 />
+              </div>
+
+              {/* Re-authorize / fix delegation */}
+              <div className="mt-8 border-t border-[var(--color-cream-200)] pt-5">
+                <h3 className="text-sm font-semibold text-[var(--color-ink-700)]">
+                  Re-authorize delegation
+                </h3>
+                <p className="mt-1 text-xs text-[var(--color-ink-500)]">
+                  Re-runs the on-chain delegation on this same account (it first removes the old
+                  rule, then re-adds it with the spending limit properly installed). Use this if a
+                  payment fails with a delegation/authorization error. Your account and USDC balance
+                  are kept — you&apos;ll sign a few Freighter prompts.
+                </p>
+                <button
+                  onClick={handleDelegate}
+                  disabled={delegating}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl border border-[var(--color-ink-300)] bg-[var(--color-ink-50)] px-4 py-2 text-sm font-semibold text-[var(--color-ink-700)] transition hover:bg-[var(--color-ink-100)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {delegating ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Re-authorizing…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={14} /> Re-authorize (fix delegation)
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* Revoke */}

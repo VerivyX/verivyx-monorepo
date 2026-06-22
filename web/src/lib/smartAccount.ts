@@ -517,6 +517,54 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
 
   const server = getRpcServer();
 
+  // ── Step 0: remove any pre-existing verivyx-session rule ─────────────────────
+  // Makes delegate() safe to re-run on the same account: avoids stacking a second
+  // rule with the same signer, and REPAIRS an account whose spending-limit params
+  // were never installed (re-adding via Step 1+2 installs them on a clean rule).
+  try {
+    const opGet0 = Operation.invokeContractFunction({
+      contract: smartAccount,
+      function: 'get_context_rules',
+      args: [ctxCallContract(USDC_CONTRACT_ID)],
+    });
+    const src0 = await server.getAccount(ownerAddress);
+    const getTx0 = new TransactionBuilder(src0, {
+      fee: '1000000',
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(opGet0)
+      .setTimeout(60)
+      .build();
+    const getSim0 = await server.simulateTransaction(getTx0);
+    if (!StellarRpc.Api.isSimulationError(getSim0) && getSim0.result?.retval) {
+      const existing = scValToNative(getSim0.result.retval) as Array<{
+        id?: number;
+        name?: string;
+      }>;
+      const stale = (Array.isArray(existing) ? existing : []).filter(
+        (r) => r?.name === 'verivyx-session' && r?.id != null,
+      );
+      for (const r of stale) {
+        const opRemove = Operation.invokeContractFunction({
+          contract: smartAccount,
+          function: 'remove_context_rule',
+          args: [nativeToScVal((r.id as number) >>> 0, { type: 'u32' })],
+        });
+        await submitWithOwnerAuth({
+          server,
+          networkPassphrase: STELLAR_NETWORK,
+          sourceAddress: ownerAddress,
+          smartAccount,
+          ownerAddress,
+          op: opRemove,
+          label: 'remove_context_rule (stale)',
+        });
+      }
+    }
+  } catch {
+    // Non-fatal: proceed to add. Worst case a duplicate rule, which Step 0 cleans next run.
+  }
+
   // ── Step 1: add_context_rule (signer only, EMPTY policies) ───────────────────
   // The spending-limit policy is installed in Step 2 via add_policy. Installing the
   // policy through add_context_rule's policies map only ATTACHES it without storing
