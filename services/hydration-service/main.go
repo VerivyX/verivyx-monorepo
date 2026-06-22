@@ -184,6 +184,7 @@ type DomainConfig struct {
 	PricePerRequest float64 `json:"pricePerRequest"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
 	WpInternalToken string  `json:"wpInternalToken"`
+	ContentUrl      string  `json:"contentUrl"`
 }
 
 type EventPayload struct {
@@ -253,11 +254,19 @@ func isValidHostname(s string) bool {
 func authURL() string { return env("AUTH_SERVICE_URL", "http://auth-service:8083") }
 func gwURL() string   { return env("GATEWAY_URL", "http://x402-gateway:8081") }
 
-// buildInternalContentURL is the token-protected WP endpoint that returns the real
-// article body for a (domain, slug). The hydration-service calls it only after the
-// caller is authorized (human session or paid x402 session).
-func buildInternalContentURL(domain, slug string) string {
-	return "https://" + domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
+// buildInternalContentURL returns the token-protected endpoint that serves the real
+// article body for a (domain, slug). When cfg.ContentUrl is set, it is used directly
+// (non-WordPress sites); otherwise the function falls back to the hardcoded WordPress
+// path so existing WP-connected sites are unaffected.
+func buildInternalContentURL(cfg *DomainConfig, slug string) string {
+	if cfg.ContentUrl != "" {
+		sep := "?"
+		if strings.Contains(cfg.ContentUrl, "?") {
+			sep = "&"
+		}
+		return cfg.ContentUrl + sep + "slug=" + url.QueryEscape(slug)
+	}
+	return "https://" + cfg.Domain + "/wp-json/verivyx/v1/content?slug=" + url.QueryEscape(slug)
 }
 
 // invalidateDomainCache drops a cached domain config so the next lookup re-fetches.
@@ -288,15 +297,19 @@ func wpTokenFor(domain string) string {
 	return os.Getenv("WP_INTERNAL_TOKEN")
 }
 
-// fetchArticleBody calls the WP internal content endpoint with the per-domain token and
-// returns the rendered body HTML. Fail-closed: any error returns ("", err) so the
-// handler does NOT release a body.
+// fetchArticleBody calls the content endpoint (configurable via cfg.ContentUrl, WP fallback)
+// with the per-domain token and returns the rendered body HTML.
+// Fail-closed: any error returns ("", err) so the handler does NOT release a body.
 func fetchArticleBody(domain, slug string) (string, error) {
 	token := wpTokenFor(domain)
 	if token == "" {
 		return "", fmt.Errorf("wp_internal_token_unset")
 	}
-	reqURL := buildInternalContentURL(domain, slug)
+	cfg, err := lookupDomain(domain)
+	if err != nil || cfg == nil {
+		cfg = &DomainConfig{Domain: domain}
+	}
+	reqURL := buildInternalContentURL(cfg, slug)
 	httpReq, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
 		return "", err
