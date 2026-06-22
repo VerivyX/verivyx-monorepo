@@ -41,6 +41,11 @@ export const config = {
   usdcIssuer: env("USDC_ISSUER", DEFAULT_TESTNET_USDC_ISSUER),
 
   hydrationUrl: env("HYDRATION_URL", "http://hydration-service:8082"),
+  // The demo resource settles directly against the gateway (the demo domain has no
+  // origin website, so there is no WordPress body to hydrate). The internal token
+  // gates the gateway's internal settle endpoint.
+  gatewayUrl: env("GATEWAY_URL", "http://x402-gateway:8081"),
+  internalToken: env("INTERNAL_TOKEN", ""),
 
   // Canonical Verivyx MCP server (Streamable HTTP). The playground drives it with
   // a per-session pooled wallet (X-Session-Stellar-Secret).
@@ -65,13 +70,18 @@ export const config = {
   // Must be reachable from the mcp-server container — use the docker service name.
   demoBaseUrl: env("PLAYGROUND_DEMO_BASE", "http://playground-agent:8087"),
 
+  // Second target: a REAL Verivyx-protected WordPress post on web-test.verivyx.com.
+  // The agent pays its public URL directly (it returns HTTP 402 to bots), proving the
+  // "general web" case end-to-end against a live site.
+  webTestUrl: env("PLAYGROUND_WEBTEST_URL", "https://web-test.verivyx.com/2026/05/31/hello-world/"),
+
   poolSize: num("PLAYGROUND_POOL_SIZE", 6),
   maxSessions: num("PLAYGROUND_MAX_SESSIONS", 10),
   sessionTtlMin: num("PLAYGROUND_SESSION_TTL_MIN", 15),
 
   allowedPaymentPrefixes: env(
     "ALLOWED_PAYMENT_PREFIXES",
-    "http://playground-agent:8087/api/v1/playground/demo,http://127.0.0.1:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo",
+    "http://playground-agent:8087/api/v1/playground/demo,http://127.0.0.1:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo,https://web-test.verivyx.com/",
   )
     .split(",")
     .map((s) => s.trim())

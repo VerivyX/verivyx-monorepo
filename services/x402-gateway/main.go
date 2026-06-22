@@ -284,6 +284,9 @@ type Facilitator struct {
 	apiKey        string
 	internalToken string
 	client        *http.Client
+	// stubForceInvalid is a test-only knob: when true, Verify returns IsValid=false
+	// in stub mode so tests can exercise the 402 rejection path without a live facilitator.
+	stubForceInvalid bool
 }
 
 func newFacilitator() *Facilitator {
@@ -336,6 +339,9 @@ type facilitatorRequest struct {
 
 func (f *Facilitator) Verify(payload PaymentPayload, req PaymentRequirement) (*VerifyResponse, error) {
 	if f.mode == "stub" {
+		if f.stubForceInvalid {
+			return &VerifyResponse{IsValid: false, InvalidReason: "stub_forced_invalid"}, nil
+		}
 		return &VerifyResponse{IsValid: true, Payer: "STUB-PAYER"}, nil
 	}
 	if f.baseURL == "" {
@@ -641,8 +647,11 @@ func httpStatusForResolveErr(err error) int {
 	}
 }
 
-func sessionKey(domain, slug string) string {
-	return fmt.Sprintf("paid:%s:%s", domain, slug)
+// sessionKey scopes a paid session to (domain, slug, payer). Keying on the payer
+// is what stops a single payment from unlocking the resource for every other
+// (anonymous) caller during the TTL — each account only ever sees its own session.
+func sessionKey(domain, slug, payer string) string {
+	return fmt.Sprintf("paid:%s:%s:%s", domain, slug, payer)
 }
 
 func idempotencyKey(key string) string {
@@ -665,17 +674,9 @@ func bodyDigest(b []byte) string {
 
 // ----------------------- gin handlers --------------------------------
 
-func main() {
-	internalToken = mustEnv("INTERNAL_TOKEN")
-	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
-
-	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
-	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {
-		redisOpts.Password = pw
-	}
-	rdb = redis.NewClient(redisOpts)
-	facilitator := newFacilitator()
-
+// setupRouter wires all HTTP routes onto a new gin.Engine and returns it.
+// Extracted from main so tests can build the router without starting a server.
+func setupRouter(facilitator *Facilitator) *gin.Engine {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -773,6 +774,10 @@ func main() {
 	})
 
 	r.POST("/api/v1/payment/verify", func(c *gin.Context) {
+		if c.GetHeader("X-Internal-Token") != internalToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		var req facilitatorRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "detail": err.Error()})
@@ -800,6 +805,10 @@ func main() {
 	})
 
 	r.POST("/api/v1/payment/settle", func(c *gin.Context) {
+		if c.GetHeader("X-Internal-Token") != internalToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		bodyBytes, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "body_read_failed"})
@@ -853,6 +862,20 @@ func main() {
 			return
 		}
 
+		verifyOut, err := facilitator.Verify(req.PaymentPayload, canonReq)
+		if err != nil {
+			log.Printf("facilitator unreachable: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "facilitator_unreachable"})
+			return
+		}
+		if !verifyOut.IsValid {
+			c.JSON(http.StatusPaymentRequired, gin.H{
+				"error":         "invalid_payment",
+				"invalidReason": verifyOut.InvalidReason,
+			})
+			return
+		}
+
 		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
 			log.Printf("facilitator unreachable: %v", err)
@@ -861,9 +884,13 @@ func main() {
 		}
 
 		if out.Success && domain != "" {
-			key := sessionKey(domain, slug)
-			if err := rdb.Set(ctx, key, out.Transaction, SessionTTL).Err(); err != nil {
-				log.Printf("redis set failed: %v", err)
+			key := sessionKey(domain, slug, out.Payer)
+			// Only open a session when we know who paid; an identity-less session
+			// would be a shared key any caller could ride on.
+			if out.Payer != "" {
+				if err := rdb.Set(ctx, key, out.Transaction, SessionTTL).Err(); err != nil {
+					log.Printf("redis set failed: %v", err)
+				}
 			}
 			cfg, _ := lookupDomain(domain)
 			amt := 0.0
@@ -1014,9 +1041,15 @@ func main() {
 			return
 		}
 		if settleOut.Success {
-			key := sessionKey(body.Domain, body.Slug)
-			if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
-				log.Printf("redis set failed: %v", err)
+			payer := settleOut.Payer
+			if payer == "" {
+				payer = body.XPayment.Payload.Payer
+			}
+			key := sessionKey(body.Domain, body.Slug, payer)
+			if payer != "" {
+				if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
+					log.Printf("redis set failed: %v", err)
+				}
 			}
 			agent, cat := body.Agent, body.Category
 			if agent == "" {
@@ -1050,11 +1083,18 @@ func main() {
 		}
 		domain := c.Query("domain")
 		slug := c.Query("slug")
+		payer := c.Query("payer")
 		if domain == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain required"})
 			return
 		}
-		v, err := rdb.Get(ctx, sessionKey(domain, slug)).Result()
+		// Sessions are payer-scoped: without a payer there is nothing to check, and
+		// we must never report a resource "paid" for an identity-less caller.
+		if payer == "" {
+			c.JSON(http.StatusOK, gin.H{"paid": false})
+			return
+		}
+		v, err := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return
@@ -1066,6 +1106,21 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"paid": true, "transaction": v})
 	})
 
+	return r
+}
+
+func main() {
+	internalToken = mustEnv("INTERNAL_TOKEN")
+	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
+
+	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
+	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {
+		redisOpts.Password = pw
+	}
+	rdb = redis.NewClient(redisOpts)
+	facilitator := newFacilitator()
+
+	r := setupRouter(facilitator)
 	log.Printf("x402-gateway listening on :8081 (facilitator_mode=%s)", facilitator.mode)
 	r.Run(":8081")
 }

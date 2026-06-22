@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getConfig } from "../config.js";
 import type { PaymentService } from "../chains/payments.js";
 import { logger } from "../logger.js";
+import { mapSettlementError } from "../wallet/errorMap.js";
 
 const fetchInputShape = {
   url: z.string().url().describe("Full URL of the x402-protected resource to fetch"),
@@ -23,8 +24,29 @@ function asError(message: string) {
   };
 }
 
+/**
+ * Build a structured error payload for non-custodial payment failures.
+ * Runs mapSettlementError to convert raw Soroban/RPC error strings and
+ * simulation diagnostics into a stable agent-friendly code alongside the
+ * human-readable message.
+ *
+ * Only called on the non-custodial path — custodial errors continue to use asError().
+ */
+function asNonCustodialError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  // Pull diagnostics attached by the simulate-error path in sessionPayment.ts (best-effort).
+  const diagnostics = (error as { diagnostics?: string[] }).diagnostics;
+  const code = mapSettlementError({ message, diagnostics });
+  const payload = { error: message, code };
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+  };
+}
+
 /** Build a fresh McpServer wired to the shared multi-chain payment service. */
-export function buildMcpServer(payments: PaymentService): McpServer {
+export function buildMcpServer(payments: PaymentService, opts?: { isNonCustodial?: boolean }): McpServer {
+  const isNonCustodial = opts?.isNonCustodial ?? false;
   const cfg = getConfig();
   const server = new McpServer({ name: "verivyx-x402-mcp", version: "0.1.0" });
 
@@ -34,8 +56,13 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       title: "List supported chains",
       description: "List the chains/assets this Verivyx MCP can pay on, plus the flat service fee.",
       inputSchema: {},
+      outputSchema: { serviceFee: z.string(), chains: z.array(z.any()) },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => asText({ serviceFee: cfg.feeUsdc, chains: payments.supportedChains() }),
+    async () => {
+      const payload = { serviceFee: cfg.feeUsdc, chains: payments.supportedChains() };
+      return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }], structuredContent: payload };
+    },
   );
 
   server.registerTool(
@@ -44,6 +71,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       title: "Wallet info",
       description: "Show the active paying wallet(s) and network configuration for each chain.",
       inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => asText(payments.info()),
   );
@@ -55,6 +83,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       description:
         "Preview the cost to fetch an x402 resource (resource price + Verivyx service fee) WITHOUT paying.",
       inputSchema: fetchInputShape,
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ url, method, body, headers }) => {
       try {
@@ -73,6 +102,7 @@ export function buildMcpServer(payments: PaymentService): McpServer {
       description:
         "Fetch an x402-protected URL and automatically pay the required micropayment (plus the flat Verivyx service fee). Auto-selects the chain the resource advertises. Returns the content and a payment receipt.",
       inputSchema: fetchInputShape,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ url, method, body, headers }) => {
       try {
@@ -84,6 +114,11 @@ export function buildMcpServer(payments: PaymentService): McpServer {
         return asText(result);
       } catch (error) {
         logger.warn({ err: String(error), url }, "pay_for_resource failed");
+        // Non-custodial path: map raw Soroban/RPC errors to stable agent-friendly codes.
+        // Custodial path continues to use the plain error message.
+        if (isNonCustodial) {
+          return asNonCustodialError(error);
+        }
         return asError(error instanceof Error ? error.message : "payment failed");
       }
     },

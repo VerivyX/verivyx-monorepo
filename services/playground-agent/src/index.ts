@@ -3,7 +3,7 @@ import cors from "cors";
 import pino from "pino";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { startWalletPool, acquireWallet, walletBalances, type SessionWallet } from "./walletPool.js";
+import { startWalletPool, acquireWallet, retireWallet, walletBalances, type SessionWallet } from "./walletPool.js";
 import { McpSession } from "./mcpBridge.js";
 import { runAgentTurn, systemPrompt, type AgentEvent } from "./agentLoop.js";
 import { demoResource } from "./demoResource.js";
@@ -12,6 +12,9 @@ import type { ChatMessage } from "./llm.js";
 
 const log = pino({ name: "playground-agent" });
 
+type TargetKey = "demo" | "webtest";
+type Target = { url: string; label: string };
+
 type Session = {
   id: string;
   wallet: SessionWallet;
@@ -19,6 +22,8 @@ type Session = {
   messages: ChatMessage[];
   demoUrl: string;
   demoSlug: string;
+  targets: Record<TargetKey, Target>;
+  activeTarget: TargetKey;
   createdAt: number;
   lastUsed: number;
   busy: boolean;
@@ -45,6 +50,11 @@ async function verifyTurnstile(token: string, ip?: string): Promise<boolean> {
 function closeSession(s: Session) {
   sessions.delete(s.id);
   s.mcp.close().catch(() => {});
+  // Retire the wallet so it cannot be recycled into a new session. A wallet
+  // that has paid for a resource leaves a payer-scoped session entry in the
+  // gateway Redis cache (TTL 1 h); retiring prevents a future session from
+  // inheriting the same public key and skipping payment for the same resource.
+  retireWallet(s.wallet.publicKey);
 }
 
 // Expire idle sessions (frees MCP subprocesses).
@@ -94,13 +104,20 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
     const mcp = new McpSession(wallet.secret);
     await mcp.connect();
 
+    const targets: Record<TargetKey, Target> = {
+      demo: { url: demoUrl, label: "Verivyx demo resource (sandbox)" },
+      webtest: { url: config.webTestUrl, label: "web-test.verivyx.com — a real Verivyx-protected WordPress post" },
+    };
+
     const session: Session = {
       id,
       wallet,
       mcp,
       demoUrl,
       demoSlug,
-      messages: [{ role: "system", content: systemPrompt(demoUrl) }],
+      targets,
+      activeTarget: "demo",
+      messages: [{ role: "system", content: systemPrompt(targets.demo.url, targets.demo.label) }],
       createdAt: Date.now(),
       lastUsed: Date.now(),
       busy: false,
@@ -114,6 +131,7 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
       walletAddress: wallet.publicKey,
       balances,
       demoSlug,
+      targets: { demo: targets.demo.label, webtest: targets.webtest.label },
       network: "stellar:testnet",
       model: config.openrouterModel,
     });
@@ -125,11 +143,23 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
 
 // Chat turn → SSE stream of agent + payment events.
 app.post("/api/v1/playground/chat", async (req: Request, res: Response) => {
-  const { sessionId, message } = (req.body ?? {}) as { sessionId?: string; message?: string };
+  const { sessionId, message, target } = (req.body ?? {}) as {
+    sessionId?: string;
+    message?: string;
+    target?: TargetKey;
+  };
   const session = sessionId ? sessions.get(sessionId) : undefined;
   if (!session) return res.status(404).json({ error: "session_not_found" });
   if (typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "empty_message" });
   if (session.busy) return res.status(409).json({ error: "session_busy" });
+
+  // Switch the target (demo ↔ web-test) when the UI selects a different one. The
+  // system prompt is rebuilt so the agent only ever knows the active target URL.
+  if ((target === "demo" || target === "webtest") && target !== session.activeTarget) {
+    session.activeTarget = target;
+    const t = session.targets[target];
+    session.messages[0] = { role: "system", content: systemPrompt(t.url, t.label) };
+  }
 
   session.busy = true;
   session.lastUsed = Date.now();

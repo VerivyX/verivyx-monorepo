@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -218,6 +219,37 @@ func verifyHumanSession(token string) (*humanClaims, error) {
 
 // ----------------- HTTP clients -----------------
 
+// hostnameLabel matches a single DNS label: starts and ends with alphanumeric,
+// interior may include hyphens, total 1–63 chars.
+var hostnameLabel = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// isValidHostname returns true iff s is a clean DNS hostname:
+// dot-separated labels, no scheme/port/path/query/fragment/whitespace,
+// total length 1–253 characters.
+func isValidHostname(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	// Reject anything that looks like it carries a scheme, port, path, query,
+	// fragment, userinfo, or whitespace — common SSRF injection vectors.
+	for _, ch := range s {
+		if ch == '/' || ch == ':' || ch == '@' || ch == '#' || ch == '?' ||
+			ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			return false
+		}
+	}
+	labels := strings.Split(s, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if !hostnameLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
 func authURL() string { return env("AUTH_SERVICE_URL", "http://auth-service:8083") }
 func gwURL() string   { return env("GATEWAY_URL", "http://x402-gateway:8081") }
 
@@ -307,7 +339,7 @@ func lookupDomain(domain string) (*DomainConfig, error) {
 	domainCacheMu.RUnlock()
 
 	// Cache miss — fetch from auth-service
-	req, _ := http.NewRequest("GET", authURL()+"/api/v1/auth/lookup?domain="+domain, nil)
+	req, _ := http.NewRequest("GET", authURL()+"/api/v1/auth/lookup?domain="+url.QueryEscape(domain), nil)
 	req.Header.Set("X-Internal-Token", string(internalTok))
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Do(req)
@@ -329,28 +361,6 @@ func lookupDomain(domain string) (*DomainConfig, error) {
 	domainCacheMu.Unlock()
 
 	return &out, nil
-}
-
-func gatewayPaid(domain, slug string) (bool, string) {
-	req, _ := http.NewRequest("GET", gwURL()+"/api/v1/payment/internal/check?domain="+domain+"&slug="+slug, nil)
-	req.Header.Set("X-Internal-Token", string(internalTok))
-	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Do(req)
-	if err != nil {
-		return false, ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return false, ""
-	}
-	var out struct {
-		Paid        bool   `json:"paid"`
-		Transaction string `json:"transaction"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, ""
-	}
-	return out.Paid, out.Transaction
 }
 
 func logEvent(p EventPayload) {
@@ -466,6 +476,10 @@ func main() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_slug_required"})
 			return
 		}
+		if !isValidHostname(req.Domain) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_domain"})
+			return
+		}
 
 		ip := clientIp(c)
 		ua := c.GetHeader("User-Agent")
@@ -524,7 +538,7 @@ func main() {
 				if respJSON, jsonErr := json.Marshal(result); jsonErr == nil {
 					c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(respJSON))
 				}
-				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
 				if ferr != nil {
 					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
 					return
@@ -567,7 +581,7 @@ func main() {
 					IP:        ip,
 					Ja4:       ja4,
 				})
-				html, ferr := fetchArticleBody(req.Domain, req.Slug)
+				html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
 				if ferr != nil {
 					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
 					return
@@ -581,31 +595,10 @@ func main() {
 			}
 		}
 
-		// Step 3: Paid x402 session (set by gateway /settle)
-		paid, txHash := gatewayPaid(req.Domain, req.Slug)
-		if paid {
-			go logEvent(EventPayload{
-				Domain:    req.Domain,
-				Type:      "agent_served",
-				SessionID: req.Slug,
-				IP:        ip,
-				Ja4:       ja4,
-			})
-			html, ferr := fetchArticleBody(req.Domain, req.Slug)
-			if ferr != nil {
-				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{
-				"status":      "success",
-				"served":      "paid_agent",
-				"transaction": txHash,
-				"html":        html,
-			})
-			return
-		}
-
-		// Step 4: 402, log block
+		// Step 3: no payment header and no human session → blocked.
+		// (There is deliberately no shared "(domain, slug) is paid" lookup here: a
+		// payment only ever authorizes the request that carries it, so one caller's
+		// payment can never unlock the resource for another, anonymous caller.)
 		agent, cat := classifyAgent(ua)
 		go logEvent(EventPayload{
 			Domain:    req.Domain,

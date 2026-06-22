@@ -92,9 +92,13 @@ class Verivyx_Settings {
             update_option(self::OPTION_SCOPE,      sanitize_text_field(wp_unslash($_POST['verivyx_scope'] ?? 'posts')));
             update_option(self::OPTION_POST_TYPES, sanitize_text_field(wp_unslash($_POST['verivyx_post_types'] ?? '')));
             update_option(self::OPTION_PUBLIC_PAGES, sanitize_text_field(wp_unslash($_POST['verivyx_public_pages'] ?? '')));
-            // Only overwrite the stored token when a wp-config constant is NOT managing it.
+            // Only overwrite the stored token when a wp-config constant is NOT managing it
+            // and the submitted value is non-empty (blank = keep existing token unchanged).
             if (!defined('VERIVYX_INTERNAL_TOKEN')) {
-                update_option('verivyx_internal_token', sanitize_text_field(wp_unslash($_POST['verivyx_internal_token'] ?? '')));
+                $submitted_token = sanitize_text_field(wp_unslash($_POST['verivyx_internal_token'] ?? ''));
+                if ($submitted_token !== '') {
+                    update_option('verivyx_internal_token', $submitted_token);
+                }
             }
             echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
         }

@@ -13,24 +13,25 @@ export type AgentEvent =
 
 const MAX_ITERS = 4;
 
-export function systemPrompt(demoUrl: string): string {
+export function systemPrompt(targetUrl: string, targetLabel: string): string {
   return [
     "You are the Verivyx x402 payment agent inside a sandboxed Stellar TESTNET playground.",
     "Your ONLY purpose is to demonstrate Verivyx: the x402 payment protocol, paying for content with",
     "testnet USDC on Stellar, and how this playground works.",
     "You control a Stellar wallet that holds a little test USDC.",
-    "You have TWO abilities, both only for this exact demo URL:",
-    demoUrl,
+    `The user has selected this target resource to work with: ${targetLabel}.`,
+    "You have TWO abilities, both ONLY for this exact target URL:",
+    targetUrl,
     "1) fetch_paid_resource(url): pay with testnet USDC over x402 and unlock the content. Use this when the",
-    "   user wants the premium/demo content. After paying, briefly summarize the unlocked content and state",
-    "   that payment settled on Stellar testnet (mention the tx if available).",
+    "   user wants the protected/premium content. After paying, briefly summarize the unlocked content and",
+    "   state that payment settled on Stellar testnet (mention the tx if available).",
     "2) check_access_without_paying(url): fetch the SAME resource WITHOUT paying. It returns HTTP 402 and no",
     "   content — exactly what an unpaid bot or scraper sees. Use this when the user wants to see access being",
     "   blocked, or wants to test/try without paying.",
     "If the user asks to compare or see both, first call check_access_without_paying to show the 402 block,",
     "then call fetch_paid_resource to pay and unlock — and contrast the two outcomes.",
-    "Only ever use that demo URL — never any other URL.",
-    "STRICT TOPIC LIMIT: only discuss Verivyx, the x402 protocol, Stellar/USDC payments, the demo resource,",
+    "Only ever use that exact target URL — never any other URL.",
+    "STRICT TOPIC LIMIT: only discuss Verivyx, the x402 protocol, Stellar/USDC payments, the target resource,",
     "and how this playground works. If the user asks about anything unrelated — general knowledge, coding",
     "help, other products, news, personal questions, math, etc. — do NOT answer it. Politely decline in one",
     "sentence and steer them back to trying the Verivyx payment demo. Never call any tool for off-topic requests.",
@@ -79,10 +80,22 @@ export async function runAgentTurn(
 
           if (unpaid) {
             // Plain fetch, no payment — demonstrate the 402 block a bot/scraper hits.
+            // Send an explicit bot User-Agent so the paywall (WP plugin or gateway) can
+            // never misidentify this request as a browser navigation pass-through,
+            // regardless of which HTTP headers the underlying fetch implementation adds.
+            // Without this, an x402 client behind a CDN or reverse proxy that injects
+            // Sec-Fetch-Mode: navigate would make the WP plugin serve the full page
+            // (200), rendering the demo non-deterministic on the 402-block path.
             onEvent({ type: "status", text: "checking" });
-            const r = await fetch(url, { method });
+            const r = await fetch(url, {
+              method,
+              headers: { "User-Agent": "verivyx-playground-probe/1.0 (httpclient; no-payment)" },
+            });
             const body = await r.text();
             const blocked = r.status === 402;
+            // A non-402 response means the paywall served content to an unauthenticated
+            // client — treat this as a content-leak warning, not "allowed". The demo
+            // must never present a non-blocked probe as a success state.
             onEvent({ type: "access_check", status: r.status, blocked });
             toolResult = JSON.stringify({
               status: r.status,
@@ -90,7 +103,7 @@ export async function runAgentTurn(
               paymentMade: false,
               note: blocked
                 ? "Access denied — HTTP 402 Payment Required. The resource is paywalled; no content was returned because no payment was made. This is what an unpaid bot or scraper receives."
-                : "Unexpected: the resource did not return 402 without payment.",
+                : `Unexpected: the resource returned ${r.status} without payment — the paywall did not enforce on this request.`,
               response: body.slice(0, 500),
             });
           } else {

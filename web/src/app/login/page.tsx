@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Mail, Lock, ArrowRight, MailCheck } from 'lucide-react';
 import Link from 'next/link';
 import { SiteHeader } from '@/components/SiteHeader';
@@ -9,8 +9,11 @@ import { Logo } from '@/components/Logo';
 import { Turnstile, TURNSTILE_SITE_KEY } from '@/components/Turnstile';
 import { api, saveSession } from '@/lib/api';
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const loginChallenge = searchParams.get('login_challenge');
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState('');
@@ -19,15 +22,38 @@ export default function LoginPage() {
   const [unverified, setUnverified] = useState(false);
   const [resent, setResent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   const handleToken = useCallback((t: string) => setToken(t), []);
-  // Clear the token without remounting — safe to call from error/expired callbacks.
   const clearToken = useCallback(() => setToken(''), []);
-  // Remount the widget for a fresh single-use token. Only call after a submit attempt.
   const resetCaptcha = () => {
     setToken('');
     setCaptchaKey((k) => k + 1);
   };
+
+  // On mount: if already logged in and a login_challenge is present, skip the
+  // login form and immediately complete the OAuth flow.
+  useEffect(() => {
+    if (!loginChallenge) return;
+    const existingToken = typeof window !== 'undefined' ? localStorage.getItem('paywall_token') : null;
+    if (!existingToken) return;
+
+    let cancelled = false;
+    setConnecting(true);
+    api.oauthLoginAccept(loginChallenge)
+      .then(({ redirect_to }) => {
+        if (!cancelled) window.location.href = redirect_to;
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setConnecting(false);
+          const msg = err instanceof Error ? err.message : 'OAuth accept failed';
+          setError(msg);
+        }
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run once on mount
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +63,14 @@ export default function LoginPage() {
     try {
       const data = await api.login({ email: email.trim().toLowerCase(), password, turnstileToken: token });
       saveSession(data.token, data.user);
-      router.push(data.user.needsOnboarding ? '/onboarding' : '/dashboard');
+
+      if (loginChallenge) {
+        // Complete the Hydra OAuth flow — redirect_to is an external Hydra URL.
+        const { redirect_to } = await api.oauthLoginAccept(loginChallenge);
+        window.location.href = redirect_to;
+      } else {
+        router.push(data.user.needsOnboarding ? '/onboarding' : '/dashboard');
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Login failed';
       if (msg === 'email_not_verified') {
@@ -55,11 +88,26 @@ export default function LoginPage() {
     try {
       await api.resendVerification(email.trim().toLowerCase());
     } finally {
-      setResent(true); // response is intentionally generic
+      setResent(true);
     }
   };
 
   const canSubmit = !loading && (!TURNSTILE_SITE_KEY || token.length > 0);
+
+  if (connecting) {
+    return (
+      <div className="min-h-screen bg-white">
+        <SiteHeader variant="auth" />
+        <main className="relative flex min-h-[calc(100vh-4rem)] items-center justify-center overflow-hidden px-6 py-16">
+          <div className="absolute inset-0 hero-mesh" aria-hidden />
+          <div className="relative flex flex-col items-center gap-4 text-center">
+            <p className="text-lg font-semibold text-[var(--color-ink-900)]">Connecting…</p>
+            <p className="text-sm text-[var(--color-ink-500)]">Completing sign-in with your MCP client.</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-white">
@@ -109,6 +157,12 @@ export default function LoginPage() {
               </Link>
               .
             </p>
+
+            {loginChallenge && (
+              <p className="mt-3 rounded-lg border border-[var(--color-cream-200)] bg-[var(--color-cream-50)] px-3 py-2 text-xs text-[var(--color-ink-500)]">
+                Signing in to authorize your MCP client.
+              </p>
+            )}
 
             <form onSubmit={handleSubmit} className="mt-8 flex flex-col gap-5">
               <label className="flex flex-col gap-2">
@@ -176,5 +230,17 @@ export default function LoginPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <p className="text-sm text-[var(--color-ink-500)]">Loading…</p>
+      </div>
+    }>
+      <LoginInner />
+    </Suspense>
   );
 }

@@ -10,6 +10,7 @@ import {
   validateSlug,
   checkPow,
   fingerprintReason,
+  clientIp as _clientIp,
   type Fingerprint,
 } from './lib.js';
 import {
@@ -20,6 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
+import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
 
 declare global {
   namespace Express {
@@ -34,6 +36,8 @@ type AuthedRequest = Request & { userId?: number; userEmail?: string };
 
 const prisma = new PrismaClient();
 const app = express();
+const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? '1');
+app.set('trust proxy', TRUSTED_PROXY_HOPS);
 app.use(express.json({ limit: '256kb' }));
 app.use(cors());
 
@@ -66,6 +70,10 @@ const RESEND_FROM = process.env.RESEND_FROM?.trim() || 'Verivyx <noreply@verivyx
 const APP_BASE_URL = requireEnv('APP_BASE_URL').replace(/\/$/, '');
 // Email verification token lifetime.
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60_000;
+
+// Public frontend URL (e.g. https://verivyx.com) — used to redirect browser to
+// the dashboard login page when a Hydra login challenge requires interaction.
+const PUBLIC_DOMAIN = process.env.PUBLIC_DOMAIN?.replace(/\/$/, '') ?? APP_BASE_URL;
 
 // ---------- in-memory rate limiter ----------
 const _rl = new Map<string, { count: number; resetAt: number }>();
@@ -119,10 +127,8 @@ function signHumanSession(c: HumanClaims): string {
   return jwt.sign(c, SESSION_SECRET, { expiresIn: HUMAN_SESSION_TTL_SEC, audience: 'human' });
 }
 
-function clientIp(req: Request): string {
-  const xf = req.headers['x-forwarded-for'];
-  if (typeof xf === 'string') return xf.split(',')[0]?.trim() || req.ip || 'unknown';
-  return req.ip || 'unknown';
+function reqIp(req: Request): string {
+  return _clientIp(req.headers['x-forwarded-for'], req.socket?.remoteAddress, TRUSTED_PROXY_HOPS);
 }
 
 // ---------- guards ----------
@@ -314,6 +320,7 @@ type PublicUser = {
   apiKey: string | null;
   role: string;
   paywallEnabled: boolean;
+  mcpEarlyAccess: boolean;
   createdAt?: Date;
 };
 
@@ -328,6 +335,7 @@ function shapeUser(u: {
   apiKey: string | null;
   role: string;
   paywallEnabled: boolean;
+  mcpEarlyAccess: boolean;
   createdAt?: Date;
 }): PublicUser {
   return {
@@ -343,6 +351,7 @@ function shapeUser(u: {
     apiKey: u.apiKey,
     role: u.role,
     paywallEnabled: u.paywallEnabled,
+    mcpEarlyAccess: u.mcpEarlyAccess,
     createdAt: u.createdAt,
   };
 }
@@ -359,7 +368,7 @@ app.get('/api/v1/auth/health', (_req, res) => {
 // gathered later in the onboarding wizard. The account starts UNVERIFIED and a
 // verification email is sent; the user cannot log in until they verify.
 app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip, 5, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many registrations from this IP. Try again in an hour.' });
   }
@@ -400,7 +409,7 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
 // Verify an email via the link token. On success the account is marked verified
 // and a session token is returned (auto-login → onboarding).
 app.post('/api/v1/auth/verify-email', async (req: Request, res: Response) => {
-  if (!rateLimit(clientIp(req), 20, 15 * 60_000)) {
+  if (!rateLimit(reqIp(req), 20, 15 * 60_000)) {
     return res.status(429).json({ error: 'Too many attempts. Try again shortly.' });
   }
   const { token } = req.body ?? {};
@@ -425,7 +434,7 @@ app.post('/api/v1/auth/verify-email', async (req: Request, res: Response) => {
 // Resend a verification email. Always returns success to avoid leaking which
 // emails are registered.
 app.post('/api/v1/auth/resend-verification', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(`resend:${ip}`, 5, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many requests. Try again later.' });
   }
@@ -451,7 +460,7 @@ app.post('/api/v1/auth/resend-verification', async (req: Request, res: Response)
 // MCP early-access waitlist (public, mcp.verivyx.com coming-soon).
 // Generic success even on duplicates to avoid leaking who has signed up.
 app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(`mcpwl:${ip}`, 10, 60 * 60_000)) {
     return res.status(429).json({ error: 'Too many requests. Try again later.' });
   }
@@ -459,7 +468,14 @@ app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
   if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
-  if (!(await verifyTurnstile(typeof turnstileToken === 'string' ? turnstileToken : '', ip))) {
+  // Authenticated dashboard users (valid creator JWT) skip the captcha — they're already
+  // verified. The public mcp.verivyx.com coming-soon path still requires Turnstile.
+  let authed = false;
+  const authz = req.headers.authorization;
+  if (authz?.startsWith('Bearer ')) {
+    try { verifyCreator(authz.slice(7)); authed = true; } catch { /* not authenticated → public path */ }
+  }
+  if (!authed && !(await verifyTurnstile(typeof turnstileToken === 'string' ? turnstileToken : '', ip))) {
     return res.status(403).json({ error: 'Captcha verification failed' });
   }
   const normalized = email.trim().toLowerCase();
@@ -480,7 +496,7 @@ app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
 });
 
 app.post('/api/v1/auth/login', async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip, 10, 15 * 60_000)) {
     return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
   }
@@ -511,6 +527,191 @@ app.get('/api/v1/auth/me', authGuard, async (req: Request, res: Response) => {
   const user = await prisma.user.findUnique({ where: { id: req.userId! } });
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ user: shapeUser(user) });
+});
+
+// --- Hydra OAuth2 login challenge ---
+
+// Browser redirect target from Hydra. Reads the login_challenge, checks whether
+// Hydra says the session can be skipped (already authenticated), and either
+// accepts immediately or bounces the user to the dashboard login page which
+// will call POST /api/v1/oauth/login/accept after the user logs in.
+// NOTE: auth-service uses Bearer-JWT, not cookies, so there is no usable session
+// for a raw browser hit. Hydra's skip flag handles the re-auth-not-needed case.
+app.get('/api/v1/oauth/login', async (req: Request, res: Response) => {
+  const challenge = typeof req.query.login_challenge === 'string' ? req.query.login_challenge : '';
+  if (!challenge) {
+    return res.status(400).json({ error: 'login_challenge query param required' });
+  }
+  try {
+    const lr = await getLoginRequest(challenge);
+    if (lr.skip) {
+      const { redirect_to } = await acceptLogin(challenge, lr.subject);
+      return res.redirect(302, redirect_to);
+    }
+    return res.redirect(302, `${PUBLIC_DOMAIN}/login?login_challenge=${encodeURIComponent(challenge)}`);
+  } catch (err) {
+    console.error('Hydra getLoginRequest error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// Called by the dashboard after a successful Bearer-JWT login when a
+// login_challenge is present. Returns redirect_to so the client can navigate.
+app.post('/api/v1/oauth/login/accept', authGuard, async (req: Request, res: Response) => {
+  const { login_challenge } = req.body ?? {};
+  if (typeof login_challenge !== 'string' || !login_challenge) {
+    return res.status(400).json({ error: 'login_challenge required' });
+  }
+  try {
+    const { redirect_to } = await acceptLogin(login_challenge, String(req.userId!));
+    return res.json({ redirect_to });
+  } catch (err) {
+    console.error('Hydra acceptLogin error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// --- Hydra logout ---
+//
+// Dashboard logout calls this to END the user's Hydra SSO session so a NEW MCP
+// connector cannot silently re-authorize (Hydra's `skip` auto-accept) without a
+// fresh login. Best-effort: never hard-fails — already-issued access tokens are
+// intentionally NOT revoked, so live connectors keep working until token expiry.
+app.post('/api/v1/oauth/logout', authGuard, async (req: Request, res: Response) => {
+  await revokeUserSessions(String(req.userId!)).catch(() => {});
+  return res.json({ ok: true });
+});
+
+// MCP resource URI that every issued access token must carry as audience.
+// Defaults to the production value; wired into docker-compose in T7.
+const MCP_RESOURCE_URI = (process.env.MCP_RESOURCE_URI ?? 'https://mcp.verivyx.com/mcp').replace(/\/$/, '');
+
+// --- Hydra OAuth2 consent challenge ---
+//
+// Browser redirect target from Hydra. Auto-accepts consent because Verivyx is a
+// first-party AS (not a third-party proxy) — the user already authenticated at
+// the login step. A user-facing consent screen is deferred to Fase 2 polish.
+//
+// Critical job: always include MCP_RESOURCE_URI in grant_access_token_audience so
+// tokens carry the correct `aud` even when the client (e.g. Claude) omits the
+// `resource` parameter.
+// Feature flag: when OFF (default), consent is auto-accepted (first-party
+// convenience — the historical behavior). When ON, the user sees an explicit
+// consent screen for each new app. Flip via env without redeploying code
+// elsewhere — instant rollback if the browser flow misbehaves.
+const CONSENT_SCREEN_ENABLED = (process.env.CONSENT_SCREEN_ENABLED ?? 'false').toLowerCase() === 'true';
+
+// Accept the consent grant. Audience ALWAYS includes MCP_RESOURCE_URI so issued
+// tokens carry the right `aud` even when the client omits the `resource` param.
+// Shared by the auto-accept/skip path and the explicit user-approval endpoint.
+async function grantConsent(challenge: string): Promise<string> {
+  const cr = await getConsentRequest(challenge);
+  const audience = Array.from(
+    new Set([...(cr.requested_access_token_audience ?? []), MCP_RESOURCE_URI]),
+  );
+  const { redirect_to } = await acceptConsent(challenge, {
+    grantScope: cr.requested_scope,
+    grantAudience: audience,
+    sessionSub: cr.subject,
+  });
+  return redirect_to;
+}
+
+// Only users granted MCP early-access may connect an MCP client. Subject = String(user.id).
+async function subjectHasMcpAccess(subject: string): Promise<boolean> {
+  const id = Number(subject);
+  if (!Number.isInteger(id)) return false;
+  const u = await prisma.user.findUnique({ where: { id } });
+  return u?.mcpEarlyAccess === true;
+}
+
+// Hydra consent redirect target.
+app.get('/api/v1/oauth/consent', async (req: Request, res: Response) => {
+  const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
+  if (!challenge) {
+    return res.status(400).json({ error: 'consent_challenge query param required' });
+  }
+  try {
+    const cr = await getConsentRequest(challenge);
+    // EARLY-ACCESS GATE: deny connect for users without MCP early access (before
+    // any consent screen or grant). Rejecting returns a Hydra error redirect.
+    if (!(await subjectHasMcpAccess(cr.subject))) {
+      const { redirect_to } = await rejectConsent(challenge, 'access_denied');
+      return res.redirect(302, redirect_to);
+    }
+    // Show the screen only when enabled AND Hydra doesn't already remember a grant.
+    if (CONSENT_SCREEN_ENABLED && !cr.skip) {
+      return res.redirect(
+        302,
+        `${PUBLIC_DOMAIN}/consent?consent_challenge=${encodeURIComponent(challenge)}`,
+      );
+    }
+    return res.redirect(302, await grantConsent(challenge));
+  } catch (err) {
+    console.error('Hydra consent error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// Display info for the dashboard consent screen. Auth-gated; only the user who is
+// the consent subject may read it (prevents reading another user's consent).
+app.get('/api/v1/oauth/consent/info', authGuard, async (req: Request, res: Response) => {
+  const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
+  if (!challenge) return res.status(400).json({ error: 'consent_challenge required' });
+  try {
+    const cr = await getConsentRequest(challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    return res.json({
+      clientName: cr.client?.client_name || cr.client?.client_id || 'An application',
+      scopes: cr.requested_scope ?? [],
+      audience: cr.requested_access_token_audience ?? [],
+    });
+  } catch (err) {
+    console.error('Hydra consent info error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// User approved the consent screen. Verifies the consent subject is the caller.
+app.post('/api/v1/oauth/consent/accept', authGuard, async (req: Request, res: Response) => {
+  const { consent_challenge } = req.body ?? {};
+  if (typeof consent_challenge !== 'string' || !consent_challenge) {
+    return res.status(400).json({ error: 'consent_challenge required' });
+  }
+  try {
+    const cr = await getConsentRequest(consent_challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    if (!(await subjectHasMcpAccess(cr.subject))) {
+      return res.status(403).json({ error: 'early_access_required' });
+    }
+    return res.json({ redirect_to: await grantConsent(consent_challenge) });
+  } catch (err) {
+    console.error('Hydra consent accept error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// User denied the consent screen.
+app.post('/api/v1/oauth/consent/reject', authGuard, async (req: Request, res: Response) => {
+  const { consent_challenge } = req.body ?? {};
+  if (typeof consent_challenge !== 'string' || !consent_challenge) {
+    return res.status(400).json({ error: 'consent_challenge required' });
+  }
+  try {
+    const cr = await getConsentRequest(consent_challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    const { redirect_to } = await rejectConsent(consent_challenge, 'access_denied');
+    return res.json({ redirect_to });
+  } catch (err) {
+    console.error('Hydra consent reject error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
 });
 
 const PAYMENT_RELAYER_URL = process.env.PAYMENT_RELAYER_URL || 'http://payment-relayer:8084';
@@ -599,7 +800,7 @@ app.post('/api/v1/auth/challenge', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'domain and slug required' });
   }
 
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   if (!rateLimit(ip + ':challenge', 10, 60_000)) {
     return res.status(429).json({ error: 'too_many_challenges' });
   }
@@ -643,7 +844,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'invalid_or_expired_challenge' });
   }
 
-  const ip = clientIp(req);
+  const ip = reqIp(req);
   const ua = String(req.headers['user-agent'] || '').slice(0, 256);
 
   if (claims.ip !== ip || claims.ua !== ua) {
@@ -1184,7 +1385,7 @@ app.get('/api/v1/admin/creators', adminGuard, async (_req: AuthedRequest, res: R
     select: {
       id: true, email: true, domain: true, stellar_address: true,
       emailVerified: true, pricePerRequest: true, platformFee: true, apiKey: true,
-      paywallEnabled: true, createdAt: true, role: true,
+      paywallEnabled: true, mcpEarlyAccess: true, createdAt: true, role: true,
       events: {
         where: { createdAt: { gte: since7d } },
         select: { type: true, amountUsdc: true },
@@ -1306,6 +1507,44 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
 });
 
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8088';
+
+// Admin: grant or revoke per-user MCP early-access flag (invitation control).
+// Body: { userId?: number; email?: string; grant: boolean }
+// Resolves the user by userId (preferred) or email. Also syncs McpWaitlist.invited.
+app.post('/api/v1/admin/mcp/early-access', adminGuard, async (req: AuthedRequest, res: Response) => {
+  const { userId, email, grant } = req.body ?? {};
+  if (typeof grant !== 'boolean') {
+    return res.status(400).json({ error: '`grant` (boolean) is required' });
+  }
+  if (userId == null && typeof email !== 'string') {
+    return res.status(400).json({ error: 'Provide `userId` or `email`' });
+  }
+
+  let user: { id: number; email: string } | null = null;
+  try {
+    if (userId != null) {
+      user = await prisma.user.findUnique({ where: { id: Number(userId) }, select: { id: true, email: true } });
+    } else {
+      user = await prisma.user.findUnique({ where: { email: (email as string).trim().toLowerCase() }, select: { id: true, email: true } });
+    }
+  } catch (err) {
+    console.error('mcp/early-access lookup error:', err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  try {
+    await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: grant } });
+    // Best-effort: keep McpWaitlist.invited in sync if the user's email appears there.
+    await prisma.mcpWaitlist.updateMany({ where: { email: user.email }, data: { invited: grant } }).catch(() => {});
+    await logAdminAction(req.userId!, 'mcp_early_access', String(user.id), { grant });
+    res.json({ ok: true, userId: user.id, email: user.email, mcpEarlyAccess: grant });
+  } catch (err) {
+    console.error('mcp/early-access update error:', err instanceof Error ? err.message : err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Admin: MCP early-access waitlist.
 app.get('/api/v1/admin/mcp-waitlist', adminGuard, async (_req: AuthedRequest, res: Response) => {

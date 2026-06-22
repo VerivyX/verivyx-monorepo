@@ -260,7 +260,7 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
             <p className="font-semibold tracking-tight">Test integration</p>
           </div>
           <button
-            onClick={() => { clearSession(); router.push('/'); }}
+            onClick={async () => { await api.oauthLogout().catch(() => {}); clearSession(); router.push('/'); }}
             className="btn-primary text-sm"
           >
             <LogOut size={14} /> Logout

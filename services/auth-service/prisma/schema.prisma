@@ -28,6 +28,7 @@ model User {
   wpInternalToken  String?   // per-domain secret for the WP internal body endpoint (Phase 2 withholding)
   domainVerified   Boolean   @default(false)
   domainVerifiedAt DateTime?
+  mcpEarlyAccess  Boolean    @default(false)
   role            Role       @default(CREATOR)
   createdAt       DateTime   @default(now())
   events          Event[]
@@ -130,4 +131,17 @@ model AdminLog {
 
   @@index([adminId])
   @@index([createdAt])
+}
+
+// Binds an MCP caller's OAuth identity (Hydra `sub`) to their on-chain smart account and the
+// delegated, budget-capped session signer the MCP uses to pay on their behalf. The owner master
+// key is never stored; sessionSignerSecretEnc is the AES-256-GCM-encrypted session key.
+model McpWallet {
+  oauthSub               String   @id
+  smartAccount           String
+  sessionSignerPubkey    String
+  sessionSignerSecretEnc String
+  budgetAtomic           Decimal
+  expiryLedger           BigInt
+  createdAt              DateTime @default(now())
 }

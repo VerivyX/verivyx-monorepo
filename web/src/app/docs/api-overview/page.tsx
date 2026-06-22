@@ -42,6 +42,7 @@ export default function ApiOverview() {
         <Li>Errors return a non-2xx status with a body like <C>{'{ "error": "code", "detail": "..." }'}</C>.</Li>
         <Li>USDC amounts on the wire are atomic, 7-decimal units — <C>1 USDC = 10,000,000</C>.</Li>
         <Li>Several public endpoints are rate-limited per IP and gated by Cloudflare Turnstile.</Li>
+        <Li>The payment surface follows the <A href="https://x402.org">x402 v2 specification</A> (<A href="https://github.com/coinbase/x402">Coinbase x402</A>) and settles on <A href="https://developers.stellar.org">Stellar</A>; networks use CAIP-2 ids such as <C>stellar:testnet</C>.</Li>
       </Ul>
 
       <H3 id="example">Quick example</H3>

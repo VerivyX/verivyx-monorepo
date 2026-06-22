@@ -2,10 +2,13 @@ import { wrapFetchWithPayment, x402Client, x402HTTPClient } from "@x402/fetch";
 
 import { getConfig } from "../config.js";
 import { logger } from "../logger.js";
-import { addDecimalStrings, atomsToDecimalString } from "../money.js";
+import { addDecimalStrings, atomsToDecimalString, decimalToBaseUnits } from "../money.js";
 import { chargeStellarFee } from "../fee/stellar.js";
+import { chargeStellarFeeNonCustodial } from "../fee/stellarNonCustodial.js";
 import type { FeeReceipt } from "../fee/types.js";
-import { setupStellarRail, stellarInfo } from "./stellar.js";
+import { assertPublicHttpsUrl } from "../ssrf.js";
+import { getNetworkPassphrase, getRpcUrl } from "../core/stellar/utils.js";
+import { setupStellarRail, setupStellarRailNonCustodial, stellarInfo } from "./stellar.js";
 import { setupEvmRail, type EvmRail } from "./evm.js";
 import { chargeSolanaFee, setupSolanaRail, solanaInfo, type SolanaRail } from "./solana.js";
 
@@ -111,15 +114,42 @@ function networkOf(receipt: unknown): string | null {
 export async function createPaymentService(opts?: {
   stellarSecretKey?: string;
   stellarOnly?: boolean;
+  /**
+   * Non-custodial mode: pay the resource from the caller's OWN smart account via the
+   * delegated session key (standard x402). Registers the non-custodial Stellar rail
+   * instead of the custodial one; Stellar-only (the binding is a Stellar smart account).
+   * The service fee is also charged non-custodially: a delegated USDC.transfer from the
+   * smart account to the fee treasury, gas-sponsored by the MCP wallet.
+   */
+  nonCustodial?: { smartAccountId: string; sessionSecret: string };
+  /**
+   * OAuth caller with no linked wallet: a Stellar `pay` must NOT silently use the
+   * custodial MCP wallet — it returns a structured `no_wallet_linked` error instead.
+   * `quote` still works so the caller can see what a payment would cost.
+   */
+  noWalletLinked?: boolean;
 }): Promise<PaymentService> {
   const cfg = getConfig();
   const stellarSecret = opts?.stellarSecretKey ?? cfg.stellarSecretKey;
+  const isNonCustodial = !!opts?.nonCustodial;
+  const noWalletLinked = !!opts?.noWalletLinked;
   const client = new x402Client();
 
-  const stellarRail = setupStellarRail(client, cfg.stellar, stellarSecret);
+  // Non-custodial is Stellar-only (the binding is a Stellar smart account); when set,
+  // treat like stellarOnly (no EVM/Solana rails on this path).
+  const stellarOnly = opts?.stellarOnly || isNonCustodial;
+
+  const stellarRail = isNonCustodial
+    ? setupStellarRailNonCustodial(
+        client,
+        cfg.stellar,
+        opts!.nonCustodial!.smartAccountId,
+        opts!.nonCustodial!.sessionSecret,
+      )
+    : setupStellarRail(client, cfg.stellar, stellarSecret);
   let evmRail: EvmRail | null = null;
   let solanaRail: SolanaRail | null = null;
-  if (!opts?.stellarOnly) {
+  if (!stellarOnly) {
     if (cfg.evm) {
       evmRail = setupEvmRail(client, cfg.evm);
     }
@@ -152,11 +182,12 @@ export async function createPaymentService(opts?: {
     return false;
   }
 
-  function assertUrlAllowed(url: string): void {
-    if (cfg.allowedPaymentPrefixes.length === 0) return;
-    if (!cfg.allowedPaymentPrefixes.some(prefix => url.startsWith(prefix))) {
-      throw new Error(`URL not allowed by payment policy: ${url}`);
-    }
+  async function assertUrlAllowed(url: string): Promise<void> {
+    // If the URL matches a trusted prefix, skip further checks (explicit bypass for
+    // internal/test hosts). An EMPTY prefix list is NOT "allow all" — it means only
+    // public HTTPS non-private hosts are permitted (default-deny via SSRF guard).
+    if (cfg.allowedPaymentPrefixes.some(prefix => url.startsWith(prefix))) return;
+    await assertPublicHttpsUrl(url);
   }
 
   function buildInit(input: PayInput): RequestInit {
@@ -191,7 +222,33 @@ export async function createPaymentService(opts?: {
   }
 
   async function pay(input: PayInput): Promise<PayResult> {
-    assertUrlAllowed(input.url);
+    await assertUrlAllowed(input.url);
+
+    // OAuth caller without a linked wallet: never pay a Stellar resource from the
+    // custodial MCP wallet. Probe the resource; if it requires a Stellar payment,
+    // surface a structured `no_wallet_linked` error so the caller links a wallet.
+    if (noWalletLinked) {
+      const q = await quote(input);
+      if (q.paymentRequired && (q.chain === null || q.chain.startsWith("stellar:"))) {
+        return {
+          url: input.url,
+          method: input.method,
+          status: 402,
+          ok: false,
+          paymentMade: false,
+          chain: q.chain,
+          paymentReceipt: null,
+          feeReceipt: null,
+          feeError: "no_wallet_linked",
+          response: {
+            error: "no_wallet_linked",
+            message:
+              "No wallet is linked to your account. Connect a Verivyx wallet in the dashboard to pay from your own smart account.",
+          },
+        };
+      }
+    }
+
     const response = await fetchWithPayment(input.url, buildInit(input));
     const rawBody = await response.text();
     const parsedBody = tryParseBody(rawBody, response.headers.get("content-type"));
@@ -209,7 +266,30 @@ export async function createPaymentService(opts?: {
     let feeError: string | null = null;
 
     if (paymentMade && response.ok) {
-      if (!chain) {
+      if (isNonCustodial) {
+        // Charge the Verivyx service fee from the caller's smart account to the fee
+        // treasury, authorized by the session key, gas-sponsored by the MCP wallet.
+        // A fee submit error is recorded but does NOT fail the pay — the resource was
+        // already paid and served. Mirror the custodial try/catch below.
+        const feeAtomic = decimalToBaseUnits(cfg.feeUsdc, cfg.stellar.usdcDecimals).toString();
+        try {
+          feeReceipt = await chargeStellarFeeNonCustodial({
+            smartAccountId: opts!.nonCustodial!.smartAccountId,
+            sessionSecret: opts!.nonCustodial!.sessionSecret,
+            feeTreasury: cfg.stellar.feeTreasury,
+            usdcContract: cfg.stellar.usdcContract,
+            feeAtomic,
+            feeUsdc: cfg.feeUsdc,
+            networkPassphrase: getNetworkPassphrase(cfg.stellar.network),
+            rpcUrl: getRpcUrl(cfg.stellar.network, { url: cfg.stellar.rpcUrl }),
+            network: cfg.stellar.network,
+            sponsorSecret: cfg.stellarSecretKey,
+          });
+        } catch (error) {
+          feeError = error instanceof Error ? error.message : "non-custodial fee charge failed";
+          logger.error({ url: input.url, err: feeError }, "non-custodial service fee charge failed");
+        }
+      } else if (!chain) {
         feeError = "could not determine settlement network; service fee not charged";
         logger.warn({ url: input.url }, feeError);
       } else {
@@ -237,6 +317,7 @@ export async function createPaymentService(opts?: {
   }
 
   async function quote(input: PayInput): Promise<QuoteResult> {
+    await assertUrlAllowed(input.url);
     const response = await fetch(input.url, buildInit(input));
     const rawBody = await response.text();
     const parsedBody = tryParseBody(rawBody, response.headers.get("content-type"));

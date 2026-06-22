@@ -27,10 +27,32 @@ class Verivyx_Api {
         $headers['Idempotency-Key'] = wp_generate_uuid4();
 
         return wp_remote_post($endpoint, [
-            'timeout' => 5,
+            'timeout' => self::hydrate_timeout($x_payment !== null && $x_payment !== ''),
             'headers' => $headers,
             'body'    => wp_json_encode(['domain' => $domain, 'slug' => $slug]),
         ]);
+    }
+
+    /**
+     * HTTP timeout (seconds) for the hydrate call.
+     *
+     * No-payment requests (402 / passthrough / human session) resolve in
+     * milliseconds, so the short timeout keeps page rendering snappy and fails
+     * open quickly if hydration is unreachable.
+     *
+     * A paid agent request, however, triggers a SYNCHRONOUS on-chain Soroban
+     * settlement (verify + distribute) that routinely takes 9-12s. Hydration's own
+     * client gives the gateway 30s. WP must wait LONGER than that so hydration is
+     * the component that decides success/failure. If WP times out first it fails
+     * open to a themed page — dropping the x402 Payment-Response receipt header —
+     * while the settle still completes on-chain, so the buyer is charged but the
+     * agent is told the payment failed.
+     *
+     * @param bool $is_payment Whether this hydrate carries an x402 payment header.
+     * @return int Timeout in seconds.
+     */
+    public static function hydrate_timeout(bool $is_payment): int {
+        return $is_payment ? 35 : 5;
     }
 
     /**

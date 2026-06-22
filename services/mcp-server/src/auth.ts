@@ -1,7 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { jwtVerify } from "jose";
 
+import { matchApiKey } from "./apiKeys.js";
 import { getConfig } from "./config.js";
+import { makeTokenVerifier, wwwAuthenticateValue } from "./oauth.js";
 
 const MCP_KEY_HEADER = "x-verivyx-mcp-key";
 
@@ -12,36 +15,130 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-/** Returns the matched key (or null) without leaking which key matched. */
-function matchApiKey(presented: string): string | null {
-  const { apiKeys } = getConfig();
-  let matched: string | null = null;
-  for (const key of apiKeys) {
-    if (safeEqual(presented, key)) matched = key;
+// Build verifier and PRM URL once at module init (only when HYDRA_ISSUER is configured).
+const cfg = getConfig();
+const verifier = cfg.oauth
+  ? makeTokenVerifier({
+      jwksUrl: cfg.oauth.jwksUrl,
+      issuer: cfg.oauth.issuer,
+      audience: cfg.oauth.resourceUri,
+    })
+  : undefined;
+const prmUrl = cfg.oauth
+  ? new URL(cfg.oauth.resourceUri).origin + "/.well-known/oauth-protected-resource"
+  : "";
+
+/**
+ * Dual-auth middleware for the public /mcp endpoint.
+ * Accepts EITHER:
+ *   1. A Hydra-issued Bearer JWT (Authorization: Bearer <token>) — validated via JWKS.
+ *   2. A static Verivyx API key (X-Verivyx-MCP-Key header) — validated via sha256 allowlist.
+ * The static-key path keeps the playground working when HYDRA_ISSUER is not set.
+ */
+export async function requireMcpAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  // 1. Extract bearer token from Authorization header (case-insensitive).
+  const bearer = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+
+  // 2. Try JWT validation if we have both a bearer token and a configured verifier.
+  if (bearer && verifier) {
+    try {
+      const claims = await verifier(bearer);
+      (req as Request & { mcpUser?: { kind: "oauth"; sub: string } }).mcpUser = {
+        kind: "oauth",
+        sub: claims.sub,
+      };
+      next();
+      return;
+    } catch {
+      // Fall through to static key check — an invalid JWT does not immediately 401
+      // so a client that sends a malformed token can still use a static key.
+    }
   }
-  return matched;
+
+  // 3. Try static API key (X-Verivyx-MCP-Key header).
+  const staticKey = req.header(MCP_KEY_HEADER)?.trim();
+  const { apiKeys } = getConfig();
+  if (staticKey) {
+    const label = matchApiKey(staticKey, apiKeys);
+    if (label !== null) {
+      (req as Request & { mcpUser?: { kind: "key"; label: string } }).mcpUser = {
+        kind: "key",
+        label,
+      };
+      next();
+      return;
+    }
+  }
+
+  // 4. Neither auth method succeeded.
+  if (cfg.oauth) {
+    res.set("WWW-Authenticate", wwwAuthenticateValue(prmUrl));
+  }
+  res.status(401).json({ error: "unauthorized" });
 }
 
 /**
- * Gate the public MCP endpoint behind a Verivyx-issued API key allowlist.
- * While the public UI is coming-soon, only internal/playground/test callers
- * (which hold a key) can reach the MCP tools.
+ * User-auth middleware for the /wallet/* endpoints.
+ * Accepts EITHER:
+ *   1. A Hydra-issued Bearer JWT (Authorization: Bearer <token>) — validated via JWKS.
+ *      On success → req.mcpUser = { kind:"oauth", sub: claims.sub } (String(user.id))
+ *   2. A dashboard auth-service HS256 JWT (Authorization: Bearer <token>, audience "creator")
+ *      — validated with JWT_SECRET via jose. Requires claim id:number.
+ *      On success → req.mcpUser = { kind:"dashboard", sub: String(payload.id) }
+ *
+ * Static API keys (X-Verivyx-MCP-Key) are NOT accepted here — they carry no user identity.
+ * If neither path verifies → 401.
+ *
+ * NOTE: do NOT call this on the /mcp pay path — use requireMcpAuth there.
  */
-export function requireMcpKey(req: Request, res: Response, next: NextFunction): void {
-  const presented =
-    (req.header(MCP_KEY_HEADER) ?? req.header("authorization")?.replace(/^Bearer\s+/i, ""))?.trim() ??
-    "";
+export async function requireUserAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const cfg = getConfig();
 
-  const { apiKeys } = getConfig();
-  if (apiKeys.length === 0) {
-    res.status(503).json({ error: "mcp_disabled", message: "No MCP API keys configured." });
-    return;
+  // 1. Extract bearer token.
+  const bearer = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+
+  if (bearer) {
+    // 2a. Try Hydra OAuth JWT (RS256 / JWKS).
+    if (verifier) {
+      try {
+        const claims = await verifier(bearer);
+        (req as Request & { mcpUser?: { kind: "oauth"; sub: string } }).mcpUser = {
+          kind: "oauth",
+          sub: claims.sub,
+        };
+        next();
+        return;
+      } catch {
+        // Fall through to dashboard token check.
+      }
+    }
+
+    // 2b. Try dashboard auth-service HS256 token.
+    if (cfg.dashboardJwtSecret) {
+      try {
+        const key = new TextEncoder().encode(cfg.dashboardJwtSecret);
+        const { payload } = await jwtVerify(bearer, key, { audience: "creator" });
+        if (typeof payload["id"] !== "number") {
+          throw new Error("missing numeric id claim");
+        }
+        const sub = String(payload["id"]);
+        (req as Request & { mcpUser?: { kind: "dashboard"; sub: string } }).mcpUser = {
+          kind: "dashboard",
+          sub,
+        };
+        next();
+        return;
+      } catch {
+        // Fall through to 401.
+      }
+    }
   }
-  if (!presented || !matchApiKey(presented)) {
-    res.status(401).json({ error: "unauthorized", message: "Valid X-Verivyx-MCP-Key required." });
-    return;
+
+  // 3. Neither auth method succeeded.
+  if (cfg.oauth) {
+    res.set("WWW-Authenticate", wwwAuthenticateValue(prmUrl));
   }
-  next();
+  res.status(401).json({ error: "unauthorized" });
 }
 
 /** Internal-only endpoints (admin proxy / health detail) require X-Internal-Token. */

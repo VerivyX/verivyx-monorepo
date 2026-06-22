@@ -1,4 +1,5 @@
 import type { VxConfig } from './types';
+import { sanitizeForBrowser } from './sanitize';
 
 // Fetch the real body from the hydration endpoint and inject it into the stub
 // container (#vx-article). Fail-closed: on any error returns false (caller shows
@@ -15,7 +16,7 @@ export async function hydrateInject(cfg: VxConfig, headers: Record<string, strin
     if (!res.ok) return false;
     const data = (await res.json()) as { html?: string };
     if (typeof data.html !== 'string' || data.html === '') return false;
-    target.innerHTML = data.html;
+    target.innerHTML = sanitizeForBrowser(data.html);
     return true;
   } catch {
     return false;

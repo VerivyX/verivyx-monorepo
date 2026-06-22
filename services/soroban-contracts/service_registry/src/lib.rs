@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short,
+    contract, contractevent, contractimpl, contracttype, contracterror,
     Address, Env, String,
 };
 
@@ -30,6 +30,15 @@ pub struct ServiceRecord {
 pub enum DataKey {
     Service(String), // Persistent: domain → ServiceRecord
     Admin,           // Instance: contract admin
+}
+
+/// Emitted when a service domain is registered or updated.
+#[contractevent]
+pub struct ServiceRegisterEvent {
+    #[topic]
+    pub domain: String,
+    pub owner: Address,
+    pub price_atomic: i128,
 }
 
 #[contract]
@@ -70,10 +79,7 @@ impl ServiceRegistry {
         env.storage().persistent().set(&key, &record);
         env.storage().persistent().extend_ttl(&key, LEDGER_TTL, LEDGER_TTL);
 
-        env.events().publish(
-            (symbol_short!("sreg"), domain),
-            (owner, price_atomic),
-        );
+        ServiceRegisterEvent { domain, owner, price_atomic }.publish(&env);
         Ok(())
     }
 
@@ -118,9 +124,8 @@ mod test {
     fn setup() -> (Env, ServiceRegistryClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
-        let id = env.register_contract(None, ServiceRegistry);
-        let client: ServiceRegistryClient<'static> =
-            unsafe { core::mem::transmute(ServiceRegistryClient::new(&env, &id)) };
+        let id = env.register(ServiceRegistry, ());
+        let client: ServiceRegistryClient<'static> = ServiceRegistryClient::new(&env, &id);
         let admin = Address::generate(&env);
         client.init(&admin);
         (env, client, admin)

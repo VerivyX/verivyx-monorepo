@@ -2,6 +2,8 @@ import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseApiKeys } from "./apiKeys.js";
+import type { ApiKeyEntry } from "./apiKeys.js";
 import {
   STELLAR_PUBNET_CAIP2,
   STELLAR_TESTNET_CAIP2,
@@ -229,9 +231,15 @@ function buildSolanaConfig(): SolanaChainConfig | undefined {
 export type AppConfig = {
   readonly port: number;
   readonly mainnetEnabled: boolean;
-  /** Raw API keys allowed to call /mcp. Hashed admin-managed keys land later. */
-  readonly apiKeys: readonly string[];
+  /** API keys allowed to call /mcp, stored as SHA-256 hashes with per-key labels. */
+  readonly apiKeys: readonly ApiKeyEntry[];
   readonly internalToken: string;
+  /** OAuth 2.1 / Hydra resource server config. Present only when HYDRA_ISSUER is set. */
+  readonly oauth: { readonly issuer: string; readonly jwksUrl: string; readonly resourceUri: string } | undefined;
+  /** Shared HS256 secret from auth-service (JWT_SECRET). When set, /wallet/* also accepts
+   * dashboard paywall_token JWTs (audience "creator", claim id:number → sub=String(id)).
+   * When unset, only the Hydra OAuth path works for /wallet/*. */
+  readonly dashboardJwtSecret: string | undefined;
   readonly feeUsdc: string;
   readonly stellarSecretKey: string;
   readonly stellar: StellarChainConfig;
@@ -246,6 +254,12 @@ export type AppConfig = {
   readonly allowedHosts: readonly string[];
   /** Allowed Origin header values for /mcp (when an Origin is present). "*" disables. */
   readonly allowedOrigins: readonly string[];
+  /**
+   * verivyx_pay_adapter contract ID (C…).
+   * Optional: undefined when VERIVYX_PAY_ADAPTER_ID is not set (feature disabled).
+   * Used by session-key payment builder (wallet/sessionPayment.ts).
+   */
+  readonly payAdapterId: string | undefined;
 };
 
 let cached: AppConfig | undefined;
@@ -275,10 +289,14 @@ export function getConfig(): AppConfig {
     );
   }
 
-  const apiKeys = (optionalEnv("MCP_API_KEYS") ?? "")
-    .split(",")
-    .map(k => k.trim())
-    .filter(Boolean);
+  const apiKeys = parseApiKeys(optionalEnv("MCP_API_KEYS") ?? "");
+
+  const hydraIssuer = optionalEnv("HYDRA_ISSUER")?.replace(/\/$/, "");
+  const oauth = hydraIssuer ? {
+    issuer: hydraIssuer,
+    jwksUrl: optionalEnv("HYDRA_JWKS_URL") ?? `${hydraIssuer}/.well-known/jwks.json`,
+    resourceUri: optionalEnv("MCP_RESOURCE_URI") ?? "https://mcp.verivyx.com/mcp",
+  } : undefined;
 
   cached = {
     port: Number(optionalEnv("MCP_PORT") ?? "8088"),
@@ -316,6 +334,9 @@ export function getConfig(): AppConfig {
       .split(",")
       .map(o => o.trim().toLowerCase())
       .filter(Boolean),
+    oauth,
+    dashboardJwtSecret: optionalEnv("JWT_SECRET"),
+    payAdapterId: optionalEnv("VERIVYX_PAY_ADAPTER_ID"),
   };
 
   return cached;

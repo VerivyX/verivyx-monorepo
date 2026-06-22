@@ -94,10 +94,14 @@
             <tr>
                 <th scope="row"><label for="verivyx_internal_token">Internal content token</label></th>
                 <td>
-                    <?php $token_locked = defined('VERIVYX_INTERNAL_TOKEN'); ?>
+                    <?php
+                    $token_locked = defined('VERIVYX_INTERNAL_TOKEN');
+                    $token_set    = Verivyx_Settings::get_internal_token() !== '';
+                    ?>
                     <input type="password" id="verivyx_internal_token" name="verivyx_internal_token" class="regular-text"
-                        value="<?php echo esc_attr(Verivyx_Settings::get_internal_token()); ?>"
-                        autocomplete="off" <?php echo $token_locked ? 'disabled' : ''; ?>>
+                        value=""
+                        placeholder="<?php echo $token_set ? esc_attr('••••••••(saved)') : ''; ?>"
+                        autocomplete="new-password" <?php echo $token_locked ? 'disabled' : ''; ?>>
                     <p class="description">
                         Shared secret that lets the Verivyx hydration service fetch the full article body for
                         verified readers (full-withholding mode). Must exactly match <code>WP_INTERNAL_TOKEN</code>

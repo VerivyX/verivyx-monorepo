@@ -18,6 +18,7 @@ import { calcBotScore } from './detect';
 import { showOverlay, hideOverlay, renderVerifyingPanel, renderErrorPanel } from './overlay';
 import { showRetry } from './hydrate';
 import { runHumanVerification, runBotFlow } from './flows';
+import { sanitizeForBrowser } from './sanitize';
 
 // Valid only during synchronous script execution — null after the first async boundary.
 const _script = document.currentScript as HTMLScriptElement | null;
@@ -46,7 +47,7 @@ async function init(): Promise<void> {
         const data = (await r.json()) as { html?: string };
         const target = document.getElementById('vx-article');
         if (target && typeof data.html === 'string' && data.html !== '') {
-          target.innerHTML = data.html;
+          target.innerHTML = sanitizeForBrowser(data.html);
           return;
         }
         showRetry(); // authorized but no body — fail closed

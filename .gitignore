@@ -22,6 +22,7 @@ node_modules/
 **/.next/
 **/out/
 **/target/
+**/.cargo/
 **/*.tsbuildinfo
 web/next-env.d.ts
 services/x402-gateway/x402-gateway

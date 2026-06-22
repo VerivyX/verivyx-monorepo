@@ -14,11 +14,16 @@ export const TURNSTILE_SITE_KEY =
 
 export type Balances = { usdc: string; xlm: string };
 
+// Which resource the agent works against: the isolated sandbox demo, or a real
+// Verivyx-protected WordPress post on web-test.verivyx.com.
+export type PlaygroundTarget = 'demo' | 'webtest';
+
 export type PlaygroundSession = {
   sessionId: string;
   walletAddress: string;
   balances: Balances;
   demoSlug: string;
+  targets?: Record<PlaygroundTarget, string>;
   network: string;
   model: string;
 };
@@ -71,12 +76,13 @@ export async function streamChat(
   sessionId: string,
   message: string,
   onEvent: (e: PgEvent) => void,
+  target: PlaygroundTarget = 'demo',
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${PLAYGROUND_API}/api/v1/playground/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message }),
+    body: JSON.stringify({ sessionId, message, target }),
     signal,
   });
   if (!res.ok) throw new Error(await parseError(res));

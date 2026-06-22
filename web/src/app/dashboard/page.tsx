@@ -96,7 +96,10 @@ export default function DashboardPage() {
     refresh();
   }, [router, refresh]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Best-effort: end the Hydra SSO session so a new MCP connector can't
+    // silently re-authorize. Always clear the local session + redirect.
+    await api.oauthLogout().catch(() => {});
     clearSession();
     router.push('/');
   };
@@ -222,6 +225,9 @@ export default function DashboardPage() {
             </Link>
             <Link href="/dashboard/test" className="btn-ghost text-sm">
               <Terminal size={14} /> Test
+            </Link>
+            <Link href="/mcp/wallet" className="btn-ghost text-sm">
+              <Wallet size={14} /> Agent Wallet
             </Link>
             {user?.role === 'ADMIN' && (
               <Link href="/admin" className="btn-ghost text-sm" style={{ color: '#a78bfa' }}>

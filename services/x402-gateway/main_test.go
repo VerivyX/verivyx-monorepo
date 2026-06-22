@@ -108,7 +108,13 @@ func TestPaymentRequiredJSONIsBase64Decodable(t *testing.T) {
 }
 
 func TestSessionKeyShape(t *testing.T) {
-	if sessionKey("a.com", "x") != "paid:a.com:x" {
+	// Paid sessions are scoped to the paying account so one payment never unlocks
+	// the resource for other (anonymous) callers.
+	if sessionKey("a.com", "x", "GPAYER") != "paid:a.com:x:GPAYER" {
 		t.Fatal()
+	}
+	// Different payers get distinct keys for the same resource.
+	if sessionKey("a.com", "x", "GA") == sessionKey("a.com", "x", "GB") {
+		t.Fatal("payer must scope the session key")
 	}
 }

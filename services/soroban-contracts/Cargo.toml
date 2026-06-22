@@ -1,10 +1,14 @@
 [workspace]
 members = [
     "service_registry",
-    "smart_account",
-    "paywall_core"
+    "paywall_core",
+    "verivyx_pay_adapter"
 ]
 resolver = "2"
+
+[workspace.dependencies]
+soroban-sdk = { version = "23.5.3" }
+stellar-accounts = { version = "0.5.0" }
 
 [profile.release]
 opt-level = "z"
