@@ -293,6 +293,10 @@ services:
       - URLS_CONSENT=${HYDRA_CONSENT_URL}
       - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?HYDRA_SECRETS_SYSTEM is required}
       - OAUTH2_EXPOSE_INTERNAL_ERRORS=false
+      # JWT access tokens so the MCP resource server can verify them via JWKS (the
+      # default opaque tokens 401 at /mcp — they'd need introspection). Required for
+      # external MCP clients (Claude.ai) to authenticate.
+      - OAUTH2_ACCESS_TOKEN_STRATEGY=jwt
       - OIDC_DYNAMIC_CLIENT_REGISTRATION_ENABLED=true
       - OIDC_DYNAMIC_CLIENT_REGISTRATION_DEFAULT_SCOPE=openid,offline,offline_access
       # Advertise the DCR endpoint in /.well-known/openid-configuration as registration_endpoint.
@@ -352,6 +356,8 @@ services:
       - HYDRA_ISSUER=${HYDRA_ISSUER:-}
       - HYDRA_JWKS_URL=${HYDRA_JWKS_URL:-}
       - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
+      # DNS-rebinding/Host guard allowlist for the public /mcp endpoint.
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
       # Wallet binding store — shared paywall_db (schema owner: auth-service).
       - DATABASE_URL=postgresql://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-paywall_db}?schema=public
       # Shared auth-service HS256 secret. When set, /wallet/* also accepts the dashboard
