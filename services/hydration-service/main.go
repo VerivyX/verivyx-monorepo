@@ -428,6 +428,197 @@ func clientIp(c *gin.Context) string {
 	return c.ClientIP()
 }
 
+// ----------------- hydrate handler -----------------
+
+// hydrateHandler implements POST /api/v1/content/hydrate.
+//
+// Normal mode: verify payment or human-JWT, fetch article body, return {status, served, html, ...}.
+// Authorize-only mode (X-Verivyx-Mode: authorize): same decision but skip fetchArticleBody and
+// return {status, served, authorized:true, transaction} — for SDK callers that hold the body locally.
+func hydrateHandler(c *gin.Context) {
+	var req HydrateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
+		return
+	}
+	req.Domain = strings.TrimSpace(req.Domain)
+	req.Slug = strings.TrimSpace(req.Slug)
+	if req.Domain == "" || req.Slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_slug_required"})
+		return
+	}
+	if !isValidHostname(req.Domain) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_domain"})
+		return
+	}
+
+	ip := clientIp(c)
+	ua := c.GetHeader("User-Agent")
+	ja4 := c.GetHeader("X-JA4")
+	if len(ja4) > 256 {
+		ja4 = ja4[:256]
+	}
+
+	// X-Verivyx-Mode: authorize → skip body fetch, return authorization decision only.
+	authorizeOnly := c.GetHeader("X-Verivyx-Mode") == "authorize"
+
+	cfg, _ := lookupDomain(req.Domain)
+	if cfg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
+		return
+	}
+
+	// Step 1: Toggle off → serve to anyone (passthrough)
+	if !cfg.PaywallEnabled {
+		agent, cat := classifyAgent(ua)
+		go logEvent(EventPayload{
+			Domain:    req.Domain,
+			Type:      "bot_passthrough",
+			Agent:     agent,
+			Category:  cat,
+			SessionID: req.Slug,
+			IP:        ip,
+			Ja4:       ja4,
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"served": "passthrough",
+		})
+		return
+	}
+
+	// Step 2: Human session JWT (domain-scoped)
+	// Step 2.5: Standard X402 payment header.
+	// Accept PAYMENT-SIGNATURE (x402 v2 spec) and X-PAYMENT (legacy/backward compat).
+	// Agent retries the same URL with the header attached after building+signing TX.
+	xPayment := c.GetHeader("PAYMENT-SIGNATURE")
+	if xPayment == "" {
+		xPayment = c.GetHeader("X-PAYMENT")
+	}
+	if xPayment != "" {
+		agentName, agentCat := classifyAgent(ua)
+		result, err := processXPaymentHeader(req.Domain, req.Slug, xPayment, agentName, agentCat)
+		if err == nil && result.Success {
+			go logEvent(EventPayload{
+				Domain:    req.Domain,
+				Type:      "agent_served",
+				Agent:     agentName,
+				Category:  agentCat,
+				SessionID: req.Slug,
+				IP:        ip,
+				Ja4:       ja4,
+			})
+			// Standard X402: include PAYMENT-RESPONSE header with settlement details.
+			if respJSON, jsonErr := json.Marshal(result); jsonErr == nil {
+				c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(respJSON))
+			}
+			if authorizeOnly {
+				// Publisher SDK holds the body locally — return auth decision only.
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "ok",
+					"served":      "paid_agent",
+					"authorized":  true,
+					"transaction": result.Transaction,
+				})
+				return
+			}
+			html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
+			if ferr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "success",
+				"served":      "paid_agent",
+				"transaction": result.Transaction,
+				"html":        html,
+			})
+			return
+		}
+		// Payment invalid — return 402 with requirements + reason.
+		reqURL := gwURL() + "/api/v1/payment/requirements?domain=" + req.Domain + "&slug=" + req.Slug
+		c.Header("X-Paywall-Quote", reqURL)
+		paymentBody := fetchPaymentRequirements(reqURL)
+		errMsg := "invalid_payment"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		if paymentBody != nil {
+			paymentBody["error"] = errMsg
+			setPaymentRequiredHeader(c, paymentBody)
+			c.JSON(http.StatusPaymentRequired, paymentBody)
+		} else {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": errMsg})
+		}
+		return
+	}
+
+	auth := c.GetHeader("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		token := strings.TrimPrefix(auth, "Bearer ")
+		claims, err := verifyHumanSession(token)
+		if err == nil && claims.Domain == req.Domain {
+			go logEvent(EventPayload{
+				Domain:    req.Domain,
+				Type:      "human_served",
+				SessionID: req.Slug,
+				IP:        ip,
+				Ja4:       ja4,
+			})
+			if authorizeOnly {
+				// Publisher SDK holds the body locally — return auth decision only.
+				c.JSON(http.StatusOK, gin.H{
+					"status":     "ok",
+					"served":     "human",
+					"authorized": true,
+				})
+				return
+			}
+			html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
+			if ferr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status": "success",
+				"served": "human",
+				"html":   html,
+			})
+			return
+		}
+	}
+
+	// Step 3: no payment header and no human session → blocked.
+	// (There is deliberately no shared "(domain, slug) is paid" lookup here: a
+	// payment only ever authorizes the request that carries it, so one caller's
+	// payment can never unlock the resource for another, anonymous caller.)
+	agent, cat := classifyAgent(ua)
+	go logEvent(EventPayload{
+		Domain:    req.Domain,
+		Type:      "bot_blocked",
+		Agent:     agent,
+		Category:  cat,
+		SessionID: req.Slug,
+		IP:        ip,
+		Ja4:       ja4,
+	})
+	// Fetch payment requirements from gateway dan include inline di 402 body
+	// agar response langsung X402-compliant tanpa agent perlu extra request.
+	reqURL := gwURL() + "/api/v1/payment/requirements?domain=" + req.Domain + "&slug=" + req.Slug
+	c.Header("X-Paywall-Quote", reqURL)
+	paymentBody := fetchPaymentRequirements(reqURL)
+	if paymentBody != nil {
+		setPaymentRequiredHeader(c, paymentBody)
+		c.JSON(http.StatusPaymentRequired, paymentBody)
+	} else {
+		c.JSON(http.StatusPaymentRequired, gin.H{
+			"error":   "payment_or_human_session_required",
+			"message": reqURL,
+			"agent":   agent,
+		})
+	}
+}
+
 // ----------------- main -----------------
 
 func mustEnvBytes(key string) []byte {
@@ -477,167 +668,7 @@ func main() {
 	//  - Authorization: Bearer <human session JWT>   (issued by /verify-human),  OR
 	//  - The (domain, slug) pair has a paid gateway session (set by /payment/settle)
 	// If neither, returns 402 + the spec PaymentRequired body via gateway redirect URL.
-	r.POST("/api/v1/content/hydrate", func(c *gin.Context) {
-		var req HydrateRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
-			return
-		}
-		req.Domain = strings.TrimSpace(req.Domain)
-		req.Slug = strings.TrimSpace(req.Slug)
-		if req.Domain == "" || req.Slug == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_slug_required"})
-			return
-		}
-		if !isValidHostname(req.Domain) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_domain"})
-			return
-		}
-
-		ip := clientIp(c)
-		ua := c.GetHeader("User-Agent")
-		ja4 := c.GetHeader("X-JA4")
-		if len(ja4) > 256 {
-			ja4 = ja4[:256]
-		}
-
-		cfg, _ := lookupDomain(req.Domain)
-		if cfg == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
-			return
-		}
-
-		// Step 1: Toggle off → serve to anyone (passthrough)
-		if !cfg.PaywallEnabled {
-			agent, cat := classifyAgent(ua)
-			go logEvent(EventPayload{
-				Domain:    req.Domain,
-				Type:      "bot_passthrough",
-				Agent:     agent,
-				Category:  cat,
-				SessionID: req.Slug,
-				IP:        ip,
-				Ja4:       ja4,
-			})
-			c.JSON(http.StatusOK, gin.H{
-				"status": "success",
-				"served": "passthrough",
-			})
-			return
-		}
-
-		// Step 2: Human session JWT (domain-scoped)
-		// Step 2.5: Standard X402 payment header.
-		// Accept PAYMENT-SIGNATURE (x402 v2 spec) and X-PAYMENT (legacy/backward compat).
-		// Agent retries the same URL with the header attached after building+signing TX.
-		xPayment := c.GetHeader("PAYMENT-SIGNATURE")
-		if xPayment == "" {
-			xPayment = c.GetHeader("X-PAYMENT")
-		}
-		if xPayment != "" {
-			agentName, agentCat := classifyAgent(ua)
-			result, err := processXPaymentHeader(req.Domain, req.Slug, xPayment, agentName, agentCat)
-			if err == nil && result.Success {
-				go logEvent(EventPayload{
-					Domain:    req.Domain,
-					Type:      "agent_served",
-					Agent:     agentName,
-					Category:  agentCat,
-					SessionID: req.Slug,
-					IP:        ip,
-					Ja4:       ja4,
-				})
-				// Standard X402: include PAYMENT-RESPONSE header with settlement details.
-				if respJSON, jsonErr := json.Marshal(result); jsonErr == nil {
-					c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(respJSON))
-				}
-				html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
-				if ferr != nil {
-					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{
-					"status":      "success",
-					"served":      "paid_agent",
-					"transaction": result.Transaction,
-					"html":        html,
-				})
-				return
-			}
-			// Payment invalid — return 402 with requirements + reason.
-			reqURL := gwURL() + "/api/v1/payment/requirements?domain=" + req.Domain + "&slug=" + req.Slug
-			c.Header("X-Paywall-Quote", reqURL)
-			paymentBody := fetchPaymentRequirements(reqURL)
-			errMsg := "invalid_payment"
-			if err != nil {
-				errMsg = err.Error()
-			}
-			if paymentBody != nil {
-				paymentBody["error"] = errMsg
-				setPaymentRequiredHeader(c, paymentBody)
-				c.JSON(http.StatusPaymentRequired, paymentBody)
-			} else {
-				c.JSON(http.StatusPaymentRequired, gin.H{"error": errMsg})
-			}
-			return
-		}
-
-		auth := c.GetHeader("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
-			token := strings.TrimPrefix(auth, "Bearer ")
-			claims, err := verifyHumanSession(token)
-			if err == nil && claims.Domain == req.Domain {
-				go logEvent(EventPayload{
-					Domain:    req.Domain,
-					Type:      "human_served",
-					SessionID: req.Slug,
-					IP:        ip,
-					Ja4:       ja4,
-				})
-				html, ferr := fetchArticleBody(cfg.Domain, req.Slug)
-				if ferr != nil {
-					c.JSON(http.StatusBadGateway, gin.H{"error": "content_unavailable"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{
-					"status": "success",
-					"served": "human",
-					"html":   html,
-				})
-				return
-			}
-		}
-
-		// Step 3: no payment header and no human session → blocked.
-		// (There is deliberately no shared "(domain, slug) is paid" lookup here: a
-		// payment only ever authorizes the request that carries it, so one caller's
-		// payment can never unlock the resource for another, anonymous caller.)
-		agent, cat := classifyAgent(ua)
-		go logEvent(EventPayload{
-			Domain:    req.Domain,
-			Type:      "bot_blocked",
-			Agent:     agent,
-			Category:  cat,
-			SessionID: req.Slug,
-			IP:        ip,
-			Ja4:       ja4,
-		})
-		// Fetch payment requirements from gateway dan include inline di 402 body
-		// agar response langsung X402-compliant tanpa agent perlu extra request.
-		reqURL := gwURL() + "/api/v1/payment/requirements?domain=" + req.Domain + "&slug=" + req.Slug
-		c.Header("X-Paywall-Quote", reqURL)
-		paymentBody := fetchPaymentRequirements(reqURL)
-		if paymentBody != nil {
-			setPaymentRequiredHeader(c, paymentBody)
-			c.JSON(http.StatusPaymentRequired, paymentBody)
-		} else {
-			c.JSON(http.StatusPaymentRequired, gin.H{
-				"error":   "payment_or_human_session_required",
-				"message": reqURL,
-				"agent":   agent,
-			})
-		}
-	})
+	r.POST("/api/v1/content/hydrate", hydrateHandler)
 
 	log.Println("Hydration Service running on port 8082")
 	r.Run(":8082")

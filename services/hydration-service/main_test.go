@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -92,5 +95,91 @@ func TestSetPaymentRequiredHeaderIsBase64Decodable(t *testing.T) {
 		if round["x402Version"].(float64) != 2 {
 			t.Errorf("%s lost x402Version", h)
 		}
+	}
+}
+
+// seedDomainCache pre-seeds the domain cache so hydrateHandler does not make
+// a real HTTP call to auth-service during tests.
+func seedDomainCache(cfg *DomainConfig) {
+	domainCacheMu.Lock()
+	domainCacheMap[cfg.Domain] = domainCacheEntry{
+		cfg:       cfg,
+		expiresAt: time.Now().Add(domainCacheTTL),
+	}
+	domainCacheMu.Unlock()
+}
+
+// TestHydrate_AuthorizeMode_NoBody verifies that X-Verivyx-Mode: authorize causes
+// the handler to return {authorized:true} without an "html" field and without
+// calling fetchArticleBody, even when x402 settlement succeeds.
+func TestHydrate_AuthorizeMode_NoBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Set required package-level vars that hydrateHandler reads.
+	internalTok = []byte("test-internal-token")
+	sessionKey = []byte("test-session-key")
+
+	// Start a mock gateway that always returns a successful settle response.
+	mockGW := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "x-payment-settle") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"success":true,"transaction":"mock-tx-abc123","network":"testnet","payer":"GPAYER"}`))
+			return
+		}
+		// Any other path (e.g. requirements) — return empty 402 body.
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{}`))
+	}))
+	defer mockGW.Close()
+	os.Setenv("GATEWAY_URL", mockGW.URL)
+
+	// Pre-seed the domain cache so lookupDomain returns immediately.
+	seedDomainCache(&DomainConfig{
+		Domain:         "ex.com",
+		PaywallEnabled: true,
+		WpInternalToken: "wp-tok",
+	})
+
+	// Build a minimal valid X-PAYMENT header (base64 of a JSON blob the handler
+	// will forward to the mock gateway — content doesn't matter for this test
+	// because the mock always returns success).
+	xPayload := base64.StdEncoding.EncodeToString([]byte(
+		`{"x402Version":2,"scheme":"stellar","network":"testnet","payload":{"transaction":"raw-tx","payer":"GPAYER"}}`,
+	))
+
+	body := strings.NewReader(`{"domain":"ex.com","slug":"a"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/content/hydrate", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", xPayload)
+	req.Header.Set("X-Verivyx-Mode", "authorize")
+
+	rr := httptest.NewRecorder()
+
+	// Call hydrateHandler via a minimal Gin engine.
+	r := gin.New()
+	r.POST("/api/v1/content/hydrate", hydrateHandler)
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+
+	var out map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response not JSON: %v — body: %s", err, rr.Body.String())
+	}
+	if out["html"] != nil {
+		t.Fatal("authorize mode must not return html")
+	}
+	if out["authorized"] != true {
+		t.Fatalf("expected authorized:true, got %v — full body: %s", out["authorized"], rr.Body.String())
+	}
+	if out["transaction"] != "mock-tx-abc123" {
+		t.Errorf("expected transaction=mock-tx-abc123, got %v", out["transaction"])
+	}
+	// PAYMENT-RESPONSE header must still be set (x402 spec compliance).
+	if rr.Header().Get("PAYMENT-RESPONSE") == "" {
+		t.Error("PAYMENT-RESPONSE header must be set even in authorize-only mode")
 	}
 }
