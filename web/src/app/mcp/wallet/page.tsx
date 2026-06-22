@@ -34,6 +34,8 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Bell,
   CheckCircle,
   Coins,
@@ -57,6 +59,11 @@ import {
   connectWallet,
   createOrConnectAccount,
   delegate,
+  getUsdcBalance,
+  topUp,
+  withdraw,
+  ownerHasUsdcTrustline,
+  addOwnerUsdcTrustline,
   revoke,
 } from '@/lib/smartAccount';
 import { validateDelegation, toAtomicUsdc, expiryToLedger } from '@/lib/delegation';
@@ -194,6 +201,16 @@ export default function WalletPage() {
   const [revoking, setRevoking] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
 
+  // Top-up sub-section
+  const [topUpInput, setTopUpInput] = useState('');
+  const [toppingUp, setToppingUp] = useState(false);
+
+  // Withdraw sub-section
+  const [withdrawInput, setWithdrawInput] = useState('');
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [addingTrustline, setAddingTrustline] = useState(false);
+  const [needsTrustline, setNeedsTrustline] = useState(false);
+
   // Current ledger (fetched on load, used for date computation)
   const currentLedgerRef = useRef<number>(0);
 
@@ -219,11 +236,13 @@ export default function WalletPage() {
 
   // ── Fetch USDC balance of smart account (read-only sim) ─────────────────────
   const fetchUsdcBalance = useCallback(async (saAddress: string): Promise<string | null> => {
-    // The SA is a contract address that holds a SAC USDC balance directly.
-    // We use the RPC getContractData approach or the Horizon account endpoint.
-    // For simplicity, we display the address and link to stellar.expert for balance.
-    // The balance is shown as "—" with a link; no network call needed for build pass.
-    return null;
+    try {
+      const bal = await getUsdcBalance(saAddress);
+      // "0" is a valid balance — return it so the UI shows "0" rather than "—".
+      return bal;
+    } catch {
+      return null;
+    }
   }, []);
 
   // ── On load: check wallet status ────────────────────────────────────────────
@@ -255,6 +274,10 @@ export default function WalletPage() {
           });
           setSmartAccountAddr(status.smartAccount);
           setView('manage');
+          // Kick off a balance fetch in the background (non-blocking).
+          getUsdcBalance(status.smartAccount)
+            .then((bal) => { if (!cancelled) setUsdcBalance(bal); })
+            .catch(() => {/* non-fatal */});
         }
       } catch (err) {
         // 403 early_access_required: a race between EA grant revocation and page load.
@@ -413,6 +436,121 @@ export default function WalletPage() {
       setError(err instanceof Error ? err.message : 'Revoke failed');
     } finally {
       setRevoking(false);
+    }
+  };
+
+  /** Refresh the smart-account USDC balance and update state. */
+  const handleRefreshBalance = useCallback(async () => {
+    const sa = smartAccountAddr ?? binding?.smartAccount;
+    if (!sa) return;
+    const bal = await fetchUsdcBalance(sa);
+    setUsdcBalance(bal);
+  }, [smartAccountAddr, binding, fetchUsdcBalance]);
+
+  /** Top up: transfer USDC from owner Freighter wallet to smart account. */
+  const handleTopUp = async () => {
+    setError(null);
+    let owner = ownerAddress;
+    if (!owner) {
+      try {
+        owner = await connectWallet();
+        setOwnerAddress(owner);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Connect your Freighter wallet first.');
+        return;
+      }
+    }
+    const sa = smartAccountAddr ?? binding?.smartAccount;
+    if (!owner || !sa) return;
+
+    let amountAtomic: bigint;
+    try {
+      amountAtomic = toAtomicUsdc(topUpInput);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid amount');
+      return;
+    }
+
+    setToppingUp(true);
+    try {
+      const { txHash } = await topUp({ ownerAddress: owner, smartAccount: sa, amountAtomic });
+      showToast(`Top-up sent — tx ${txHash.slice(0, 8)}…`);
+      setTopUpInput('');
+      await handleRefreshBalance();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Top-up failed');
+    } finally {
+      setToppingUp(false);
+    }
+  };
+
+  /** Withdraw: pull USDC from smart account back to owner Freighter wallet. */
+  const handleWithdraw = async () => {
+    setError(null);
+    setNeedsTrustline(false);
+    let owner = ownerAddress;
+    if (!owner) {
+      try {
+        owner = await connectWallet();
+        setOwnerAddress(owner);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Connect your Freighter wallet first.');
+        return;
+      }
+    }
+    const sa = smartAccountAddr ?? binding?.smartAccount;
+    if (!owner || !sa) return;
+
+    let amountAtomic: bigint;
+    try {
+      amountAtomic = toAtomicUsdc(withdrawInput);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid amount');
+      return;
+    }
+
+    // Check trustline before attempting withdraw.
+    const hasTrustline = await ownerHasUsdcTrustline(owner);
+    if (!hasTrustline) {
+      setNeedsTrustline(true);
+      return;
+    }
+
+    setWithdrawing(true);
+    try {
+      const { txHash } = await withdraw({ ownerAddress: owner, smartAccount: sa, amountAtomic });
+      showToast(`Withdrawn — tx ${txHash.slice(0, 8)}…`);
+      setWithdrawInput('');
+      await handleRefreshBalance();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Withdraw failed');
+    } finally {
+      setWithdrawing(false);
+    }
+  };
+
+  /** Add a USDC trustline to the owner's wallet, then retry the withdraw. */
+  const handleAddTrustline = async () => {
+    setError(null);
+    let owner = ownerAddress;
+    if (!owner) {
+      try {
+        owner = await connectWallet();
+        setOwnerAddress(owner);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Connect your Freighter wallet first.');
+        return;
+      }
+    }
+    setAddingTrustline(true);
+    try {
+      await addOwnerUsdcTrustline(owner);
+      setNeedsTrustline(false);
+      showToast('USDC trustline added — you can now withdraw');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add trustline');
+    } finally {
+      setAddingTrustline(false);
     }
   };
 
@@ -923,6 +1061,24 @@ export default function WalletPage() {
                     }
                   />
                 )}
+                {/* Live USDC balance of the smart account */}
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--color-cream-200)] bg-[var(--color-cream-50)] px-4 py-3">
+                  <span className="shrink-0 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+                    Balance
+                  </span>
+                  <span className="flex items-center gap-2 min-w-0 truncate text-right">
+                    <span className="font-mono text-sm font-semibold">
+                      {usdcBalance != null ? `${formatAtomicUsdc(usdcBalance)} USDC` : '—'}
+                    </span>
+                    <button
+                      onClick={handleRefreshBalance}
+                      title="Refresh balance"
+                      className="text-[var(--color-ink-400)] hover:text-[var(--color-ink-700)] transition"
+                    >
+                      <RefreshCw size={12} />
+                    </button>
+                  </span>
+                </div>
                 <BindingRow
                   label="Expires"
                   value={
@@ -938,6 +1094,106 @@ export default function WalletPage() {
                     )
                   }
                 />
+              </div>
+
+              {/* Top up */}
+              <div className="mt-8 border-t border-[var(--color-cream-200)] pt-5">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-ink-700)]">
+                  <ArrowUpFromLine size={14} /> Top up agent account
+                </h3>
+                <p className="mt-1 text-xs text-[var(--color-ink-500)]">
+                  Transfer USDC from your Freighter wallet to your agent smart account.
+                  Freighter will sign one transaction.
+                </p>
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    className="input-field font-mono w-36"
+                    placeholder="0.00"
+                    value={topUpInput}
+                    onChange={(e) => setTopUpInput(e.target.value)}
+                    disabled={toppingUp}
+                  />
+                  <span className="text-xs text-[var(--color-ink-500)]">USDC</span>
+                  <button
+                    onClick={handleTopUp}
+                    disabled={toppingUp || !topUpInput}
+                    className="btn-yellow text-sm disabled:opacity-60"
+                  >
+                    {toppingUp ? (
+                      <><Loader2 size={14} className="animate-spin" /> Topping up…</>
+                    ) : (
+                      <><ArrowUpFromLine size={14} /> Top up</>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Withdraw */}
+              <div className="mt-8 border-t border-[var(--color-cream-200)] pt-5">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-ink-700)]">
+                  <ArrowDownToLine size={14} /> Withdraw to my wallet
+                </h3>
+                <p className="mt-1 text-xs text-[var(--color-ink-500)]">
+                  Pull USDC from your agent account back to your Freighter wallet.
+                  Your agent delegation stays active — no revoke needed.
+                </p>
+
+                {needsTrustline && (
+                  <div className="mt-3 flex flex-col gap-2 rounded-xl border border-[var(--color-stellar-yellow)]/40 bg-[var(--color-stellar-yellow-soft)] px-4 py-3">
+                    <p className="text-xs font-semibold text-[var(--color-ink-800)]">
+                      Your Freighter wallet needs a USDC trustline to receive USDC.
+                    </p>
+                    <p className="text-xs text-[var(--color-ink-500)]">
+                      This is a one-time classic Stellar operation (not Soroban). Sign it once with Freighter, then withdraw.
+                    </p>
+                    <button
+                      onClick={handleAddTrustline}
+                      disabled={addingTrustline}
+                      className="btn-yellow self-start text-sm disabled:opacity-60"
+                    >
+                      {addingTrustline ? (
+                        <><Loader2 size={14} className="animate-spin" /> Adding trustline…</>
+                      ) : (
+                        <><CheckCircle size={14} /> Add USDC trustline</>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    className="input-field font-mono w-36"
+                    placeholder="0.00"
+                    value={withdrawInput}
+                    onChange={(e) => setWithdrawInput(e.target.value)}
+                    disabled={withdrawing}
+                  />
+                  <span className="text-xs text-[var(--color-ink-500)]">USDC</span>
+                  {usdcBalance != null && usdcBalance !== '0' && (
+                    <button
+                      onClick={() => setWithdrawInput(formatAtomicUsdc(usdcBalance))}
+                      className="text-xs text-[var(--color-ink-400)] hover:text-[var(--color-ink-700)] underline transition"
+                      title="Set to full balance"
+                    >
+                      Max
+                    </button>
+                  )}
+                  <button
+                    onClick={handleWithdraw}
+                    disabled={withdrawing || !withdrawInput}
+                    className="btn-ghost text-sm disabled:opacity-60"
+                  >
+                    {withdrawing ? (
+                      <><Loader2 size={14} className="animate-spin" /> Withdrawing…</>
+                    ) : (
+                      <><ArrowDownToLine size={14} /> Withdraw</>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Re-authorize / fix delegation */}
@@ -1009,10 +1265,14 @@ export default function WalletPage() {
                 body="Revoke any time — the on-chain context rule is removed and the session key becomes invalid immediately. No waiting period."
               />
               <InfoCard
-                icon={<Coins size={16} />}
-                title="Top up with card"
-                body="Coming soon — on-ramp to fund your smart account directly with a credit card."
-                muted
+                icon={<ArrowUpFromLine size={16} />}
+                title="Top up"
+                body="Send USDC from your Freighter wallet to the agent smart account. One Freighter signature — plain SAC transfer."
+              />
+              <InfoCard
+                icon={<ArrowDownToLine size={16} />}
+                title="Withdraw"
+                body="Pull USDC back to your Freighter wallet at any time. Your agent delegation stays active — no revoke needed."
               />
               <InfoCard
                 icon={<ExternalLink size={16} />}

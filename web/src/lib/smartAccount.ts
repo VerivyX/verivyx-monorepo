@@ -23,9 +23,12 @@
  */
 
 import {
+  Account,
   Address,
+  Asset,
   authorizeEntry,
   hash,
+  Horizon,
   nativeToScVal,
   Operation,
   rpc as StellarRpc,
@@ -66,6 +69,17 @@ const SPENDING_LIMIT_POLICY_ADDRESS =
 const USDC_CONTRACT_ID =
   process.env.NEXT_PUBLIC_USDC_CONTRACT_ID ??
   'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+
+/**
+ * Classic USDC issuer G-address (testnet default = Circle testnet).
+ * Required for owner G-account changeTrust operations.
+ */
+const USDC_ISSUER =
+  process.env.NEXT_PUBLIC_USDC_ISSUER ?? 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
+/** Horizon URL for classic operations (trustline check / changeTrust). */
+const HORIZON_URL =
+  process.env.NEXT_PUBLIC_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 
 /**
  * Default period_ledgers for the spending_limit policy (~8 min at 5 s/ledger).
@@ -793,6 +807,255 @@ export async function revoke(opts: RevokeOpts): Promise<RevokeResult> {
     ownerAddress,
     op: opRevoke,
     label: 'remove_context_rule',
+  });
+
+  return { txHash };
+}
+
+// ── getUsdcBalance ────────────────────────────────────────────────────────────
+
+/**
+ * Read the USDC SAC balance of any G- or C-address via a read-only simulation.
+ *
+ * Calls USDC.balance(address) with a throwaway source account (seq "0") so no
+ * on-ledger account is required. Returns the atomic i128 as a decimal string.
+ * Returns "0" on any error (missing balance entry, simulation error, etc.).
+ *
+ * Proof: validated in withdraw-findings.md — the SA C-address holds a SAC
+ * USDC balance directly; no trustline needed for C-addresses.
+ */
+export async function getUsdcBalance(address: string): Promise<string> {
+  try {
+    const server = getRpcServer();
+    // Throwaway source account — sequence "0" is fine for simulation-only calls.
+    const throwaway = new Account('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', '0');
+    const tx = new TransactionBuilder(throwaway, {
+      fee: '1000000',
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: USDC_CONTRACT_ID,
+          function: 'balance',
+          args: [new Address(address).toScVal()],
+        }),
+      )
+      .setTimeout(60)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (StellarRpc.Api.isSimulationError(sim) || !sim.result?.retval) {
+      return '0';
+    }
+    const native = scValToNative(sim.result.retval);
+    // scValToNative on i128 returns a BigInt.
+    return typeof native === 'bigint' ? native.toString() : String(native ?? '0');
+  } catch {
+    return '0';
+  }
+}
+
+// ── topUp ─────────────────────────────────────────────────────────────────────
+
+export interface TopUpOpts {
+  /** Owner G-address (Freighter wallet). Funds come from here. */
+  ownerAddress: string;
+  /** Smart account C-address to receive USDC. */
+  smartAccount: string;
+  /** Amount in atomic USDC (i128 as bigint). */
+  amountAtomic: bigint;
+}
+
+export interface TopUpResult {
+  txHash: string;
+}
+
+/**
+ * Transfer USDC from the owner's Freighter wallet to the smart account.
+ *
+ * Plain SEP-41 transfer — the owner is both the tx source AND the `from`
+ * argument, so only a standard Freighter signTransaction is needed (no
+ * smart-account auth, no submitWithOwnerAuth). The SA is the `to`.
+ *
+ * Validated on-chain: tx d66fae9f… (owner → SA, 20 000 atomic USDC).
+ *
+ * Prerequisite (owner-side): the owner G-account must hold USDC (i.e. it
+ * must already have a USDC trustline). The SA C-address needs no trustline.
+ *
+ * [BV-2] Requires Freighter in a real browser.
+ */
+export async function topUp(opts: TopUpOpts): Promise<TopUpResult> {
+  const { ownerAddress, smartAccount, amountAtomic } = opts;
+
+  const server = getRpcServer();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const freighter = await import('@stellar/freighter-api' as any);
+
+  const sourceAccount = await server.getAccount(ownerAddress);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: '5000000',
+    networkPassphrase: STELLAR_NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: USDC_CONTRACT_ID,
+        function: 'transfer',
+        args: [
+          new Address(ownerAddress).toScVal(),                          // from = owner
+          new Address(smartAccount).toScVal(),                          // to   = smart account
+          nativeToScVal(amountAtomic, { type: 'i128' }),                // amount
+        ],
+      }),
+    )
+    .setTimeout(120)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  if (StellarRpc.Api.isSimulationError(sim)) {
+    throw new Error(`[topUp] Simulation failed: ${sim.error}`);
+  }
+  const assembled = StellarRpc.assembleTransaction(tx, sim).build();
+
+  const signResult = await freighter.signTransaction(assembled.toXDR(), {
+    networkPassphrase: STELLAR_NETWORK,
+    address: ownerAddress,
+  });
+  if (signResult?.error) throw new Error(`[topUp] Freighter error: ${signResult.error}`);
+  const signedXdr: string = signResult?.signedTxXdr ?? signResult;
+  const signed = new Transaction(signedXdr, STELLAR_NETWORK);
+
+  const send = await server.sendTransaction(signed);
+  if (send.status === 'ERROR') {
+    throw new Error(`[topUp] Send failed: ${JSON.stringify(send)}`);
+  }
+
+  const got = await pollTransaction(server, send.hash);
+  if (got.status !== StellarRpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(`[topUp] TX ${got.status}: ${send.hash}`);
+  }
+
+  return { txHash: send.hash };
+}
+
+// ── ownerHasUsdcTrustline ─────────────────────────────────────────────────────
+
+/**
+ * Check whether the owner G-account has a USDC trustline.
+ *
+ * Uses Horizon (classic) because SAC balances for G-accounts are classic
+ * Horizon balances. Returns false if the account does not exist yet on Horizon.
+ */
+export async function ownerHasUsdcTrustline(ownerAddress: string): Promise<boolean> {
+  try {
+    const server = new Horizon.Server(HORIZON_URL);
+    const account = await server.loadAccount(ownerAddress);
+    return account.balances.some(
+      (b) =>
+        b.asset_type === 'credit_alphanum4' &&
+        'asset_code' in b &&
+        'asset_issuer' in b &&
+        b.asset_code === 'USDC' &&
+        b.asset_issuer === USDC_ISSUER,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add a USDC trustline to the owner's G-account via Freighter.
+ *
+ * Classic changeTrust operation — no Soroban simulation needed.
+ * The owner must hold enough XLM to cover the base reserve for the new trustline.
+ *
+ * Mirrors the PayoutCard trustline activation pattern (web/src/components/PayoutCard.tsx).
+ */
+export async function addOwnerUsdcTrustline(ownerAddress: string): Promise<void> {
+  const server = new Horizon.Server(HORIZON_URL);
+  const account = await server.loadAccount(ownerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: '1000000',
+    networkPassphrase: STELLAR_NETWORK,
+  })
+    .addOperation(
+      Operation.changeTrust({ asset: new Asset('USDC', USDC_ISSUER) }),
+    )
+    .setTimeout(120)
+    .build();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const freighter = await import('@stellar/freighter-api' as any);
+  const signResult = await freighter.signTransaction(tx.toXDR(), {
+    networkPassphrase: STELLAR_NETWORK,
+    address: ownerAddress,
+  });
+  if (signResult?.error) throw new Error(`[addTrustline] Freighter error: ${signResult.error}`);
+  const signedXdr: string = signResult?.signedTxXdr ?? signResult;
+  const signedTx = TransactionBuilder.fromXDR(signedXdr, STELLAR_NETWORK);
+  await server.submitTransaction(signedTx);
+}
+
+// ── withdraw ──────────────────────────────────────────────────────────────────
+
+export interface WithdrawOpts {
+  /** Owner G-address (Freighter wallet). Receives USDC. */
+  ownerAddress: string;
+  /** Smart account C-address. Sends USDC. */
+  smartAccount: string;
+  /** Amount in atomic USDC (i128 as bigint). */
+  amountAtomic: bigint;
+}
+
+export interface WithdrawResult {
+  txHash: string;
+}
+
+/**
+ * Withdraw USDC from the smart account back to the owner's Freighter wallet.
+ *
+ * Calls USDC.transfer(from = smartAccount, to = ownerAddress, amount) authorized
+ * by the OWNER via the Default-rule delegated auth tree (`submitWithOwnerAuth`).
+ * This is the same two-entry auth tree used by delegate()/revoke() — proven on-chain.
+ *
+ * The owner is the Default-rule `Delegated(owner)` signer, which authorizes ALL
+ * SA operations (USDC transfer included) without being gated by the session rule's
+ * spending_limit policy. The agent delegation stays intact and continues to work
+ * after this call.
+ *
+ * Validated on-chain (withdraw-findings.md):
+ *   - tx 47b8e6cf… (owner withdraw while live session rule present)
+ *   - tx 0017ca56… (owner withdraw > session budget — unmetered)
+ *   - tx ed0497ce… (COEXIST: owner withdraw, then session-key pay both settle)
+ *
+ * Prerequisite: the owner G-account must have a USDC trustline to RECEIVE.
+ * Check with ownerHasUsdcTrustline() before calling; add with addOwnerUsdcTrustline()
+ * if missing. The SA C-address needs no trustline.
+ *
+ * [BV-2] Requires Freighter in a real browser.
+ */
+export async function withdraw(opts: WithdrawOpts): Promise<WithdrawResult> {
+  const { ownerAddress, smartAccount, amountAtomic } = opts;
+
+  const server = getRpcServer();
+
+  const op = Operation.invokeContractFunction({
+    contract: USDC_CONTRACT_ID,
+    function: 'transfer',
+    args: [
+      new Address(smartAccount).toScVal(),                             // from = smart account
+      new Address(ownerAddress).toScVal(),                             // to   = owner
+      nativeToScVal(amountAtomic, { type: 'i128' }),                   // amount
+    ],
+  });
+
+  const txHash = await submitWithOwnerAuth({
+    server,
+    networkPassphrase: STELLAR_NETWORK,
+    sourceAddress: ownerAddress,
+    smartAccount,
+    ownerAddress,
+    op,
+    label: 'withdraw',
   });
 
   return { txHash };
