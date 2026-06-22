@@ -223,6 +223,9 @@ export default function DashboardPage() {
             <Link href="/dashboard/test" className="btn-ghost text-sm">
               <Terminal size={14} /> Test
             </Link>
+            <Link href="/mcp/wallet" className="btn-ghost text-sm">
+              <Wallet size={14} /> Agent Wallet
+            </Link>
             {user?.role === 'ADMIN' && (
               <Link href="/admin" className="btn-ghost text-sm" style={{ color: '#a78bfa' }}>
                 <Shield size={14} /> Admin
