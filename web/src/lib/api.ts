@@ -308,6 +308,14 @@ export const api = {
     }),
 
   adminLogs: () => request<{ logs: AdminLog[] }>(`/api/v1/admin/logs`),
+
+  // Accept a Hydra login challenge after the user has authenticated.
+  // Called with the login_challenge from the URL; returns the Hydra redirect_to URL.
+  oauthLoginAccept: (login_challenge: string) =>
+    request<{ redirect_to: string }>(`/api/v1/oauth/login/accept`, {
+      method: 'POST',
+      body: JSON.stringify({ login_challenge }),
+    }),
 };
 
 // ── Wallet API (non-custodial MCP binding) ────────────────────────────────────
