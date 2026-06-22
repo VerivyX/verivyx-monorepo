@@ -21,7 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
-import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, revokeUserSessions } from './hydra.js';
+import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
 
 declare global {
   namespace Express {
@@ -595,25 +595,106 @@ const MCP_RESOURCE_URI = (process.env.MCP_RESOURCE_URI ?? 'https://mcp.verivyx.c
 // Critical job: always include MCP_RESOURCE_URI in grant_access_token_audience so
 // tokens carry the correct `aud` even when the client (e.g. Claude) omits the
 // `resource` parameter.
+// Feature flag: when OFF (default), consent is auto-accepted (first-party
+// convenience — the historical behavior). When ON, the user sees an explicit
+// consent screen for each new app. Flip via env without redeploying code
+// elsewhere — instant rollback if the browser flow misbehaves.
+const CONSENT_SCREEN_ENABLED = (process.env.CONSENT_SCREEN_ENABLED ?? 'false').toLowerCase() === 'true';
+
+// Accept the consent grant. Audience ALWAYS includes MCP_RESOURCE_URI so issued
+// tokens carry the right `aud` even when the client omits the `resource` param.
+// Shared by the auto-accept/skip path and the explicit user-approval endpoint.
+async function grantConsent(challenge: string): Promise<string> {
+  const cr = await getConsentRequest(challenge);
+  const audience = Array.from(
+    new Set([...(cr.requested_access_token_audience ?? []), MCP_RESOURCE_URI]),
+  );
+  const { redirect_to } = await acceptConsent(challenge, {
+    grantScope: cr.requested_scope,
+    grantAudience: audience,
+    sessionSub: cr.subject,
+  });
+  return redirect_to;
+}
+
+// Hydra consent redirect target.
 app.get('/api/v1/oauth/consent', async (req: Request, res: Response) => {
   const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
   if (!challenge) {
     return res.status(400).json({ error: 'consent_challenge query param required' });
   }
   try {
-    const cr = await getConsentRequest(challenge);
-    // Union: preserve any audiences the client explicitly requested, then add ours.
-    const audience = Array.from(
-      new Set([...(cr.requested_access_token_audience ?? []), MCP_RESOURCE_URI]),
-    );
-    const { redirect_to } = await acceptConsent(challenge, {
-      grantScope: cr.requested_scope,
-      grantAudience: audience,
-      sessionSub: cr.subject,
-    });
-    return res.redirect(302, redirect_to);
+    if (CONSENT_SCREEN_ENABLED) {
+      const cr = await getConsentRequest(challenge);
+      // Show the screen only when Hydra doesn't already remember a prior grant.
+      if (!cr.skip) {
+        return res.redirect(
+          302,
+          `${PUBLIC_DOMAIN}/consent?consent_challenge=${encodeURIComponent(challenge)}`,
+        );
+      }
+    }
+    return res.redirect(302, await grantConsent(challenge));
   } catch (err) {
     console.error('Hydra consent error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// Display info for the dashboard consent screen. Auth-gated; only the user who is
+// the consent subject may read it (prevents reading another user's consent).
+app.get('/api/v1/oauth/consent/info', authGuard, async (req: Request, res: Response) => {
+  const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
+  if (!challenge) return res.status(400).json({ error: 'consent_challenge required' });
+  try {
+    const cr = await getConsentRequest(challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    return res.json({
+      clientName: cr.client?.client_name || cr.client?.client_id || 'An application',
+      scopes: cr.requested_scope ?? [],
+      audience: cr.requested_access_token_audience ?? [],
+    });
+  } catch (err) {
+    console.error('Hydra consent info error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// User approved the consent screen. Verifies the consent subject is the caller.
+app.post('/api/v1/oauth/consent/accept', authGuard, async (req: Request, res: Response) => {
+  const { consent_challenge } = req.body ?? {};
+  if (typeof consent_challenge !== 'string' || !consent_challenge) {
+    return res.status(400).json({ error: 'consent_challenge required' });
+  }
+  try {
+    const cr = await getConsentRequest(consent_challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    return res.json({ redirect_to: await grantConsent(consent_challenge) });
+  } catch (err) {
+    console.error('Hydra consent accept error:', err instanceof Error ? err.message : err);
+    return res.status(502).json({ error: 'hydra_unreachable' });
+  }
+});
+
+// User denied the consent screen.
+app.post('/api/v1/oauth/consent/reject', authGuard, async (req: Request, res: Response) => {
+  const { consent_challenge } = req.body ?? {};
+  if (typeof consent_challenge !== 'string' || !consent_challenge) {
+    return res.status(400).json({ error: 'consent_challenge required' });
+  }
+  try {
+    const cr = await getConsentRequest(consent_challenge);
+    if (cr.subject !== String(req.userId!)) {
+      return res.status(403).json({ error: 'not_your_consent' });
+    }
+    const { redirect_to } = await rejectConsent(consent_challenge, 'access_denied');
+    return res.json({ redirect_to });
+  } catch (err) {
+    console.error('Hydra consent reject error:', err instanceof Error ? err.message : err);
     return res.status(502).json({ error: 'hydra_unreachable' });
   }
 });

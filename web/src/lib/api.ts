@@ -321,6 +321,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ login_challenge }),
     }),
+
+  // Consent screen: fetch the app + scopes for a consent challenge, then approve/deny.
+  oauthConsentInfo: (consent_challenge: string) =>
+    request<{ clientName: string; scopes: string[]; audience: string[] }>(
+      `/api/v1/oauth/consent/info?consent_challenge=${encodeURIComponent(consent_challenge)}`,
+    ),
+  oauthConsentAccept: (consent_challenge: string) =>
+    request<{ redirect_to: string }>(`/api/v1/oauth/consent/accept`, {
+      method: 'POST',
+      body: JSON.stringify({ consent_challenge }),
+    }),
+  oauthConsentReject: (consent_challenge: string) =>
+    request<{ redirect_to: string }>(`/api/v1/oauth/consent/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ consent_challenge }),
+    }),
 };
 
 // ── Wallet API (non-custodial MCP binding) ────────────────────────────────────
