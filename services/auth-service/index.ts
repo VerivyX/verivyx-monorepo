@@ -21,6 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
+import { verifyWellKnown } from './wellknown.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
 
 declare global {
@@ -1315,6 +1316,115 @@ app.get('/api/v1/auth/transactions', authGuard, async (req: Request, res: Respon
   });
 });
 
+// --- SDK domain provisioning (.well-known/verivyx.txt handshake) ---
+//
+// Non-WordPress publishers prove domain ownership by hosting a nonce at
+// https://<site>/.well-known/verivyx.txt. Flow:
+//   1. POST /api/v1/sdk/provision/init   → { nonce }  (store nonce, TTL 10 min)
+//   2. Publisher writes nonce to the .well-known URL.
+//   3. POST /api/v1/sdk/provision/verify { site, nonce }
+//                                        → { token }  (SSRF-guarded fetch+verify,
+//                                                       then issues per-domain token)
+// Reuses the same wpInternalToken column as the WP Connect handshake.
+
+const PROVISION_TTL_MS = 10 * 60_000;
+
+interface ProvisionPending {
+  nonce: string;
+  createdAt: number;
+}
+
+// In-memory store: nonce → pending. Map is keyed by nonce so the verify step
+// can look up by the nonce the client submits.
+const _provisionPending = new Map<string, ProvisionPending>();
+
+function pruneProvisionPending(): void {
+  const now = Date.now();
+  for (const [key, val] of _provisionPending) {
+    if (now - val.createdAt > PROVISION_TTL_MS) _provisionPending.delete(key);
+  }
+}
+
+// POST /api/v1/sdk/provision/init
+// Auth-guarded. Issues a nonce the publisher must host at .well-known/verivyx.txt.
+app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Response) => {
+  const ip = reqIp(req);
+  if (!rateLimit(`sdkinit:${ip}`, 10, 60 * 60_000)) {
+    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  }
+  pruneProvisionPending();
+  const nonce = newNonce();
+  _provisionPending.set(nonce, { nonce, createdAt: Date.now() });
+  return res.json({ nonce });
+});
+
+// POST /api/v1/sdk/provision/verify
+// Auth-guarded. Verifies the nonce is live at the site's .well-known URL then
+// issues (or reissues) the per-domain token on the authenticated user account.
+app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, res: Response) => {
+  const ip = reqIp(req);
+  if (!rateLimit(`sdkverify:${ip}`, 10, 60 * 60_000)) {
+    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  }
+  const site = String(req.body?.site ?? '').trim().toLowerCase();
+  const nonce = String(req.body?.nonce ?? '').trim();
+  if (!site || !nonce) return res.status(400).json({ error: 'site and nonce are required' });
+
+  pruneProvisionPending();
+  const pending = _provisionPending.get(nonce);
+  if (!pending) return res.status(404).json({ error: 'unknown_nonce' });
+  if (Date.now() - pending.createdAt > PROVISION_TTL_MS) {
+    _provisionPending.delete(nonce);
+    return res.status(410).json({ error: 'expired' });
+  }
+
+  let verified: boolean;
+  try {
+    verified = await verifyWellKnown(site, nonce);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'verify_failed';
+    return res.status(msg === 'invalid_site' ? 400 : 502).json({ error: msg });
+  }
+  if (!verified) return res.status(502).json({ error: 'verify_failed' });
+
+  // Nonce consumed — remove from pending store (one-shot).
+  _provisionPending.delete(nonce);
+
+  const userId = req.userId!;
+  const conflict = await prisma.user.findFirst({ where: { domain: site, NOT: { id: userId } } });
+  if (conflict) return res.status(409).json({ error: 'domain_conflict' });
+
+  const token = crypto.randomBytes(30).toString('base64url');
+  await prisma.user.update({
+    where: { id: userId },
+    data: { domain: site, wpInternalToken: token, domainVerified: true, domainVerifiedAt: new Date() },
+  });
+  return res.json({ token });
+});
+
+// domainTokenGuard reads Authorization: Bearer <per-domain-token>, looks up the
+// User by that token, and attaches userId + userEmail to the request. Rejects
+// with 401 if the token is missing, unknown, or belongs to an unverified domain.
+async function domainTokenGuard(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Missing token' });
+    return;
+  }
+  const token = header.slice(7);
+  const user = await prisma.user.findFirst({
+    where: { wpInternalToken: token, domainVerified: true },
+    select: { id: true, email: true, domain: true },
+  });
+  if (!user) {
+    res.status(401).json({ error: 'Invalid token' });
+    return;
+  }
+  req.userId = user.id;
+  req.userEmail = user.email;
+  next();
+}
+
 // ──────────────── ADMIN ROUTES ────────────────
 
 app.get('/api/v1/admin/stats', adminGuard, async (req: AuthedRequest, res: Response) => {
@@ -1598,4 +1708,4 @@ if (!process.env.SKIP_LISTEN) {
 }
 
 // Exported for tests
-export { signCreator, signChallenge, signHumanSession, app };
+export { signCreator, signChallenge, signHumanSession, app, domainTokenGuard };
