@@ -617,6 +617,14 @@ async function grantConsent(challenge: string): Promise<string> {
   return redirect_to;
 }
 
+// Only users granted MCP early-access may connect an MCP client. Subject = String(user.id).
+async function subjectHasMcpAccess(subject: string): Promise<boolean> {
+  const id = Number(subject);
+  if (!Number.isInteger(id)) return false;
+  const u = await prisma.user.findUnique({ where: { id } });
+  return u?.mcpEarlyAccess === true;
+}
+
 // Hydra consent redirect target.
 app.get('/api/v1/oauth/consent', async (req: Request, res: Response) => {
   const challenge = typeof req.query.consent_challenge === 'string' ? req.query.consent_challenge : '';
@@ -624,15 +632,19 @@ app.get('/api/v1/oauth/consent', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'consent_challenge query param required' });
   }
   try {
-    if (CONSENT_SCREEN_ENABLED) {
-      const cr = await getConsentRequest(challenge);
-      // Show the screen only when Hydra doesn't already remember a prior grant.
-      if (!cr.skip) {
-        return res.redirect(
-          302,
-          `${PUBLIC_DOMAIN}/consent?consent_challenge=${encodeURIComponent(challenge)}`,
-        );
-      }
+    const cr = await getConsentRequest(challenge);
+    // EARLY-ACCESS GATE: deny connect for users without MCP early access (before
+    // any consent screen or grant). Rejecting returns a Hydra error redirect.
+    if (!(await subjectHasMcpAccess(cr.subject))) {
+      const { redirect_to } = await rejectConsent(challenge, 'access_denied');
+      return res.redirect(302, redirect_to);
+    }
+    // Show the screen only when enabled AND Hydra doesn't already remember a grant.
+    if (CONSENT_SCREEN_ENABLED && !cr.skip) {
+      return res.redirect(
+        302,
+        `${PUBLIC_DOMAIN}/consent?consent_challenge=${encodeURIComponent(challenge)}`,
+      );
     }
     return res.redirect(302, await grantConsent(challenge));
   } catch (err) {
@@ -672,6 +684,9 @@ app.post('/api/v1/oauth/consent/accept', authGuard, async (req: Request, res: Re
     const cr = await getConsentRequest(consent_challenge);
     if (cr.subject !== String(req.userId!)) {
       return res.status(403).json({ error: 'not_your_consent' });
+    }
+    if (!(await subjectHasMcpAccess(cr.subject))) {
+      return res.status(403).json({ error: 'early_access_required' });
     }
     return res.json({ redirect_to: await grantConsent(consent_challenge) });
   } catch (err) {

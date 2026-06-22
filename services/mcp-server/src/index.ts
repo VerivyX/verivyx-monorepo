@@ -23,6 +23,40 @@ import {
   upsertBinding,
 } from "./wallet/registry.js";
 
+// Defense-in-depth: gate /mcp by MCP early-access for OAuth callers. The consent
+// flow already blocks non-granted users from connecting; this also enforces it at
+// the resource (e.g. tokens issued before access was revoked) and makes admin
+// revocation effective within the cache TTL. Static-key callers (Verivyx internal)
+// bypass. Cached per-sub for 60s to avoid a DB hit on every /mcp request.
+const _eaCache = new Map<string, { granted: boolean; exp: number }>();
+async function mcpEarlyAccessGate(req: Request, res: Response, next: () => void): Promise<void> {
+  const u = (req as Request & {
+    mcpUser?: { kind: "oauth"; sub: string } | { kind: "key"; label: string };
+  }).mcpUser;
+  if (!u || u.kind !== "oauth") { next(); return; } // static-key/internal callers bypass
+  const now = Date.now();
+  const cached = _eaCache.get(u.sub);
+  let granted: boolean;
+  if (cached && cached.exp > now) {
+    granted = cached.granted;
+  } else {
+    try {
+      granted = await isEarlyAccessGranted(u.sub);
+    } catch {
+      granted = false; // fail-closed
+    }
+    _eaCache.set(u.sub, { granted, exp: now + 60_000 });
+  }
+  if (!granted) {
+    res.status(403).json({
+      error: "early_access_required",
+      detail: "Your Verivyx account is not enabled for the MCP yet.",
+    });
+    return;
+  }
+  next();
+}
+
 async function main(): Promise<void> {
   const cfg = getConfig();
   const payments = await createPaymentService();
@@ -92,7 +126,7 @@ async function main(): Promise<void> {
   // Don't hold the process open if it would otherwise exit cleanly.
   sweepInterval.unref();
 
-  app.post("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, userLimiter(60, 60_000, "mcp-post"), async (req: Request, res: Response) => {
+  app.post("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, mcpEarlyAccessGate, userLimiter(60, 60_000, "mcp-post"), async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
@@ -203,8 +237,8 @@ async function main(): Promise<void> {
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, handleSessionRequest);
-  app.delete("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, handleSessionRequest);
+  app.get("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, mcpEarlyAccessGate, handleSessionRequest);
+  app.delete("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, mcpEarlyAccessGate, handleSessionRequest);
 
   // Wallet lifecycle endpoints (Plan 3 T1): session-signer, binding, status, revoke.
   // Mounted behind requireUserAuth which accepts Hydra OAuth JWTs (agents) OR the
