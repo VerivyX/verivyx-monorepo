@@ -30,6 +30,7 @@ import {
   BASE_FEE,
   hash,
   Horizon,
+  Keypair,
   nativeToScVal,
   Operation,
   rpc as StellarRpc,
@@ -829,9 +830,11 @@ export async function getUsdcBalance(address: string): Promise<string> {
   try {
     const server = getRpcServer();
     // Throwaway source account — sequence "0" is fine for simulation-only calls.
-    const throwaway = new Account('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', '0');
+    // Must be a VALID Stellar address (a hardcoded literal risks a bad checksum,
+    // which throws "accountId is invalid" → the whole read silently returns "0").
+    const throwaway = new Account(Keypair.random().publicKey(), '0');
     const tx = new TransactionBuilder(throwaway, {
-      fee: '1000000',
+      fee: BASE_FEE,
       networkPassphrase: STELLAR_NETWORK,
     })
       .addOperation(
