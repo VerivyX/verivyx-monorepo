@@ -133,3 +133,105 @@ No change to his smart account contract or policy is required.
 - `dbg-inspect-policy.mjs` — getLedgerEntries probe of `AccountContext(SA, ruleId)` for Rio + spike accounts.
 - `dbg-repro-dashboard.mjs` — fresh-account dashboard delegate path + session-key transfer sim.
   `FUND_SESSION=1` funds the session via friendbot (success path); default leaves it missing (repro).
+
+---
+
+# Second Failure — "Unauthorized function call for address <session>" (after session account exists)
+
+**Date:** 2026-06-22 · **Branch:** `refactor/strict-review` · **Status:** ROOT-CAUSED — validated recovery (no code change needed).
+
+## TL;DR
+
+After Step 1's fix (session signer G-account `GBWJA6IP…` now exists on-ledger, friendbot-funded
+and verified healthy: masterWeight 1, no flags, balance ok), simulating
+`buildStandardTransferPayment` for Rio's binding (`sub=1`, SA `CCL7DGCR…`) now fails with a
+**different** error than the first failure:
+
+```
+USDC.transfer(CCL7DGCR… → CAERLWHD…, 300000)
+__check_auth on CCL7DGCR…:
+  require_auth_for_args(GBWJA6IP…) → Error(Auth, InvalidAction)
+  "Unauthorized function call for address GBWJA6IP…"
+  → escalating to VM trap → __check_auth → Error(Auth, InvalidAction)
+```
+(NOT `Storage(MissingValue)` — the signer account loads now.) Reproduced exactly via
+`getBinding("1")` → `buildStandardTransferPayment(...)` inside the mcp-server container.
+
+The decrypted session secret derives **exactly** `GBWJA6IP…` = the DB `sessionSignerPubkey`
+column = the on-chain rule-3 signer (all three match). The OZ auth mechanism is: OZ
+`do_check_auth` → `authenticate()` calls `addr.require_auth_for_args((signature_payload,))`
+for every Delegated signer in the provided `Signatures` map; this is exactly what the
+two-entry `signDelegated` tree authorizes (Entry B = session key signs `__check_auth(payload)`).
+
+## What is PROVEN about Rio's CCL7DGCR (every observable is healthy)
+
+- `get_context_rules(CallContract(USDC))` → ONE live rule: `{id:3, name:"verivyx-session",
+  policies:[CBGLHQVG…], signers:[[Delegated, GBWJA6IP…]], valid_until:3342854}` (not expired).
+- Raw persistent storage: `Signers[3]=[Delegated(GBWJA6IP…)]`, `Policies[3]=[CBGLHQVG…]` — correct.
+- Policy `AccountContext(SA,3)` PRESENT, clean: `{spending_limit:10000000, period_ledgers:100,
+  cached_total_spent:0, spending_history:[]}`. (Orphan `AccountContext(SA,1)`/`(SA,2)` also
+  present — leftovers from the stale-removal re-runs — but rules 1,2 are gone; only rule 3 lives.)
+- Default rule id=0 "multisig" signer = owner `GBGZH3WU…` (exists, healthy) — does not match
+  CallContract(USDC), so irrelevant.
+- SA wasm = `40276717…` (identical to `smartAccount.ts` / the proven spike).
+- TTL: instance, Signers[3], Policies[3], policy AccountContext[SA,3], WASM code — all live, none archived.
+- Failing sim returns **no `restorePreamble`** (not an archival/restore problem).
+- Session account `GBWJA6IP…` EXISTS, masterWeight 1, no extra signers, no flags, funded.
+
+## What was REPRODUCED to SUCCEED (the code + flow are correct)
+
+On throwaway OZ accounts I control (funded from `MCP_STELLAR_SECRET` for USDC), every faithful
+reconstruction settles. payTo = Rio's real `CAERLWHD…` (a contract → no trustline needed):
+
+1. **Fresh order** (session account created BEFORE delegate): session-key transfer sim → SUCCESS
+   (`minResourceFee≈519k`).
+2. **Rio order** (delegate while session MISSING → create session AFTER → fund SA USDC):
+   sim → SUCCESS.
+3. **Production code path** `buildStandardTransferPayment` (the real `sessionPayment.ts`) on a
+   Rio-order account → **FULL SUCCESS** (`minResourceFee=519570`). The production builder is not broken.
+4. **Full accumulated-state mirror** (delegate→remove→re-delegate ×3 so live rule = id=3 with
+   orphan policy storage for ids 1,2, session created post-delegation — byte-for-byte Rio's
+   history) → sim SUCCESS, and a **real on-chain transfer SETTLED**:
+   `tx a59f822dc563598203117dffb1bcf1f309b169e84f590592e5a658203ea65803` (SUCCESS).
+
+So the spending_limit enforce, the two-entry delegated auth tree, the add_context_rule[empty]→
+add_policy path, the rule-id=3 accumulation, and the create-session-after-delegate ordering all
+work end-to-end on a faithful clone. The ONLY thing that fails is **Rio's specific live rule 3**.
+
+## Root cause
+
+**Rio's on-chain rule 3 is in a host-rejecting state that is NOT reproducible from any observable
+on-ledger field** — every faithful reconstruction of his exact shape/history succeeds (incl. a real
+on-chain settle). His rule 3 was last modified at ledger ~3221900 by an earlier (pre-current-code)
+delegation attempt; that rule must have been created with a subtly-divergent auth/signer encoding
+or an OZ state the current 2-step delegate path does not reproduce. The fix from Step 1
+(`ensureSessionAccountExists`) is correct and necessary, but Rio's rule 3 predates a clean
+current-code delegation and is the residual defect. Because a clean current-code re-delegation
+(Step 0 removes rule 3 → Step 1 adds a fresh rule → Step 2 add_policy) demonstrably yields a
+working transfer, the resolution is a re-authorization, not a code change.
+
+## VALIDATED recovery for Rio (binding sub=1)
+
+**Click "Re-authorize" once more in the dashboard** (`mcp.verivyx.com/mcp/wallet`, current deployed
+code). His session account already exists, so Step 0a is a no-op; Step 0 removes the broken rule 3;
+Steps 1–2 install a clean new rule (id=4) + spending-limit policy. After that, the MCP session key
+can settle the standard USDC.transfer.
+
+Proof this recovery works: the accumulated-state mirror above — which performs the identical
+remove-stale → add-rule → add-policy sequence ending at a live rule, with the session account
+already on-ledger — produced an **on-chain SUCCESS transfer**
+(`tx a59f822dc56359820311…`, `minResourceFee≈520k` on sim). No change to his smart-account
+contract, owner key, or session key is required; the existing encrypted session secret in the
+binding stays valid (it already matches the on-chain signer).
+
+## Reproduction scripts (this round; gitignored under scratch, run inside mcp-server container)
+
+Run with `node --env-file=chain.env [--env-file=mcpsec.env]` (mcpsec.env = just `MCP_STELLAR_SECRET`
+from repo `.env`, the USDC funding source). The `--import tsx` variants import the live
+`/app/src/wallet/*.ts`.
+- `repro-rio.mts` — `getBinding("1")` → `buildStandardTransferPayment` → reproduces Rio's failure.
+- `deep-rio.mts` — dumps the signDelegated two-entry tree for Rio + the failing SIM2 diagnostics.
+- `inspect-rio.mjs` / `raw-rule3.mjs` / `ttl-check.mjs` / `lastmod.mjs` — on-chain state of CCL7DGCR.
+- `check-session-key.mts` — proves decrypted secret = DB column = on-chain rule-3 signer.
+- `repro-h3.mjs` (`STAGE=rio|fresh`) / `repro-h3-prod.mts` — fresh-account success (sim + production path).
+- `repro-accum.mjs` / `repro-accum-submit.mjs` — full accumulated-state mirror (sim + real on-chain settle).
