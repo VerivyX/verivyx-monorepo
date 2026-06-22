@@ -285,7 +285,11 @@ services:
   # --dev disables HTTPS enforcement for the issuer; DROP --dev and use https:// in production.
   hydra:
     image: oryd/hydra:v2.2.0
-    command: serve all --dev
+    # NOT --dev: --dev forces non-Secure cookies, which browsers reject for
+    # SameSite=None — breaking the cross-site OAuth flow (Claude.ai → Hydra) with
+    # "No CSRF value available in the session cookie". We terminate TLS at nginx and
+    # tell Hydra to trust the forwarded https (SERVE_TLS_ALLOW_TERMINATION_FROM).
+    command: serve all
     environment:
       - DSN=postgres://${POSTGRES_USER:-paywall_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/hydra?sslmode=disable
       - URLS_SELF_ISSUER=${HYDRA_ISSUER:-http://localhost:4444}
@@ -293,6 +297,12 @@ services:
       - URLS_CONSENT=${HYDRA_CONSENT_URL}
       - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?HYDRA_SECRETS_SYSTEM is required}
       - OAUTH2_EXPOSE_INTERNAL_ERRORS=false
+      # Hydra runs behind nginx TLS termination (internal :4444 only). Trust the
+      # X-Forwarded-Proto=https so it serves Secure cookies + the https issuer.
+      - SERVE_TLS_ALLOW_TERMINATION_FROM=0.0.0.0/0
+      # Cross-site OAuth (the client, Claude.ai, is on a different site) needs the
+      # login/consent CSRF + session cookies as SameSite=None; Secure.
+      - SERVE_COOKIES_SAME_SITE_MODE=None
       # JWT access tokens so the MCP resource server can verify them via JWKS (the
       # default opaque tokens 401 at /mcp — they'd need introspection). Global strategy
       # so DCR clients (Claude.ai) get JWTs too. Hydra config key: strategies.access_token.
