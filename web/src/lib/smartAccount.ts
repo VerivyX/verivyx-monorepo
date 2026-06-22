@@ -73,6 +73,21 @@ const USDC_CONTRACT_ID =
  */
 const DEFAULT_PERIOD_LEDGERS = 100;
 
+/**
+ * Starting XLM balance (in stroops) for the on-ledger creation of the session
+ * signer G-account. The session key is an ed25519 "Delegated" signer; the OZ
+ * smart account's __check_auth verifies it via require_auth_for_args, which makes
+ * the host LOAD the signer's classic account entry. If that account has never
+ * existed on-ledger, the host raises Error(Storage, MissingValue) "trying to get
+ * non-existing value for account" → require_auth_for_args traps → __check_auth
+ * fails with Error(Auth, InvalidAction). The session key never holds funds and is
+ * never the tx source, so only the base reserve is needed. createAccount's
+ * startingBalance is denominated in XLM (whole units); "2" comfortably covers the
+ * account base reserve on testnet/mainnet. Funded by the owner, who already pays
+ * gas for the delegation.
+ */
+const SESSION_ACCOUNT_STARTING_BALANCE = '2';
+
 // ── ScVal encoders (ported from lib.js — proven on-chain) ────────────────────
 
 /**
@@ -505,6 +520,79 @@ export interface DelegateResult {
  * [BV-1] Freighter signAuthEntry shape: see signEntryWithFreighter().
  * [BV-2] Full RPC + submission: requires browser environment (Plan 3 T5).
  */
+/**
+ * Ensure the session signer's classic G-account exists on-ledger.
+ *
+ * WHY THIS IS REQUIRED (root cause of the "Storage(MissingValue) for account" pay failure):
+ *   The MCP issues the session signer as a bare ed25519 keypair (Keypair.random()),
+ *   which is NEVER funded — it only ever signs auth entries, never sources a tx.
+ *   But the OZ smart account registers it as a `Delegated` signer, and at pay time
+ *   __check_auth verifies a Delegated signer by calling require_auth_for_args on its
+ *   G-address. The host must LOAD that account's ledger entry to do so. If the account
+ *   has never existed on-ledger, the host raises:
+ *       Error(Storage, MissingValue): "trying to get non-existing value for account"
+ *   which traps require_auth_for_args → __check_auth → Error(Auth, InvalidAction).
+ *   This surfaces in the policy/transfer diagnostics and was previously misattributed
+ *   to the spending_limit policy's per-account storage (which is in fact installed
+ *   correctly by add_policy). The proven spike worked only because its setup explicitly
+ *   friendbot-funded the session key; the production MCP path does not.
+ *
+ * Idempotent: if the session account already exists, this is a no-op. Otherwise the
+ * owner (who is already paying gas for the delegation) creates it with the base reserve
+ * via a classic createAccount op, signed with Freighter.
+ *
+ * [BV-2] Requires a real browser + Freighter for end-to-end verification.
+ */
+async function ensureSessionAccountExists(
+  server: StellarRpc.Server,
+  sessionPubkey: string,
+  ownerAddress: string,
+): Promise<void> {
+  // Existence check: getAccount throws if the account does not exist on-ledger.
+  try {
+    await server.getAccount(sessionPubkey);
+    return; // already exists — nothing to do
+  } catch {
+    // Not found — create it below.
+  }
+
+  const sourceAccount = await server.getAccount(ownerAddress);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: '1000000',
+    networkPassphrase: STELLAR_NETWORK,
+  })
+    .addOperation(
+      Operation.createAccount({
+        destination: sessionPubkey,
+        startingBalance: SESSION_ACCOUNT_STARTING_BALANCE,
+      }),
+    )
+    .setTimeout(120)
+    .build();
+
+  // Classic op — no Soroban simulation/assembly needed; sign and submit directly.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const freighter = await import('@stellar/freighter-api' as any);
+  const signResult = await freighter.signTransaction(tx.toXDR(), {
+    networkPassphrase: STELLAR_NETWORK,
+    address: ownerAddress,
+  });
+  if (signResult?.error) {
+    throw new Error(`create session account: Freighter signTransaction error: ${signResult.error}`);
+  }
+  const signedXdr: string = signResult?.signedTxXdr ?? signResult;
+  const signed = new Transaction(signedXdr, STELLAR_NETWORK);
+
+  const send = await server.sendTransaction(signed);
+  if (send.status === 'ERROR') {
+    throw new Error(`create session account: send failed: ${JSON.stringify(send)}`);
+  }
+  const got = await pollTransaction(server, send.hash);
+  if (got.status !== StellarRpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(`create session account: tx ${got.status}: ${send.hash}`);
+  }
+}
+
 export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
   const {
     smartAccount,
@@ -516,6 +604,13 @@ export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
   } = opts;
 
   const server = getRpcServer();
+
+  // ── Step 0a: ensure the session signer G-account exists on-ledger ────────────
+  // Without this the delegated session key authorizes nothing: __check_auth's
+  // require_auth_for_args on the (never-funded) session G-address raises
+  // Error(Storage, MissingValue) "non-existing value for account" → Auth InvalidAction
+  // at every pay. See ensureSessionAccountExists() for the full root-cause note.
+  await ensureSessionAccountExists(server, sessionPubkey, ownerAddress);
 
   // ── Step 0: remove any pre-existing verivyx-session rule ─────────────────────
   // Makes delegate() safe to re-run on the same account: avoids stacking a second
