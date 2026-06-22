@@ -17,6 +17,7 @@
 import { Keypair } from "@stellar/stellar-sdk";
 import { Router, type Request, type Response } from "express";
 
+import { userLimiter } from "../rateLimit.js";
 import type { WalletBinding, WalletStatusRow } from "./registry.js";
 
 // ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // Idempotent: if a session pubkey already exists for this sub, return it unchanged.
   // Gated: requires mcpEarlyAccess=true on the User row.
   // --------------------------------------------------------------------------
-  router.post("/session-signer", async (req: Request, res: Response) => {
+  router.post("/session-signer", userLimiter(20, 3_600_000, "session-signer"), async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
 
@@ -154,7 +155,7 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // Uses bindWallet to preserve the existing encrypted session secret.
   // Gated: requires mcpEarlyAccess=true on the User row.
   // --------------------------------------------------------------------------
-  router.post("/binding", async (req: Request, res: Response) => {
+  router.post("/binding", userLimiter(20, 3_600_000, "binding"), async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
 
@@ -223,7 +224,7 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // Returns the current binding state for the authenticated OAuth caller.
   // Never exposes the session secret or the encrypted secret column.
   // --------------------------------------------------------------------------
-  router.get("/status", async (req: Request, res: Response) => {
+  router.get("/status", userLimiter(60, 60_000, "status"), async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
 
@@ -260,7 +261,7 @@ export function buildWalletRouter(ops: WalletRegistryOps): Router {
   // NOTE: on-chain revoke (remove_signer / policy budget 0) is owner-signed
   //       in the dashboard — this endpoint only clears the server record.
   // --------------------------------------------------------------------------
-  router.post("/revoke", async (req: Request, res: Response) => {
+  router.post("/revoke", userLimiter(20, 3_600_000, "revoke"), async (req: Request, res: Response) => {
     const sub = requireOAuthSub(req, res);
     if (sub === null) return;
 

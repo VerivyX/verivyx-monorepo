@@ -12,6 +12,7 @@ import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildProtectedResourceMetadata } from "./oauth.js";
+import { ipLimiter, userLimiter } from "./rateLimit.js";
 import { buildWalletRouter } from "./wallet/endpoints.js";
 import {
   bindWallet,
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
   // Don't hold the process open if it would otherwise exit cleanly.
   sweepInterval.unref();
 
-  app.post("/mcp", hostGuard, requireMcpAuth, async (req: Request, res: Response) => {
+  app.post("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, userLimiter(60, 60_000, "mcp-post"), async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport: StreamableHTTPServerTransport;
 
@@ -202,8 +203,8 @@ async function main(): Promise<void> {
     await transports[sessionId].handleRequest(req, res);
   };
 
-  app.get("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
-  app.delete("/mcp", hostGuard, requireMcpAuth, handleSessionRequest);
+  app.get("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, handleSessionRequest);
+  app.delete("/mcp", hostGuard, ipLimiter(300, 60_000, "mcp"), requireMcpAuth, handleSessionRequest);
 
   // Wallet lifecycle endpoints (Plan 3 T1): session-signer, binding, status, revoke.
   // Mounted behind requireUserAuth which accepts Hydra OAuth JWTs (agents) OR the
@@ -222,7 +223,7 @@ async function main(): Promise<void> {
         bindWallet(sub, smartAccount, budgetAtomic, expiryLedger),
       deleteBinding,
     });
-    app.use("/wallet", requireUserAuth, walletRouter);
+    app.use("/wallet", ipLimiter(120, 60_000, "wallet"), requireUserAuth, walletRouter);
     logger.info("wallet endpoints mounted at /wallet (Hydra OAuth or dashboard token)");
   }
 
