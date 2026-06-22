@@ -104,6 +104,32 @@ const DEFAULT_PERIOD_LEDGERS = 100;
  */
 const SESSION_ACCOUNT_STARTING_BALANCE = '2';
 
+/** Stellar mainnet (pubnet) network passphrase. */
+const MAINNET_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+
+/**
+ * Fail-fast config guard. On TESTNET the hardcoded defaults above are an
+ * intentional dev convenience. On MAINNET they would be WRONG, so refuse any
+ * wallet operation unless every contract/asset id was explicitly provided via
+ * NEXT_PUBLIC_* — this prevents a mainnet deploy from silently moving funds with
+ * testnet addresses. (NEXT_PUBLIC_* are inlined at build time; an unset var is
+ * `undefined` here.) Called at the top of every state-changing wallet op.
+ */
+export function assertNetworkConfig(): void {
+  if (STELLAR_NETWORK !== MAINNET_PASSPHRASE) return; // testnet/dev — defaults OK
+  const missing: string[] = [];
+  if (!process.env.NEXT_PUBLIC_USDC_CONTRACT_ID) missing.push('NEXT_PUBLIC_USDC_CONTRACT_ID');
+  if (!process.env.NEXT_PUBLIC_USDC_ISSUER) missing.push('NEXT_PUBLIC_USDC_ISSUER');
+  if (!process.env.NEXT_PUBLIC_SPENDING_LIMIT_POLICY_ADDRESS)
+    missing.push('NEXT_PUBLIC_SPENDING_LIMIT_POLICY_ADDRESS');
+  if (!process.env.NEXT_PUBLIC_OZ_ACCOUNT_WASM_HASH) missing.push('NEXT_PUBLIC_OZ_ACCOUNT_WASM_HASH');
+  if (missing.length > 0) {
+    throw new Error(
+      `Stellar mainnet is configured but these contract/asset env vars are unset (would fall back to testnet defaults): ${missing.join(', ')}. Set them before using the wallet on mainnet.`,
+    );
+  }
+}
+
 // ── ScVal encoders (ported from lib.js — proven on-chain) ────────────────────
 
 /**
@@ -374,6 +400,7 @@ export interface CreateOrConnectResult {
 export async function createOrConnectAccount(
   opts: CreateOrConnectOpts,
 ): Promise<CreateOrConnectResult> {
+  assertNetworkConfig();
   const { ownerAddress } = opts;
 
   // [BV-2] Browser-only: Freighter + RPC.
@@ -610,6 +637,7 @@ async function ensureSessionAccountExists(
 }
 
 export async function delegate(opts: DelegateOpts): Promise<DelegateResult> {
+  assertNetworkConfig();
   const {
     smartAccount,
     sessionPubkey,
@@ -889,6 +917,7 @@ export interface TopUpResult {
  * [BV-2] Requires Freighter in a real browser.
  */
 export async function topUp(opts: TopUpOpts): Promise<TopUpResult> {
+  assertNetworkConfig();
   const { ownerAddress, smartAccount, amountAtomic } = opts;
 
   const server = getRpcServer();
@@ -1038,6 +1067,7 @@ export interface WithdrawResult {
  * [BV-2] Requires Freighter in a real browser.
  */
 export async function withdraw(opts: WithdrawOpts): Promise<WithdrawResult> {
+  assertNetworkConfig();
   const { ownerAddress, smartAccount, amountAtomic } = opts;
 
   const server = getRpcServer();
