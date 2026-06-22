@@ -96,7 +96,10 @@ export default function DashboardPage() {
     refresh();
   }, [router, refresh]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Best-effort: end the Hydra SSO session so a new MCP connector can't
+    // silently re-authorize. Always clear the local session + redirect.
+    await api.oauthLogout().catch(() => {});
     clearSession();
     router.push('/');
   };

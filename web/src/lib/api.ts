@@ -271,6 +271,11 @@ export const api = {
 
   me: () => request<{ user: CreatorUser }>(`/api/v1/auth/me`),
 
+  // End the user's Hydra SSO session on logout so a new MCP connector can't
+  // silently re-authorize via Hydra's `skip`. Best-effort — callers should
+  // .catch() and still clear the local session. Bearer auto-attached.
+  oauthLogout: () => request<{ ok: boolean }>(`/api/v1/oauth/logout`, { method: 'POST' }),
+
   updateSettings: (input: {
     pricePerRequest?: number;
     domain?: string;

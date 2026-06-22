@@ -92,3 +92,30 @@ export async function rejectConsent(challenge: string, error: string): Promise<{
     },
   );
 }
+
+// ── Logout / session revocation ──────────────────────────────────────────────
+
+// Invalidate Hydra's SSO for a subject so the NEXT authorize flow requires a
+// fresh login (Hydra's `skip` no longer auto-accepts). This deletes the login +
+// consent sessions only; it does NOT revoke already-issued access tokens —
+// existing connectors keep working until their token expires.
+//
+// Best-effort: never throws. A failure here must not break dashboard logout, so
+// non-2xx is logged and swallowed. (Hydra returns 204 No Content on success.)
+export async function revokeUserSessions(subject: string): Promise<void> {
+  const targets = [
+    `${HYDRA_ADMIN_URL}/admin/oauth2/auth/sessions/login?subject=${encodeURIComponent(subject)}`,
+    `${HYDRA_ADMIN_URL}/admin/oauth2/auth/sessions/consent?subject=${encodeURIComponent(subject)}`,
+  ];
+  for (const url of targets) {
+    try {
+      const res = await fetch(url, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`Hydra revokeUserSessions ${res.status} for ${url}: ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      console.error('Hydra revokeUserSessions error:', err instanceof Error ? err.message : err);
+    }
+  }
+}

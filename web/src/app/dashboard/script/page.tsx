@@ -115,7 +115,8 @@ export default function ScriptPage() {
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
+                await api.oauthLogout().catch(() => {});
                 clearSession();
                 router.push('/');
               }}

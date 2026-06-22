@@ -12,6 +12,7 @@ let rejectLogin: (challenge: string, error: string) => Promise<{ redirect_to: st
 let getConsentRequest: (challenge: string) => Promise<{ skip: boolean; subject: string; requested_scope: string[]; requested_access_token_audience: string[]; client: any }>;
 let acceptConsent: (challenge: string, opts: { grantScope: string[]; grantAudience: string[]; sessionSub: string }) => Promise<{ redirect_to: string }>;
 let rejectConsent: (challenge: string, error: string) => Promise<{ redirect_to: string }>;
+let revokeUserSessions: (subject: string) => Promise<void>;
 
 before(async () => {
   const mod = await import('../hydra.js');
@@ -21,6 +22,7 @@ before(async () => {
   getConsentRequest = mod.getConsentRequest;
   acceptConsent = mod.acceptConsent;
   rejectConsent = mod.rejectConsent;
+  revokeUserSessions = mod.revokeUserSessions;
 });
 
 // Helper: make a mock fetch that returns JSON.
@@ -149,6 +151,33 @@ test('acceptLogin: opts subject cannot override the real subject (footgun guard)
   const [, init] = fetchMock.mock.calls[0].arguments as [string, RequestInit];
   const sent = JSON.parse(init.body as string);
   assert.equal(sent.subject, 'real-user', 'subject must remain the real authenticated identity');
+});
+
+test('revokeUserSessions issues DELETE to login + consent session URLs with subject', async () => {
+  const fetchMock = mockFetch({}, 204);
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  await revokeUserSessions('user-42');
+
+  assert.equal(fetchMock.mock.calls.length, 2);
+  const [loginUrl, loginInit] = fetchMock.mock.calls[0].arguments as [string, RequestInit];
+  const [consentUrl, consentInit] = fetchMock.mock.calls[1].arguments as [string, RequestInit];
+  assert.equal(loginUrl, `${ADMIN_URL}/admin/oauth2/auth/sessions/login?subject=user-42`);
+  assert.equal(loginInit.method, 'DELETE');
+  assert.equal(consentUrl, `${ADMIN_URL}/admin/oauth2/auth/sessions/consent?subject=user-42`);
+  assert.equal(consentInit.method, 'DELETE');
+});
+
+test('revokeUserSessions is best-effort: never throws on non-2xx or network error', async () => {
+  // non-2xx — must be swallowed
+  globalThis.fetch = mockFetch({ error: 'boom' }, 500) as unknown as typeof fetch;
+  await assert.doesNotReject(() => revokeUserSessions('user-err'));
+
+  // network error — must be swallowed
+  globalThis.fetch = mock.fn(async () => {
+    throw new Error('network down');
+  }) as unknown as typeof fetch;
+  await assert.doesNotReject(() => revokeUserSessions('user-net'));
 });
 
 test('acceptConsent audience guarantee: MCP resource URI always included in grant_access_token_audience', async () => {

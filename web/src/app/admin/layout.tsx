@@ -36,7 +36,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     });
   }, [router]);
 
-  function logout() {
+  async function logout() {
+    // Best-effort: end the Hydra SSO session so a new MCP connector can't
+    // silently re-authorize. Always clear the local session + redirect.
+    await api.oauthLogout().catch(() => {});
     clearSession();
     router.push('/login');
   }

@@ -21,7 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
-import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent } from './hydra.js';
+import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, revokeUserSessions } from './hydra.js';
 
 declare global {
   namespace Express {
@@ -569,6 +569,17 @@ app.post('/api/v1/oauth/login/accept', authGuard, async (req: Request, res: Resp
     console.error('Hydra acceptLogin error:', err instanceof Error ? err.message : err);
     return res.status(502).json({ error: 'hydra_unreachable' });
   }
+});
+
+// --- Hydra logout ---
+//
+// Dashboard logout calls this to END the user's Hydra SSO session so a NEW MCP
+// connector cannot silently re-authorize (Hydra's `skip` auto-accept) without a
+// fresh login. Best-effort: never hard-fails — already-issued access tokens are
+// intentionally NOT revoked, so live connectors keep working until token expiry.
+app.post('/api/v1/oauth/logout', authGuard, async (req: Request, res: Response) => {
+  await revokeUserSessions(String(req.userId!)).catch(() => {});
+  return res.json({ ok: true });
 });
 
 // MCP resource URI that every issued access token must carry as audience.
