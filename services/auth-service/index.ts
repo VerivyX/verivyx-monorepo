@@ -468,7 +468,14 @@ app.post('/api/v1/mcp-waitlist', async (req: Request, res: Response) => {
   if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
-  if (!(await verifyTurnstile(typeof turnstileToken === 'string' ? turnstileToken : '', ip))) {
+  // Authenticated dashboard users (valid creator JWT) skip the captcha — they're already
+  // verified. The public mcp.verivyx.com coming-soon path still requires Turnstile.
+  let authed = false;
+  const authz = req.headers.authorization;
+  if (authz?.startsWith('Bearer ')) {
+    try { verifyCreator(authz.slice(7)); authed = true; } catch { /* not authenticated → public path */ }
+  }
+  if (!authed && !(await verifyTurnstile(typeof turnstileToken === 'string' ? turnstileToken : '', ip))) {
     return res.status(403).json({ error: 'Captcha verification failed' });
   }
   const normalized = email.trim().toLowerCase();
