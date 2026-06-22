@@ -985,7 +985,18 @@ const PLATFORM_STELLAR_ADDRESS = requireEnv('PLATFORM_STELLAR_ADDRESS');
 app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response) => {
   const domain = req.query.domain as string | undefined;
   if (!domain) return res.status(400).json({ error: 'domain required' });
-  const user = await prisma.user.findFirst({ where: { domain } });
+  const user = await prisma.user.findFirst({
+    where: { domain },
+    select: {
+      domain: true,
+      stellar_address: true,
+      pricePerRequest: true,
+      platformFee: true,
+      paywallEnabled: true,
+      wpInternalToken: true,
+      contentUrl: true,
+    },
+  });
   if (!user) return res.status(404).json({ error: 'Not found' });
   res.json({
     domain: user.domain,
@@ -995,6 +1006,7 @@ app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response
     platform_address: PLATFORM_STELLAR_ADDRESS,
     paywallEnabled: user.paywallEnabled,
     wpInternalToken: user.wpInternalToken ?? null,
+    contentUrl: user.contentUrl ?? null,
   });
 });
 

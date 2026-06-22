@@ -26,6 +26,7 @@ model User {
   platformFee     Decimal?   @default(0.001) // Your revenue cut per request
   paywallEnabled  Boolean    @default(true)
   wpInternalToken  String?   // per-domain secret for the WP internal body endpoint (Phase 2 withholding)
+  contentUrl       String?   // generic publisher body endpoint (SDK); null → WP path fallback
   domainVerified   Boolean   @default(false)
   domainVerifiedAt DateTime?
   mcpEarlyAccess  Boolean    @default(false)
