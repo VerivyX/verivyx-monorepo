@@ -29,11 +29,12 @@ declare global {
     interface Request {
       userId?: number;
       userEmail?: string;
+      domain?: string;
     }
   }
 }
 
-type AuthedRequest = Request & { userId?: number; userEmail?: string };
+type AuthedRequest = Request & { userId?: number; userEmail?: string; domain?: string };
 
 const prisma = new PrismaClient();
 const app = express();
@@ -1403,8 +1404,9 @@ app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, r
 });
 
 // domainTokenGuard reads Authorization: Bearer <per-domain-token>, looks up the
-// User by that token, and attaches userId + userEmail to the request. Rejects
-// with 401 if the token is missing, unknown, or belongs to an unverified domain.
+// User by that token, and attaches userId + userEmail + domain to the request.
+// Rejects with 401 if the token is missing, empty, unknown, or belongs to an
+// unverified domain.
 async function domainTokenGuard(req: Request, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
@@ -1412,6 +1414,7 @@ async function domainTokenGuard(req: Request, res: Response, next: NextFunction)
     return;
   }
   const token = header.slice(7);
+  if (!token) { res.status(401).json({ error: 'Missing token' }); return; }
   const user = await prisma.user.findFirst({
     where: { wpInternalToken: token, domainVerified: true },
     select: { id: true, email: true, domain: true },
@@ -1422,6 +1425,7 @@ async function domainTokenGuard(req: Request, res: Response, next: NextFunction)
   }
   req.userId = user.id;
   req.userEmail = user.email;
+  req.domain = user.domain ?? undefined;
   next();
 }
 
