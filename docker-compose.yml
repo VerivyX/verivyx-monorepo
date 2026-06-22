@@ -69,6 +69,8 @@ services:
       - HYDRA_ADMIN_URL=${HYDRA_ADMIN_URL:-http://hydra:4445}
       # OAuth2 resource identifier — added as audience on every consent grant.
       - MCP_RESOURCE_URI=${MCP_RESOURCE_URI:-https://mcp.verivyx.com/mcp}
+      # When true, show an explicit consent screen instead of auto-accepting.
+      - CONSENT_SCREEN_ENABLED=${CONSENT_SCREEN_ENABLED:-false}
     ports:
       - "127.0.0.1:8083:8083"
     depends_on:
