@@ -294,9 +294,9 @@ services:
       - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?HYDRA_SECRETS_SYSTEM is required}
       - OAUTH2_EXPOSE_INTERNAL_ERRORS=false
       # JWT access tokens so the MCP resource server can verify them via JWKS (the
-      # default opaque tokens 401 at /mcp — they'd need introspection). Required for
-      # external MCP clients (Claude.ai) to authenticate.
-      - OAUTH2_ACCESS_TOKEN_STRATEGY=jwt
+      # default opaque tokens 401 at /mcp — they'd need introspection). Global strategy
+      # so DCR clients (Claude.ai) get JWTs too. Hydra config key: strategies.access_token.
+      - STRATEGIES_ACCESS_TOKEN=jwt
       - OIDC_DYNAMIC_CLIENT_REGISTRATION_ENABLED=true
       - OIDC_DYNAMIC_CLIENT_REGISTRATION_DEFAULT_SCOPE=openid,offline,offline_access
       # Advertise the DCR endpoint in /.well-known/openid-configuration as registration_endpoint.
