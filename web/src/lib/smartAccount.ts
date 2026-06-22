@@ -27,6 +27,7 @@ import {
   Address,
   Asset,
   authorizeEntry,
+  BASE_FEE,
   hash,
   Horizon,
   nativeToScVal,
@@ -407,7 +408,7 @@ export async function createOrConnectAccount(
 
   const sourceAccount = await server.getAccount(ownerAddress);
   const tx = new TransactionBuilder(sourceAccount, {
-    fee: '5000000',
+    fee: BASE_FEE, // inclusion only; assembleTransaction adds the Soroban resource fee
     networkPassphrase: STELLAR_NETWORK,
   })
     .addOperation(
@@ -893,7 +894,7 @@ export async function topUp(opts: TopUpOpts): Promise<TopUpResult> {
 
   const sourceAccount = await server.getAccount(ownerAddress);
   const tx = new TransactionBuilder(sourceAccount, {
-    fee: '5000000',
+    fee: BASE_FEE, // inclusion only; assembleTransaction adds the Soroban resource fee
     networkPassphrase: STELLAR_NETWORK,
   })
     .addOperation(
@@ -1110,7 +1111,7 @@ async function submitWithOwnerAuth(opts: OwnerAuthOpts): Promise<string> {
 
   const sourceAccount = await server.getAccount(sourceAddress);
   const tx1 = new TransactionBuilder(sourceAccount, {
-    fee: '10000000',
+    fee: BASE_FEE, // inclusion only; assembleTransaction adds the Soroban resource fee
     networkPassphrase,
   })
     .addOperation(op)
@@ -1217,7 +1218,7 @@ async function submitWithOwnerAuth(opts: OwnerAuthOpts): Promise<string> {
   // 3) Re-build tx with signed auth, re-simulate, assemble, sign outer tx, submit.
   const sourceAccount2 = await server.getAccount(sourceAddress);
   const tx2 = new TransactionBuilder(sourceAccount2, {
-    fee: '10000000',
+    fee: BASE_FEE, // inclusion only; assembleTransaction adds the Soroban resource fee
     networkPassphrase,
   })
     .addOperation(op)
