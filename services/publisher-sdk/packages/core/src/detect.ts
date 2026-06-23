@@ -173,13 +173,13 @@ export async function classify(
   // --- 1. paid — payment header present (x402 v2 or legacy) ---------------
   // Actual signature verification / settlement happens later in the pipeline.
   // Presence of the header is sufficient to route to the paid path here.
-  if (req.headers.get("PAYMENT-SIGNATURE")) {
+  if (req.headers.get("payment-signature")) {
     return {
       classification: "paid",
       signals: ["payment-header:PAYMENT-SIGNATURE"],
     };
   }
-  if (req.headers.get("X-PAYMENT")) {
+  if (req.headers.get("x-payment")) {
     return {
       classification: "paid",
       signals: ["payment-header:X-PAYMENT"],
@@ -189,7 +189,7 @@ export async function classify(
   // --- 2. verified — human session present ----------------------------------
   // Presence only; JWT / session validation happens later.
   const cookie = req.headers.get("cookie") ?? "";
-  if (cookie.includes("vx_session=")) {
+  if (/(^|;\s*)vx_session=/.test(cookie)) {
     return {
       classification: "verified",
       signals: ["session:cookie"],

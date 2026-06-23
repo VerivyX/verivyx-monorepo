@@ -203,6 +203,31 @@ describe("crawler spoofing → ai-bot", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2b. vx_session cookie — delimiter-anchored match
+// ---------------------------------------------------------------------------
+describe("vx_session cookie — delimiter-anchored match", () => {
+  it("does NOT classify 'not_vx_session=abc' as verified (false-positive guard)", async () => {
+    // A cookie name whose suffix is 'vx_session=' must NOT trigger session:cookie.
+    const req = makeReq(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      {},
+      "not_vx_session=abc",
+    );
+    const result = await classify(req, cfg, noopDeps);
+    expect(result.classification).toBe<Classification>("human");
+    expect(result.signals).not.toContain("session:cookie");
+  });
+
+  it("classifies 'foo=1; vx_session=xyz' as verified (mid-string real session)", async () => {
+    // vx_session= appearing after a semicolon delimiter must still match.
+    const req = makeReq("Mozilla/5.0", {}, "foo=1; vx_session=xyz");
+    const result = await classify(req, cfg, noopDeps);
+    expect(result.classification).toBe<Classification>("verified");
+    expect(result.signals).toContain("session:cookie");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 7. human — plain browser UA, no signals
 // ---------------------------------------------------------------------------
 describe("human classification", () => {
