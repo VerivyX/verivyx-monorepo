@@ -337,6 +337,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ consent_challenge }),
     }),
+
+  sdkProvisionInit: () =>
+    request<{ nonce: string }>(`/api/v1/sdk/provision/init`, { method: "POST" }),
+
+  sdkProvisionVerify: (site: string, nonce: string) =>
+    request<{ token: string }>(`/api/v1/sdk/provision/verify`, {
+      method: "POST",
+      body: JSON.stringify({ site, nonce }),
+    }),
 };
 
 // ── Wallet API (non-custodial MCP binding) ────────────────────────────────────
