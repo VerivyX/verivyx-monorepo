@@ -26,6 +26,10 @@ export type { Classification, ClassifyDeps, ClassifyResult } from "./detect.js";
 export { verifyWebBotAuth } from "./webbotauth.js";
 export type { VerifyWebBotAuthDeps } from "./webbotauth.js";
 
+// Search-crawler IP-range verifier (Google/Bing published lists)
+export { createSearchCrawlerVerifier, ipInCidr } from "./crawlerverify.js";
+export type { CrawlerVerifierDeps } from "./crawlerverify.js";
+
 // SEO preview + anti-cloaking JSON-LD builders
 export { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
 
