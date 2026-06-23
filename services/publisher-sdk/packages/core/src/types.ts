@@ -12,17 +12,11 @@ export interface Logger {
 }
 
 /**
- * Minimal placeholder for the x402 payment requirement shape.
- * Expanded in Task 11 (x402 emitter) with full wire-format fields.
+ * Full x402 v2 payment requirement shape (implemented in Task 11).
+ * Re-exported from src/x402.ts where it is defined alongside the wire helpers.
+ * Field names mirror services/agent-sdk/src/types.ts exactly for wire compatibility.
  */
-export interface PaymentRequirement {
-  // expanded in Task 11
-  scheme: string;
-  network: string;
-  asset: string;
-  amount: string;
-  payTo: string;
-}
+export type { PaymentRequirement } from "./x402.js";
 
 /**
  * Minimal placeholder for the proof-of-work challenge shape.

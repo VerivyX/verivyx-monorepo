@@ -24,11 +24,12 @@ const cfgOpen = resolveConfig(
 
 const samplePaymentRequirements: PaymentRequirement[] = [
   {
-    scheme: "x402",
-    network: "stellar",
-    asset: "USDC",
+    scheme: "exact",
+    network: "stellar:testnet",
+    asset: "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
     amount: "0.01",
     payTo: "GABC1234",
+    maxTimeoutSeconds: 300,
   },
 ];
 

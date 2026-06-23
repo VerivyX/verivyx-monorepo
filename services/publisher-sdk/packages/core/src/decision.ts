@@ -15,6 +15,7 @@
 
 import type { ResolvedConfig } from "./config.js";
 import type { PaymentRequirement, PowChallenge } from "./types.js";
+import { toBase64Utf8 } from "./x402.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -96,7 +97,7 @@ interface DecisionInput {
  */
 function build402(requirements: PaymentRequirement[]): Response {
   const body = JSON.stringify({ x402Version: 2, accepts: requirements });
-  const encoded = btoa(body);
+  const encoded = toBase64Utf8(body);
   return new Response(body, {
     status: 402,
     headers: {

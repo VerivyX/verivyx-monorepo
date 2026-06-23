@@ -3,6 +3,10 @@
 // Shared types
 export type { Logger, Price, PaymentRequirement, PowChallenge } from "./types.js";
 
+// x402 v2 wire helpers
+export { buildPaymentRequired, readPaymentHeader } from "./x402.js";
+export type { PaymentRequiredBody, ResourceInfo } from "./x402.js";
+
 // Config
 export { resolveConfig, ConfigError } from "./config.js";
 export type { VerivyxOptions, ResolvedConfig } from "./config.js";
