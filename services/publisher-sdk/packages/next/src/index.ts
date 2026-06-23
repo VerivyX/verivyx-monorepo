@@ -35,8 +35,8 @@ import {
   createSearchCrawlerVerifier,
   classify,
   verifyWebBotAuth as coreVerifyWebBotAuth,
-  buildPreviewHtml,
-  buildPaywallJsonLd,
+  buildSeoPreviewResponse,
+  attachPaymentResponse,
 } from "@verivyx/paywall";
 import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
 
@@ -148,39 +148,7 @@ function resolveIp(
   return (xri !== null && xri !== "") ? xri : undefined;
 }
 
-/**
- * Clone a Response and attach (or overwrite) a single header.
- * Preserves status, statusText, and all existing headers.
- */
-function withHeader(res: Response, key: string, value: string): Response {
-  const headers = new Headers(res.headers);
-  headers.set(key, value);
-  return new Response(res.body, {
-    status: res.status,
-    statusText: res.statusText,
-    headers,
-  });
-}
-
-/**
- * Build an SEO preview Response (200 HTML) with anti-cloaking JSON-LD.
- * Used when the caller supplied `seoPreview` and the visitor is a crawler or
- * unverified human — so we deliver a teaser rather than a bare 402.
- */
-function buildSeoPreviewResponse(
-  slug: string,
-  url: string,
-  seoPreview: (c: { slug: string }) => { title: string; excerpt: string },
-): Response {
-  const { title, excerpt } = seoPreview({ slug });
-  // Mirrors core's preview construction (packages/core/src/index.ts buildPreviewBuilders) — keep in sync.
-  const jsonLd = buildPaywallJsonLd({ title, description: excerpt, url });
-  const html = buildPreviewHtml({ title, excerpt, url, jsonLd });
-  return new Response(html, {
-    status: 200,
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
-}
+// (buildSeoPreviewResponse and attachPaymentResponse are imported from @verivyx/paywall)
 
 // ---------------------------------------------------------------------------
 // Adapter factory
@@ -302,10 +270,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
         const res = await handler(req, ctx);
 
         // 5. Attach the settlement receipt header when a payment was processed.
-        if (decision.paymentResponse !== undefined) {
-          return withHeader(res, "PAYMENT-RESPONSE", decision.paymentResponse);
-        }
-        return res;
+        return attachPaymentResponse(res, decision.paymentResponse);
       };
     },
 

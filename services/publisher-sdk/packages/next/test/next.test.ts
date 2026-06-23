@@ -4,7 +4,7 @@ import type { Verivyx } from "@verivyx/paywall";
 import { verivyxNext } from "../src/index.js";
 
 function wrap(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
-  const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) } as never);
+  const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) });
   const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
   return { GET: vx.protect(handler), handler };
 }
@@ -134,7 +134,7 @@ describe("verivyxNext", () => {
       domain: "ex.com",
       token: "t",
       _core: verivyx.mock({ classification: "crawler" }),
-    } as never);
+    });
     const GET = vx.protect(handler, {
       seoPreview: () => ({ title: "T", excerpt: "E" }),
     });
@@ -158,7 +158,7 @@ describe("verivyxNext", () => {
 
   it("IP-trust: core receives x-forwarded-for first-hop (5.5.5.5) not client x-real-ip (7.7.7.7)", async () => {
     const { core, capturedIp } = makeCaptureCore();
-    const vx = verivyxNext({ domain: "ex.com", token: "t", _core: core } as never);
+    const vx = verivyxNext({ domain: "ex.com", token: "t", _core: core });
     const GET = vx.protect(vi.fn(async () => new Response("ok")));
     await GET(
       new Request("https://ex.com/articles/x", {
@@ -175,7 +175,7 @@ describe("verivyxNext", () => {
 
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
     const { core, capturedIp } = makeCaptureCore();
-    const vx = verivyxNext({ domain: "ex.com", token: "t", trustProxy: false, _core: core } as never);
+    const vx = verivyxNext({ domain: "ex.com", token: "t", trustProxy: false, _core: core });
     const GET = vx.protect(vi.fn(async () => new Response("ok")));
     await GET(
       new Request("https://ex.com/articles/x", {

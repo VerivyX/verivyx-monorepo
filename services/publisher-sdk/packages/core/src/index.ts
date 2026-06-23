@@ -31,7 +31,7 @@ export { createSearchCrawlerVerifier, ipInCidr } from "./crawlerverify.js";
 export type { CrawlerVerifierDeps } from "./crawlerverify.js";
 
 // SEO preview + anti-cloaking JSON-LD builders
-export { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
+export { buildPaywallJsonLd, buildPreviewHtml, buildSeoPreviewResponse } from "./preview.js";
 
 // Verivyx backend client (authorize / requirements)
 export { VerivyxClient } from "./client.js";

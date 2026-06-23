@@ -21,7 +21,12 @@
  * ```
  */
 
-import { verivyx, createSearchCrawlerVerifier } from "@verivyx/paywall";
+import {
+  verivyx,
+  createSearchCrawlerVerifier,
+  buildSeoPreviewResponse,
+  attachPaymentResponse,
+} from "@verivyx/paywall";
 import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
 import type { Context, MiddlewareHandler } from "hono";
 
@@ -139,6 +144,7 @@ function resolveIp(c: Context, trustProxy: boolean): string | undefined {
 export function verivyxHono(opts?: HonoAdapterOptions): {
   protect(
     handler: (c: Context) => Response | Promise<Response>,
+    o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
   ): MiddlewareHandler;
 } {
   // Resolve the core: use the injected `_core` (tests) or build the real one.
@@ -159,6 +165,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
   return {
     protect(
       handler: (c: Context) => Response | Promise<Response>,
+      o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
     ): MiddlewareHandler {
       return async function verivyxHonoGuard(c): Promise<Response> {
         // 1. Get the raw Web Request from Hono context.
@@ -201,8 +208,14 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         // 4. Ask the core to evaluate the request (decision overload).
         const decision = await vx.protect(coreReq, { slug });
 
-        // 5. Denied — return the gate response (e.g. 402). Handler NOT called.
+        // 5. Denied — check if this is a crawler/human-unverified that we can
+        //    serve an SEO preview to instead of a bare 402. Handler NOT called.
         if (!decision.allowed) {
+          const isPreviewCandidate =
+            decision.reason === "crawler" || decision.reason === "human-unverified";
+          if (isPreviewCandidate && o?.seoPreview !== undefined) {
+            return buildSeoPreviewResponse(slug, raw.url, o.seoPreview);
+          }
           return decision.response();
         }
 
@@ -210,17 +223,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         const res = await handler(c);
 
         // 7. Attach the settlement receipt header when a payment was processed.
-        if (decision.paymentResponse !== undefined) {
-          const headers = new Headers(res.headers);
-          headers.set("PAYMENT-RESPONSE", decision.paymentResponse);
-          return new Response(res.body, {
-            status: res.status,
-            statusText: res.statusText,
-            headers,
-          });
-        }
-
-        return res;
+        return attachPaymentResponse(res, decision.paymentResponse);
       };
     },
   };

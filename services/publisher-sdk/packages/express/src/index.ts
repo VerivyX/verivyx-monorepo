@@ -27,6 +27,7 @@ import type { Request as ExpressRequest, RequestHandler, Response as ExpressResp
 import {
   verivyx,
   createSearchCrawlerVerifier,
+  buildSeoPreviewResponse,
 } from "@verivyx/paywall";
 import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
 import type { IncomingHttpHeaders } from "node:http";
@@ -243,7 +244,10 @@ export async function sendWebResponse(
  * ```
  */
 export function verivyxExpress(opts?: ExpressAdapterOptions): {
-  protect(handler: RequestHandler): RequestHandler;
+  protect(
+    handler: RequestHandler,
+    o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
+  ): RequestHandler;
 } {
   // Resolve the core: use the injected `_core` (tests) or build the real one.
   // Only pass `verifyWebBotAuth` to the core deps when the caller overrode it;
@@ -259,7 +263,10 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
     });
 
   return {
-    protect(handler: RequestHandler): RequestHandler {
+    protect(
+      handler: RequestHandler,
+      o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
+    ): RequestHandler {
       // Return an async Express handler (req, res, next).
       return async function verivyxGuard(
         req: ExpressRequest,
@@ -297,8 +304,15 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
             lastPathSegment(req.path);
           const decision = await vx.protect(webReq, { slug });
 
-          // 4a. Denied → convert Web Response to Express response.
+          // 4a. Denied — check if this is a crawler/human-unverified that we can
+          //     serve an SEO preview to instead of a bare 402.
           if (!decision.allowed) {
+            const isPreviewCandidate =
+              decision.reason === "crawler" || decision.reason === "human-unverified";
+            if (isPreviewCandidate && o?.seoPreview !== undefined) {
+              await sendWebResponse(res, buildSeoPreviewResponse(slug, absoluteUrl, o.seoPreview));
+              return;
+            }
             await sendWebResponse(res, decision.response());
             return;
           }

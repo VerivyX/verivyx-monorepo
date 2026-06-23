@@ -72,6 +72,50 @@ describe("verivyxExpress", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("seoPreview: crawler request receives 200 HTML with JSON-LD, handler not called", async () => {
+    const vx = verivyxExpress({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const app = express();
+    const handler = vi.fn((_req: express.Request, res: express.Response) =>
+      res.status(200).send("SECRET BODY"),
+    );
+    app.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: ({ slug }) => ({ title: `Article: ${slug}`, excerpt: "A teaser." }),
+    }));
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "Googlebot/2.1");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/html/);
+    expect(res.text).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified request receives 200 HTML with JSON-LD, handler not called", async () => {
+    const vx = verivyxExpress({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const app = express();
+    const handler = vi.fn((_req: express.Request, res: express.Response) =>
+      res.status(200).send("SECRET BODY"),
+    );
+    app.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "Mozilla/5.0");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/html/);
+    expect(res.text).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("propagates errors from protect() to next(err)", async () => {
     const vx = verivyxExpress({
       domain: "ex.com",

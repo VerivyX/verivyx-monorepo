@@ -129,3 +129,28 @@ export function buildPreviewHtml(p: {
 </body>
 </html>`;
 }
+
+/**
+ * Build an SEO preview `Response` (200 HTML + anti-cloaking JSON-LD) for a
+ * crawler or unverified-human request.
+ *
+ * Shared by all three adapter packages (Express, Hono, Next) so the preview
+ * HTML is generated identically regardless of which adapter is in use.
+ *
+ * This helper is a thin wrapper around `buildPaywallJsonLd` + `buildPreviewHtml`;
+ * adapters import it from `@verivyx/paywall` rather than each maintaining a
+ * private copy.
+ */
+export function buildSeoPreviewResponse(
+  slug: string,
+  url: string,
+  seoPreview: (c: { slug: string }) => { title: string; excerpt: string },
+): Response {
+  const { title, excerpt } = seoPreview({ slug });
+  const jsonLd = buildPaywallJsonLd({ title, description: excerpt, url });
+  const html = buildPreviewHtml({ title, excerpt, url, jsonLd });
+  return new Response(html, {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}

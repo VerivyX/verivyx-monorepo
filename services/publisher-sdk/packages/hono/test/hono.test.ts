@@ -125,6 +125,52 @@ describe("verivyxHono", () => {
     expect(capturedIp()).toBeNull();
   });
 
+  it("seoPreview: crawler request receives 200 HTML with JSON-LD, handler not called", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: ({ slug }) => ({ title: `Article: ${slug}`, excerpt: "A teaser." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Googlebot/2.1" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    const body = await res.text();
+    expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified request receives 200 HTML with JSON-LD, handler not called", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Mozilla/5.0" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    const body = await res.text();
+    expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("falls back to last path segment when :slug param missing", async () => {
     const vx = verivyxHono({
       domain: "ex.com",
