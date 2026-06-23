@@ -217,8 +217,8 @@ export default function DashboardPage() {
 
           <div className="flex items-center gap-3">
             <PaywallStatusPill enabled={paywallOn} />
-            <Link href="/dashboard/script" className="btn-yellow text-sm">
-              <Zap size={14} /> Get Script
+            <Link href="/dashboard/integrations" className="btn-yellow text-sm">
+              <Zap size={14} /> Set up integration
             </Link>
             <Link href="/dashboard/transactions" className="btn-ghost text-sm">
               <ReceiptText size={14} /> Transactions
