@@ -1,7 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import { verivyx } from "@verivyx/paywall";
+import type { Verivyx } from "@verivyx/paywall";
 import { verivyxHono } from "../src/index.js";
+
+// ---------------------------------------------------------------------------
+// Minimal Verivyx stub that captures the x-real-ip header seen by protect().
+// Returns a denied GateDecision so the handler is never called.
+// ---------------------------------------------------------------------------
+function makeCaptureCore(): { core: Verivyx; capturedIp: () => string | null } {
+  let captured: string | null = null;
+  const core: Verivyx = {
+    protect: async (req: Request) => {
+      captured = req.headers.get("x-real-ip");
+      // Return a minimal denied GateDecision (ai-bot → 402).
+      return {
+        allowed: false,
+        reason: "ai-bot" as const,
+        response: () => new Response(JSON.stringify({ error: "payment_required" }), { status: 402 }),
+        paymentResponse: undefined,
+      };
+    },
+  } as unknown as Verivyx;
+  return { core, capturedIp: () => captured };
+}
 
 function makeApp(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
   const vx = verivyxHono({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) });
@@ -62,6 +84,45 @@ describe("verivyxHono", () => {
       },
     });
     expect(res.status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // IP-trust security: verify what x-real-ip the CORE actually receives.
+  // ---------------------------------------------------------------------------
+
+  it("IP-trust: core receives cf-connecting-ip (1.2.3.4) not x-forwarded-for (9.9.9.9)", async () => {
+    const { core, capturedIp } = makeCaptureCore();
+    const vx = verivyxHono({ domain: "ex.com", token: "t", _core: core });
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(async (c) => c.body("BODY", 200)));
+
+    await a.request("/articles/my-article", {
+      headers: {
+        "cf-connecting-ip": "1.2.3.4",
+        "x-forwarded-for": "9.9.9.9",
+        "x-real-ip": "7.7.7.7", // client-supplied — must be overridden
+      },
+    });
+
+    // CF-Connecting-IP has highest precedence; core must see that value.
+    expect(capturedIp()).toBe("1.2.3.4");
+  });
+
+  it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
+    const { core, capturedIp } = makeCaptureCore();
+    const vx = verivyxHono({ domain: "ex.com", token: "t", trustProxy: false, _core: core });
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(async (c) => c.body("BODY", 200)));
+
+    await a.request("/articles/my-article", {
+      headers: {
+        "x-real-ip": "6.6.6.6",       // client-supplied spoof attempt
+        "x-forwarded-for": "6.6.6.6", // also stripped
+      },
+    });
+
+    // Core must see null — client cannot inject a fake IP when trustProxy:false.
+    expect(capturedIp()).toBeNull();
   });
 
   it("falls back to last path segment when :slug param missing", async () => {

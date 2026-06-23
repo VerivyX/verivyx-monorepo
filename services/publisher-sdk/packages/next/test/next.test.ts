@@ -1,11 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
 import { verivyx } from "@verivyx/paywall";
+import type { Verivyx } from "@verivyx/paywall";
 import { verivyxNext } from "../src/index.js";
 
 function wrap(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
   const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) } as never);
   const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
   return { GET: vx.protect(handler), handler };
+}
+
+// Minimal Verivyx stub that captures the x-real-ip seen by protect().
+function makeCaptureCore(): { core: Verivyx; capturedIp: () => string | null } {
+  let captured: string | null = null;
+  const core: Verivyx = {
+    protect: async (req: Request) => {
+      captured = req.headers.get("x-real-ip");
+      return {
+        allowed: false,
+        reason: "ai-bot" as const,
+        response: () => new Response(JSON.stringify({ error: "payment_required" }), { status: 402 }),
+        paymentResponse: undefined,
+      };
+    },
+  } as unknown as Verivyx;
+  return { core, capturedIp: () => captured };
 }
 
 describe("verivyxNext", () => {
@@ -132,5 +150,43 @@ describe("verivyxNext", () => {
     // Anti-cloaking JSON-LD marker must be present in the preview HTML.
     expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // IP-trust security: verify what x-real-ip the CORE actually receives.
+  // ---------------------------------------------------------------------------
+
+  it("IP-trust: core receives x-forwarded-for first-hop (5.5.5.5) not client x-real-ip (7.7.7.7)", async () => {
+    const { core, capturedIp } = makeCaptureCore();
+    const vx = verivyxNext({ domain: "ex.com", token: "t", _core: core } as never);
+    const GET = vx.protect(vi.fn(async () => new Response("ok")));
+    await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: {
+          "x-forwarded-for": "5.5.5.5, 10.0.0.1",
+          "x-real-ip": "7.7.7.7", // client-supplied — must be overridden
+        },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    // XFF first-hop (5.5.5.5) takes precedence; client x-real-ip is overridden.
+    expect(capturedIp()).toBe("5.5.5.5");
+  });
+
+  it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
+    const { core, capturedIp } = makeCaptureCore();
+    const vx = verivyxNext({ domain: "ex.com", token: "t", trustProxy: false, _core: core } as never);
+    const GET = vx.protect(vi.fn(async () => new Response("ok")));
+    await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: {
+          "x-real-ip": "6.6.6.6",       // client-supplied spoof attempt
+          "x-forwarded-for": "6.6.6.6", // also stripped
+        },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    // Core must see null — client cannot inject a fake IP when trustProxy:false.
+    expect(capturedIp()).toBeNull();
   });
 });

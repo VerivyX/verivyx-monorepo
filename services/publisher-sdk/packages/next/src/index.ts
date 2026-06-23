@@ -242,6 +242,14 @@ export function verivyxNext(opts?: NextAdapterOptions): {
       ): Promise<Response> {
         // 1. Resolve trusted client IP and inject into a cloned request so the
         //    core classifier reads a reliable address regardless of edge hop.
+        //
+        //    Security invariant:
+        //      trustProxy !== false → resolve IP from proxy headers and set
+        //        x-real-ip on the cloned request (overrides any client value).
+        //      trustProxy === false  → no trustworthy socket IP is available in
+        //        Next.js route handlers; strip both x-real-ip and x-forwarded-for
+        //        so a client cannot spoof an IP into the core classifier
+        //        (core sees no IP → safe default).
         const ip = resolveIp(req, trustProxy);
         let coreReq: Request;
         if (ip !== undefined) {
@@ -256,7 +264,15 @@ export function verivyxNext(opts?: NextAdapterOptions): {
             // Do not attach body to coreReq — core classify reads headers only.
           });
         } else {
-          coreReq = req;
+          // trustProxy === false: strip forwarding headers so the client cannot
+          // inject a spoofed IP into the core.
+          const headers = new Headers(req.headers);
+          headers.delete("x-real-ip");
+          headers.delete("x-forwarded-for");
+          coreReq = new Request(req.url, {
+            method: req.method,
+            headers,
+          });
         }
 
         // 2. Resolve slug.
