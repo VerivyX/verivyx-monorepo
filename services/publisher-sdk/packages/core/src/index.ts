@@ -21,3 +21,6 @@ export type { Classification, ClassifyDeps, ClassifyResult } from "./detect.js";
 // Web Bot Auth verifier (RFC 9421 Ed25519)
 export { verifyWebBotAuth } from "./webbotauth.js";
 export type { VerifyWebBotAuthDeps } from "./webbotauth.js";
+
+// SEO preview + anti-cloaking JSON-LD builders
+export { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
