@@ -46,17 +46,56 @@ describe("makeDecision", () => {
     const res = decision.response();
     expect(res.status).toBe(402);
 
-    // Body should be JSON with x402Version and accepts array
-    const body = await res.json() as { x402Version: number; accepts: PaymentRequirement[] };
+    // Body is the canonical x402 v2 envelope: x402Version + resource + accepts + error
+    const body = await res.json() as {
+      x402Version: number;
+      accepts: PaymentRequirement[];
+      resource: { url: string; mimeType: string };
+      error: string;
+    };
     expect(body.x402Version).toBe(2);
     expect(body.accepts).toEqual(samplePaymentRequirements);
+    expect(body.resource).toBeDefined();
+    expect(body.resource.mimeType).toBe("text/html");
+    expect(typeof body.error).toBe("string");
+    expect(body.error).toBe("payment_required");
 
-    // PAYMENT-REQUIRED header must be base64 of the same JSON
+    // PAYMENT-REQUIRED header must be base64 of the same canonical JSON
     const headerVal = res.headers.get("PAYMENT-REQUIRED");
     expect(headerVal).toBeTruthy();
-    const decoded = JSON.parse(atob(headerVal!)) as { x402Version: number; accepts: PaymentRequirement[] };
+    const decoded = JSON.parse(atob(headerVal!)) as {
+      x402Version: number;
+      accepts: PaymentRequirement[];
+      resource: { url: string; mimeType: string };
+      error: string;
+    };
     expect(decoded.x402Version).toBe(2);
     expect(decoded.accepts).toEqual(samplePaymentRequirements);
+    expect(decoded.resource).toEqual(body.resource);
+    expect(decoded.error).toBe(body.error);
+  });
+
+  it("bot-unpaid: emits a prebuilt402 envelope verbatim when supplied", async () => {
+    const prebuiltBody = {
+      x402Version: 2 as const,
+      error: "payment_required",
+      resource: { url: "https://pub.example.com/blog/secret", mimeType: "text/html" },
+      accepts: samplePaymentRequirements,
+    };
+    const header = btoa(JSON.stringify(prebuiltBody));
+    const decision = makeDecision(
+      {
+        reason: "bot-unpaid",
+        paymentRequirements: samplePaymentRequirements,
+        prebuilt402: { body: prebuiltBody, header },
+      },
+      cfg,
+    );
+    const res = decision.response();
+    expect(res.status).toBe(402);
+    const body = await res.json();
+    expect(body).toEqual(prebuiltBody);
+    expect(res.headers.get("PAYMENT-REQUIRED")).toBe(header);
   });
 
   it("bot-unpaid: response() returns 402 with empty accepts when no paymentRequirements", async () => {

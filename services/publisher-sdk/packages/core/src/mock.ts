@@ -16,6 +16,7 @@
 
 import { resolveConfig } from "./config.js";
 import type { Classification, ClassifyDeps } from "./detect.js";
+import type { GateDecision } from "./decision.js";
 import type { AuthorizeResult } from "./client.js";
 import { BackendUnreachableError } from "./errors.js";
 import { makeVerivyx } from "./index.js";
@@ -38,6 +39,8 @@ export interface MockOverrides {
   failMode?: "teaser" | "open" | "closed";
   domain?: string;
   token?: string;
+  /** Observe every gate decision (forwarded to cfg.onDecision). */
+  onDecision?: (d: GateDecision) => void;
 
   // --- classifier dep overrides (only used when classification is unset) ---
   verifyWebBotAuth?: (req: Request) => Promise<boolean>;
@@ -72,6 +75,7 @@ export function mock(overrides: MockOverrides = {}): Verivyx {
       token: overrides.token ?? "mock-token",
       ...(overrides.match !== undefined ? { match: overrides.match } : {}),
       ...(overrides.failMode !== undefined ? { failMode: overrides.failMode } : {}),
+      ...(overrides.onDecision !== undefined ? { onDecision: overrides.onDecision } : {}),
     },
     {},
   );

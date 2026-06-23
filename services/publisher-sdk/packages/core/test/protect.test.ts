@@ -173,4 +173,116 @@ describe("verivyx().protect(req) — decision overload", () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reason).toBe("paid");
   });
+
+  it("a human request yields reason 'human-unverified' (not 'crawler')", async () => {
+    const v = verivyx.mock({ classification: "human" });
+    const decision = await v.protect(
+      req("https://pub.example.com/blog/secret", {
+        "user-agent": "Mozilla/5.0",
+      }),
+    );
+    expect(decision.reason).toBe("human-unverified");
+    expect(decision.allowed).toBe(false);
+    expect(decision.response().status).toBe(402);
+  });
+
+  it("a DNS-verified crawler yields reason 'crawler'", async () => {
+    // Do NOT force classification — exercise the real classifier so a verified
+    // Googlebot (DNS ok) classifies as 'crawler'.
+    const v = verivyx.mock({
+      verifyCrawlerDns: async () => true,
+    });
+    const decision = await v.protect(
+      req("https://pub.example.com/blog/secret", {
+        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1)",
+        "x-real-ip": "66.249.66.1",
+      }),
+    );
+    expect(decision.reason).toBe("crawler");
+  });
+
+  it("an unverified (spoofed) crawler downgrades to bot-unpaid, not 'crawler'", async () => {
+    const v = verivyx.mock(); // no verifyCrawlerDns → spoof defense → ai-bot
+    const decision = await v.protect(
+      req("https://pub.example.com/blog/secret", {
+        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1)",
+      }),
+    );
+    expect(decision.reason).toBe("bot-unpaid");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onDecision + signals wiring (FIX 3)
+// ---------------------------------------------------------------------------
+
+describe("onDecision + signals wiring", () => {
+  it("onDecision is invoked on the wrapped-handler path with the decision", async () => {
+    const seen: GateDecision[] = [];
+    const handler = vi.fn(okHandler);
+    const v = verivyx.mock({
+      classification: "ai-bot",
+      onDecision: (d) => seen.push(d),
+    });
+    const wrapped = v.protect(handler);
+    await wrapped(
+      req("https://pub.example.com/blog/secret", { "user-agent": "GPTBot/1.0" }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.reason).toBe("bot-unpaid");
+  });
+
+  it("classifier signals reach onDecision (real classifier, no forced class)", async () => {
+    const seen: GateDecision[] = [];
+    const handler = vi.fn(okHandler);
+    const v = verivyx.mock({
+      onDecision: (d) => seen.push(d),
+    });
+    const wrapped = v.protect(handler);
+    await wrapped(
+      req("https://pub.example.com/blog/secret", { "user-agent": "GPTBot/1.0" }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.signals).toBeDefined();
+    expect(seen[0]!.signals).toContain("ua:gptbot");
+  });
+
+  it("logger.warn fires on backend-unreachable failMode", async () => {
+    const warn = vi.fn();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    const handler = vi.fn(okHandler);
+    // Use the real factory so a custom logger can be injected.
+    const v = verivyx(
+      {
+        domain: "pub.example.com",
+        token: "t",
+        failMode: "closed",
+        logger,
+      },
+      { verifyWebBotAuth: async () => false },
+    );
+    // Force the backend to be unreachable by injecting a failing fetch.
+    const vFail = verivyx(
+      {
+        domain: "pub.example.com",
+        token: "t",
+        failMode: "closed",
+        logger,
+      },
+      {
+        verifyWebBotAuth: async () => false,
+        fetch: (async () => {
+          throw new TypeError("network down");
+        }) as typeof fetch,
+      },
+    );
+    void v;
+    const wrapped = vFail.protect(handler);
+    const res = await wrapped(
+      req("https://pub.example.com/blog/secret", { "user-agent": "GPTBot/1.0" }),
+    );
+    expect(res.status).toBe(503); // failMode closed
+    expect(warn).toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

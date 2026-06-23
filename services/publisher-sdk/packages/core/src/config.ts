@@ -11,7 +11,6 @@ export interface VerivyxOptions {
   price?: Price;
   timeoutMs?: number;
   logger?: Logger;
-  telemetry?: boolean;
   onDecision?: (d: GateDecision) => void;
 }
 
@@ -25,7 +24,6 @@ export interface ResolvedConfig {
   price?: Price;
   timeoutMs: number;
   logger: Logger;
-  telemetry: boolean;
   onDecision?: (d: GateDecision) => void;
 }
 
@@ -88,7 +86,7 @@ export function resolveConfig(
   if (opts?.match !== undefined) {
     match = opts.match;
   } else if (env["VERIVYX_MATCH"]) {
-    match = env["VERIVYX_MATCH"].split(",").map((s) => s.trim());
+    match = env["VERIVYX_MATCH"].split(",").map((s) => s.trim()).filter(Boolean);
   } else {
     match = [];
   }
@@ -122,9 +120,6 @@ export function resolveConfig(
   // --- logger ---
   const logger: Logger = opts?.logger ?? consoleLogger;
 
-  // --- telemetry ---
-  const telemetry = opts?.telemetry ?? false;
-
   // --- price ---
   // --- onDecision ---
   // Omit optional keys entirely when undefined so exactOptionalPropertyTypes
@@ -137,7 +132,6 @@ export function resolveConfig(
     failMode,
     timeoutMs,
     logger,
-    telemetry,
   };
   return {
     ...base,

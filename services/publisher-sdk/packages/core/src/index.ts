@@ -13,7 +13,7 @@ export type { VerivyxOptions, ResolvedConfig } from "./config.js";
 
 // Decision model (GateDecision and GateReason exported from here)
 export { makeDecision, applyFailMode } from "./decision.js";
-export type { GateDecision, GateReason, PreviewBuilders } from "./decision.js";
+export type { GateDecision, GateReason, PreviewBuilders, Prebuilt402 } from "./decision.js";
 
 // Error taxonomy
 export { PaywallError, SettlementFailedError, HydrationFailedError, BackendUnreachableError } from "./errors.js";
@@ -52,6 +52,7 @@ import type { AuthorizeResult } from "./client.js";
 import { BackendUnreachableError } from "./errors.js";
 import { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
 import { attachPaymentResponse } from "./settle.js";
+import { buildPaymentRequired } from "./x402.js";
 import type { PaymentRequirement } from "./x402.js";
 
 // ---------------------------------------------------------------------------
@@ -77,8 +78,6 @@ export interface ProtectOptions {
    * 200 preview (teaser HTML + anti-cloaking JSON-LD) instead of a 402.
    */
   seoPreview?: (ctx: unknown) => { title: string; excerpt: string };
-  /** Per-route price override (reserved; requirements come from the backend). */
-  price?: string;
 }
 
 /**
@@ -213,10 +212,43 @@ interface EngineInput {
   classifyFn?: (req: Request) => Promise<Classification>;
 }
 
-/** Pull payment requirements out of an authorize 402 body, if present. */
-function requirementsFrom402(required: object): PaymentRequirement[] {
-  const accepts = (required as { accepts?: unknown }).accepts;
+/** Pull the `accepts[]` requirements out of any x402 envelope body. */
+function extractAccepts(body: object): PaymentRequirement[] {
+  const accepts = (body as { accepts?: unknown }).accepts;
   return Array.isArray(accepts) ? (accepts as PaymentRequirement[]) : [];
+}
+
+/**
+ * Best-effort MIME type for the protected resource's 402 envelope.
+ *
+ * The SDK does not see the eventual handler's `Content-Type`, so it picks a
+ * pragmatic default of `text/html` (these gates front article/HTML pages),
+ * unless the caller's `Accept` header clearly prefers JSON, in which case
+ * `application/json` is reported. This only populates the descriptive
+ * `resource.mimeType` field — it never changes the gate outcome.
+ */
+function resolveResourceMime(req: Request): string {
+  const accept = (req.headers.get("accept") ?? "").toLowerCase();
+  if (accept.includes("application/json") && !accept.includes("text/html")) {
+    return "application/json";
+  }
+  return "text/html";
+}
+
+/**
+ * Build the canonical x402 v2 402 payload (`{ body, header }`) for a request,
+ * via `buildPaymentRequired` — the single 402 encoder. `error` defaults to
+ * `"payment_required"` and `resource` is `{ url: req.url, mimeType }`.
+ */
+function buildCanonical402(
+  req: Request,
+  requirements: PaymentRequirement[],
+): { body: object; header: string } {
+  return buildPaymentRequired(
+    requirements,
+    { url: req.url, mimeType: resolveResourceMime(req) },
+    "payment_required",
+  );
 }
 
 /** Build the preview-builders object for the decision/error paths. */
@@ -257,9 +289,10 @@ async function evaluate(
   const { cfg, client } = engine;
 
   // Classify the caller.
-  const classification: Classification = engine.classifyFn
-    ? await engine.classifyFn(req)
-    : (await classify(req, cfg, engine.classifyDeps)).classification;
+  const { classification, signals }: { classification: Classification; signals?: string[] } =
+    engine.classifyFn
+      ? { classification: await engine.classifyFn(req) }
+      : await classify(req, cfg, engine.classifyDeps);
 
   try {
     switch (classification) {
@@ -273,25 +306,23 @@ async function evaluate(
           ...(paymentHeader !== undefined ? { paymentHeader } : {}),
         });
         if ("status" in result && result.status === 402) {
-          return makeDecision(
-            { reason: "bot-unpaid", paymentRequirements: requirementsFrom402(result.required) },
-            cfg,
-          );
+          // Authorize returned a backend 402 — re-encode its requirements into
+          // the canonical envelope so the caller always sees one 402 shape.
+          return bot402(engine, req, slug, signals, extractAccepts(result.required));
         }
         if ("authorized" in result && result.authorized) {
-          const d = makeDecision({ reason: "paid" }, cfg);
+          const d = makeDecision({ reason: "paid", ...(signals ? { signals } : {}) }, cfg);
           if (result.transaction !== undefined) {
             d.transaction = result.transaction;
           }
           // Stash the settlement receipt so the wrapped handler can attach it.
           if (result.paymentResponse !== undefined) {
-            (d as GateDecision & { paymentResponse?: string }).paymentResponse =
-              result.paymentResponse;
+            d.paymentResponse = result.paymentResponse;
           }
           return d;
         }
         // authorized=false → not paid → 402 with requirements (fetch them).
-        return await bot402(engine, slug);
+        return await bot402(engine, req, slug, signals);
       }
 
       case "verified": {
@@ -304,25 +335,25 @@ async function evaluate(
           ...(bearer !== undefined ? { bearer } : {}),
         });
         if ("authorized" in result && result.authorized) {
-          const d = makeDecision({ reason: "verified" }, cfg);
+          const d = makeDecision({ reason: "verified", ...(signals ? { signals } : {}) }, cfg);
           if (result.transaction !== undefined) {
             d.transaction = result.transaction;
           }
           return d;
         }
         // Session not authorized → treat as unverified human (preview/402).
-        return await human(engine, slug, previewBuilders);
+        return await human(engine, req, slug, classification, signals, previewBuilders);
       }
 
       case "signed-agent":
       case "ai-bot":
-        return await bot402(engine, slug);
+        return await bot402(engine, req, slug, signals);
 
       case "crawler":
       case "human":
       case "unknown":
       default:
-        return await human(engine, slug, previewBuilders);
+        return await human(engine, req, slug, classification, signals, previewBuilders);
     }
   } catch (err) {
     if (err instanceof BackendUnreachableError) {
@@ -332,31 +363,67 @@ async function evaluate(
   }
 }
 
-/** Build a bot-unpaid 402 decision, sourcing requirements from the backend. */
+/**
+ * Build a bot-unpaid 402 decision carrying a prebuilt canonical x402 envelope.
+ * Requirements come from `accepts` when supplied (e.g. an authorize-402 body);
+ * otherwise they are sourced from the backend `requirements()` endpoint.
+ */
 async function bot402(
   engine: EngineInput,
+  req: Request,
   slug: string,
+  signals?: string[],
+  accepts?: PaymentRequirement[],
 ): Promise<GateDecision> {
-  const { body } = await engine.client.requirements(slug);
-  const accepts = (body as { accepts?: unknown }).accepts;
-  const requirements = Array.isArray(accepts)
-    ? (accepts as PaymentRequirement[])
-    : [];
-  return makeDecision({ reason: "bot-unpaid", paymentRequirements: requirements }, engine.cfg);
+  const requirements =
+    accepts ?? extractAccepts((await engine.client.requirements(slug)).body);
+  const prebuilt402 = buildCanonical402(req, requirements);
+  return makeDecision(
+    {
+      reason: "bot-unpaid",
+      paymentRequirements: requirements,
+      prebuilt402,
+      ...(signals ? { signals } : {}),
+    },
+    engine.cfg,
+  );
 }
 
-/** Build a crawler/human decision: preview when available, else 402. */
+/**
+ * Build a crawler/human-unverified decision: preview when available, else 402.
+ * The `reason` reflects the actual classification — `crawler` only for verified
+ * search crawlers; `human-unverified` for humans / unknown / the unauthorized
+ * verified fallthrough.
+ */
 async function human(
   engine: EngineInput,
+  req: Request,
   slug: string,
+  classification: Classification,
+  signals: string[] | undefined,
   previewBuilders: { buildPreview?: () => string | Promise<string> },
 ): Promise<GateDecision> {
+  const reason = classification === "crawler" ? "crawler" : "human-unverified";
   if (previewBuilders.buildPreview) {
     const previewHtml = await previewBuilders.buildPreview();
-    return makeDecision({ reason: "crawler", previewHtml }, engine.cfg);
+    return makeDecision(
+      { reason, previewHtml, ...(signals ? { signals } : {}) },
+      engine.cfg,
+    );
   }
-  // No preview → 402 (never leak content); source requirements from backend.
-  return await bot402(engine, slug);
+  // No preview → 402 (never leak content). Keep the human/crawler `reason`
+  // (so onDecision can distinguish them) but emit the canonical 402 envelope by
+  // sourcing requirements from the backend and prebuilding the payload.
+  const requirements = extractAccepts((await engine.client.requirements(slug)).body);
+  return makeDecision(
+    {
+      reason,
+      paymentRequirements: requirements,
+      prebuilt402: buildCanonical402(req, requirements),
+      ...(signals ? { signals } : {}),
+    },
+    engine.cfg,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +460,9 @@ export function makeVerivyx(engine: EngineInput): Verivyx {
       const previewBuilders = buildPreviewBuilders(req, slug, opts);
       const decision = await evaluate(engine, req, slug, previewBuilders);
 
+      engine.cfg.logger.debug(
+        `verivyx: decision reason="${decision.reason}" allowed=${decision.allowed}`,
+      );
       if (engine.cfg.onDecision) {
         engine.cfg.onDecision(decision);
       }
@@ -403,10 +473,7 @@ export function makeVerivyx(engine: EngineInput): Verivyx {
 
       // Allowed (paid / verified) → run the handler, attach settlement receipt.
       const res = await handler(req, ctx);
-      const paymentResponse = (
-        decision as GateDecision & { paymentResponse?: string }
-      ).paymentResponse;
-      return attachPaymentResponse(res, paymentResponse);
+      return attachPaymentResponse(res, decision.paymentResponse);
     };
   }
 

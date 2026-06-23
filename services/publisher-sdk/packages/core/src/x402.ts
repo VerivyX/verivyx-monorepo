@@ -99,8 +99,9 @@ export function toBase64Utf8(s: string): string {
  * Wrap a pre-built `PaymentRequirement[]` in the x402 v2 response envelope.
  *
  * The returned `body` object is the full JSON body for a 402 response.
- * The returned `header` is `toBase64Utf8(JSON.stringify(body))`, matching the
- * `PAYMENT-REQUIRED` header convention used in `decision.ts`'s `build402`.
+ * The returned `header` is `toBase64Utf8(JSON.stringify(body))` and is emitted
+ * verbatim as the `PAYMENT-REQUIRED` header by `decision.ts`'s `build402`
+ * (this is the single 402 encoder in the SDK).
  *
  * @param reqs     - Requirements sourced from the backend/gateway; passed
  *                   through verbatim — amounts and addresses are NEVER

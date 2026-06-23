@@ -57,7 +57,7 @@ export interface ClassifyDeps {
 
 export interface ClassifyResult {
   classification: Classification;
-  /** Short tags explaining the decision — for telemetry / onDecision hook. */
+  /** Short tags explaining the decision — forwarded to the onDecision hook. */
   signals: string[];
 }
 
@@ -146,8 +146,8 @@ function extractIp(req: Request): string {
 }
 
 /**
- * Check whether the given User-Agent string matches any entry in a needle
- * list. Returns the matching needle/tag or null if no match.
+ * Check whether the lowercased User-Agent string contains the given needle.
+ * Returns `true` on a substring match, `false` otherwise.
  */
 function matchUA(ua: string, needle: string): boolean {
   return ua.includes(needle);

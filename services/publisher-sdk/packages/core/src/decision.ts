@@ -15,7 +15,18 @@
 
 import type { ResolvedConfig } from "./config.js";
 import type { PaymentRequirement, PowChallenge } from "./types.js";
-import { toBase64Utf8 } from "./x402.js";
+import { buildPaymentRequired } from "./x402.js";
+
+/**
+ * A pre-built x402 v2 402 payload — the canonical `{ body, header }` produced
+ * by `buildPaymentRequired`. The orchestrator (index.ts) builds this once (so
+ * `resource` / `error` reflect the actual request) and hands it to the decision
+ * verbatim; `response()` emits it without re-encoding.
+ */
+export interface Prebuilt402 {
+  body: object;
+  header: string;
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -62,6 +73,13 @@ export interface GateDecision {
   /** On-chain transaction hash for paid callers. */
   transaction?: string;
   /**
+   * Settlement receipt (base64 `PAYMENT-RESPONSE`) for paid callers — attached
+   * to the handler's response by the wrapped-handler path after settlement.
+   */
+  paymentResponse?: string;
+  /** Classifier signal tags that produced this decision (diagnostics). */
+  signals?: string[];
+  /**
    * Build a framework-agnostic `Response` suitable for returning directly
    * from a Fetch-API handler (Next.js Edge, Hono, Express, Cloudflare Workers).
    */
@@ -79,30 +97,48 @@ interface DecisionInput {
   transaction?: string;
   /** Pre-built preview HTML — supplied by callers that already ran Task 10. */
   previewHtml?: string;
+  /**
+   * Pre-built canonical x402 v2 402 payload. When present it is emitted
+   * verbatim for the bot-unpaid / fallback-402 paths instead of re-encoding.
+   * Built by the orchestrator via `buildPaymentRequired` so `resource`/`error`
+   * reflect the real request.
+   */
+  prebuilt402?: Prebuilt402;
+  /** Classifier signal tags — forwarded onto the decision for onDecision. */
+  signals?: string[];
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
+/** Fallback resource used when the caller did not supply a prebuilt 402. */
+const FALLBACK_RESOURCE: { url: string; mimeType: string } = {
+  url: "",
+  mimeType: "text/html",
+};
+
 /**
- * Build a 402 Payment Required response per x402 v2 wire format.
+ * Build a 402 Payment Required `Response` from a prebuilt canonical payload, or
+ * (fallback) by encoding `requirements` through `buildPaymentRequired`.
  *
- * Body:  { x402Version: 2, accepts: PaymentRequirement[] }
- * Header: PAYMENT-REQUIRED — base64 of the same JSON.
- *
- * NOTE: Task 11 introduces the canonical `buildPaymentRequired` wire builder.
- * Task 13 may refactor `response()` to delegate to it.  This helper is kept
- * small and self-contained so that refactor is a one-liner swap.
+ * The canonical x402 v2 body is `{ x402Version: 2, error, resource, accepts }`
+ * and the `PAYMENT-REQUIRED` header is the base64 of that exact JSON. This is
+ * now the SINGLE 402 encoder in the SDK — both the orchestrator's bot-unpaid
+ * path (which supplies a `prebuilt402`) and internal fallbacks route through it.
  */
-function build402(requirements: PaymentRequirement[]): Response {
-  const body = JSON.stringify({ x402Version: 2, accepts: requirements });
-  const encoded = toBase64Utf8(body);
-  return new Response(body, {
+function build402(
+  prebuilt: Prebuilt402 | undefined,
+  requirements: PaymentRequirement[],
+): Response {
+  const { body, header } =
+    prebuilt ??
+    buildPaymentRequired(requirements, FALLBACK_RESOURCE, "payment_required");
+  return new Response(JSON.stringify(body), {
     status: 402,
     headers: {
       "Content-Type": "application/json",
-      "PAYMENT-REQUIRED": encoded,
+      "PAYMENT-REQUIRED": header,
     },
   });
 }
@@ -151,7 +187,7 @@ function buildResponseFn(
         return build200Empty();
 
       case "bot-unpaid":
-        return build402(input.paymentRequirements ?? []);
+        return build402(input.prebuilt402, input.paymentRequirements ?? []);
 
       case "crawler":
       case "human-unverified":
@@ -160,7 +196,7 @@ function buildResponseFn(
         if (input.previewHtml !== undefined) {
           return build200Preview(input.previewHtml);
         }
-        return build402(input.paymentRequirements ?? []);
+        return build402(input.prebuilt402, input.paymentRequirements ?? []);
 
       case "error":
         return buildErrorResponse(cfg, input.previewHtml);
@@ -189,7 +225,7 @@ function buildErrorResponse(
         return build200Preview(previewHtml);
       }
       // No preview builder available — never leak; serve 402 instead.
-      return build402([]);
+      return build402(undefined, []);
   }
 }
 
@@ -227,6 +263,9 @@ export function makeDecision(
   if (input.transaction !== undefined) {
     decision.transaction = input.transaction;
   }
+  if (input.signals !== undefined) {
+    decision.signals = input.signals;
+  }
 
   return decision;
 }
@@ -252,6 +291,12 @@ export async function applyFailMode(
   builders: PreviewBuilders,
 ): Promise<GateDecision> {
   const allowed = cfg.failMode === "open";
+
+  // Backend unreachable — surface via the configured logger. Never log secrets
+  // (no token, no raw headers): only the failMode being applied.
+  cfg.logger.warn(
+    `verivyx: backend unreachable, applying failMode="${cfg.failMode}"`,
+  );
 
   if (cfg.failMode !== "teaser" || !builders.buildPreview) {
     return {
