@@ -118,10 +118,14 @@ export class VerivyxClient {
     }
 
     if (response.status === 200) {
-      const body = (await response.json()) as {
-        authorized?: boolean;
-        transaction?: string;
-      };
+      let body: { authorized?: boolean; transaction?: string };
+      try {
+        body = (await response.json()) as { authorized?: boolean; transaction?: string };
+      } catch {
+        throw new BackendUnreachableError(
+          `Verivyx backend returned non-JSON body on 200 (POST hydrate: ${url})`,
+        );
+      }
       const paymentResponse =
         response.headers.get("PAYMENT-RESPONSE") ?? undefined;
       const result: { authorized: boolean; transaction?: string; paymentResponse?: string } = {
@@ -137,7 +141,14 @@ export class VerivyxClient {
     }
 
     if (response.status === 402) {
-      const required = (await response.json()) as object;
+      let required: object;
+      try {
+        required = (await response.json()) as object;
+      } catch {
+        throw new BackendUnreachableError(
+          `Verivyx backend returned non-JSON body on 402 (POST hydrate: ${url})`,
+        );
+      }
       return { status: 402, required };
     }
 
@@ -162,23 +173,35 @@ export class VerivyxClient {
       `${this.cfg.apiBase}/api/v1/payment/requirements` +
       `?domain=${encodeURIComponent(this.cfg.domain)}&slug=${encodeURIComponent(slug)}`;
 
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), this.cfg.timeoutMs);
+
     let response: Response;
     try {
-      response = await this._fetch(url, { method: "GET" });
+      response = await this._fetch(url, { method: "GET", signal: ac.signal });
     } catch (err) {
       throw new BackendUnreachableError(
         `Verivyx backend unreachable (GET requirements): ${String(err)}`,
       );
+    } finally {
+      clearTimeout(timer);
     }
 
     // Accept both 200 and 402 — gateway may return either with the envelope
     if (response.status === 200 || response.status === 402) {
-      const json = (await response.json()) as {
+      let json: {
         x402Version?: number;
         accepts?: PaymentRequirement[];
         error?: string;
         resource?: { url: string; mimeType?: string };
       };
+      try {
+        json = (await response.json()) as typeof json;
+      } catch {
+        throw new BackendUnreachableError(
+          `Verivyx backend returned non-JSON body on ${response.status} (GET requirements: ${url})`,
+        );
+      }
 
       const accepts: PaymentRequirement[] = Array.isArray(json.accepts)
         ? (json.accepts as PaymentRequirement[])

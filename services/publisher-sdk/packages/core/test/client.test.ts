@@ -84,13 +84,8 @@ describe("VerivyxClient.authorize — 200 success", () => {
     const client = new VerivyxClient(cfg, { fetch: mockFetch });
     const result = await client.authorize({ slug: "slug" });
 
-    // When the header is absent, paymentResponse should not be set
-    if ("paymentResponse" in result) {
-      expect((result as { paymentResponse?: string }).paymentResponse).toBeUndefined();
-    } else {
-      // Key absent is also acceptable — either way, no paymentResponse value
-      expect(true).toBe(true);
-    }
+    // The key must be absent — not just undefined — when the header is not present
+    expect("paymentResponse" in result).toBe(false);
   });
 });
 
@@ -260,6 +255,19 @@ describe("VerivyxClient.authorize — header forwarding", () => {
     expect(body.domain).toBe("example.com");
     expect(body.slug).toBe("test-slug");
   });
+
+  it("does NOT forward cfg.token to any outbound header", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      mockResponse(200, { authorized: true }),
+    );
+
+    const client = new VerivyxClient(cfg, { fetch: mockFetch });
+    await client.authorize({ slug: "article" }); // bearer absent — no user token either
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const headerValues = Object.values(init.headers as Record<string, string>).join(" ");
+    expect(headerValues).not.toContain(cfg.token);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -270,6 +278,54 @@ describe("VerivyxClient.authorize — server errors", () => {
   it("throws BackendUnreachableError on 500", async () => {
     const mockFetch = vi.fn().mockResolvedValueOnce(
       mockResponse(500, { error: "internal error" }),
+    );
+
+    const client = new VerivyxClient(cfg, { fetch: mockFetch });
+    await expect(client.authorize({ slug: "article" })).rejects.toThrow(
+      BackendUnreachableError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// authorize — non-JSON body guard (Fix A)
+// ---------------------------------------------------------------------------
+
+describe("VerivyxClient.authorize — non-JSON body", () => {
+  it("throws BackendUnreachableError when 200 body is not JSON (WAF intercept)", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response("<html>Access Denied</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+
+    const client = new VerivyxClient(cfg, { fetch: mockFetch });
+    await expect(client.authorize({ slug: "article" })).rejects.toThrow(
+      BackendUnreachableError,
+    );
+  });
+
+  it("throws BackendUnreachableError when 402 body is not JSON", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response("Payment Required", {
+        status: 402,
+        headers: { "Content-Type": "text/plain" },
+      }),
+    );
+
+    const client = new VerivyxClient(cfg, { fetch: mockFetch });
+    await expect(client.authorize({ slug: "article" })).rejects.toThrow(
+      BackendUnreachableError,
+    );
+  });
+
+  it("throws BackendUnreachableError when 402 body is empty", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response("", {
+        status: 402,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
 
     const client = new VerivyxClient(cfg, { fetch: mockFetch });
@@ -360,6 +416,36 @@ describe("VerivyxClient.requirements", () => {
     const mockFetch = vi.fn().mockRejectedValueOnce(new Error("Network down"));
 
     const client = new VerivyxClient(cfg, { fetch: mockFetch });
+    await expect(client.requirements("article")).rejects.toThrow(
+      BackendUnreachableError,
+    );
+  });
+
+  it("throws BackendUnreachableError when requirements() times out (abort)", async () => {
+    const mockFetch = vi.fn().mockImplementation(
+      (_url: string, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal) {
+            if (signal.aborted) {
+              reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+            } else {
+              signal.addEventListener("abort", () => {
+                reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+              });
+            }
+          }
+          // Never resolves on its own — waits for abort
+        });
+      },
+    );
+
+    const shortCfg = resolveConfig(
+      { domain: "example.com", token: "tok", timeoutMs: 10 },
+      {},
+    );
+    const client = new VerivyxClient(shortCfg, { fetch: mockFetch });
+
     await expect(client.requirements("article")).rejects.toThrow(
       BackendUnreachableError,
     );
