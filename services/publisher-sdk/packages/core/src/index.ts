@@ -13,3 +13,7 @@ export type { GateDecision, GateReason, PreviewBuilders } from "./decision.js";
 
 // Error taxonomy
 export { PaywallError, SettlementFailedError, HydrationFailedError, BackendUnreachableError } from "./errors.js";
+
+// Visitor classifier
+export { classify } from "./detect.js";
+export type { Classification, ClassifyDeps, ClassifyResult } from "./detect.js";
