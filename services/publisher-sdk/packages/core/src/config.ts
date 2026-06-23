@@ -126,21 +126,22 @@ export function resolveConfig(
   const telemetry = opts?.telemetry ?? false;
 
   // --- price ---
-  const price: Price | undefined = opts?.price;
-
   // --- onDecision ---
-  const onDecision = opts?.onDecision;
-
-  return {
+  // Omit optional keys entirely when undefined so exactOptionalPropertyTypes
+  // is satisfied (ResolvedConfig uses `price?:` not `price?: X | undefined`).
+  const base = {
     domain,
     token,
     apiBase,
     match,
     failMode,
-    price,
     timeoutMs,
     logger,
     telemetry,
-    onDecision,
+  };
+  return {
+    ...base,
+    ...(opts?.price !== undefined ? { price: opts.price } : {}),
+    ...(opts?.onDecision !== undefined ? { onDecision: opts.onDecision } : {}),
   };
 }

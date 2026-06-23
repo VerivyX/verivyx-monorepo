@@ -48,6 +48,8 @@ interface VectorParams {
   tamperSig?: boolean;
   /** Sign a base that differs from what the verifier will reconstruct. */
   signWrongTargetUri?: string;
+  /** Use a different request URL (default TARGET_URL). */
+  url?: string;
 }
 
 interface Vector {
@@ -85,6 +87,7 @@ async function makeVector(p: VectorParams = {}): Promise<Vector> {
   const created = p.created ?? now - 60;
   const expires = p.expires ?? now + 600;
   const components = p.components ?? ["@authority", "@target-uri", "signature-agent"];
+  const requestUrl = p.url ?? TARGET_URL;
 
   const kp = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
     "sign",
@@ -101,8 +104,10 @@ async function makeVector(p: VectorParams = {}): Promise<Vector> {
     paramStr += `;tag="${p.tag ?? "web-bot-auth"}"`;
   }
 
+  // Signer must use the normalized URL (what the verifier will see via new URL(req.url))
+  const normalizedUrl = new URL(requestUrl).href;
   const base = buildSignatureBase(
-    p.signWrongTargetUri ?? TARGET_URL,
+    p.signWrongTargetUri ?? normalizedUrl,
     SIGNATURE_AGENT,
     components,
     paramStr,
@@ -121,7 +126,7 @@ async function makeVector(p: VectorParams = {}): Promise<Vector> {
     .join(" ")})${paramStr}`;
   const sigHeader = `${LABEL}=:${b64url(sig)}:`;
 
-  const req = new Request(TARGET_URL, {
+  const req = new Request(requestUrl, {
     headers: {
       "signature-agent": `"${SIGNATURE_AGENT}"`,
       "signature-input": sigInputHeader,
@@ -136,7 +141,86 @@ function directoryFrom(jwk: JsonWebKey) {
   return async () => [jwk];
 }
 
+// ---------------------------------------------------------------------------
+// RFC 9421 conformance fixture — hardcoded base literal
+//
+// Fixed keypair (Ed25519, OKP):
+//   public x : wZU-m5GGgJDb7Dc7TgX6VjlfFnpoxbXNZJkPF3KFxkM
+//   private d: ByAVk7ieB_lGotPvDDfJ_QicNwDBtokqxJBEnK99fow
+//   keyid    : 6IXd2r-9d4Xve6TN7Qq6isShaY1zh4berqSW_w1pbVk
+//
+// This literal was derived by reading webbotauth.ts §buildSignatureBase and
+// applying it manually to the chosen fixture inputs:
+//   method/url : GET https://example.com/articles/secret
+//   components : ["@authority", "@target-uri"]
+//   created    : 1700000000   expires: 1700086400
+//
+// The test signs ONLY this literal and passes it to verifyWebBotAuth.
+// If the verifier's base-reconstruction diverges (different order, missing
+// newline, wrong derived-component value) the Ed25519 check will fail → test
+// fails.  A shared base-construction bug would NOT pass here.
+// ---------------------------------------------------------------------------
+const FIXED_PRIVATE_D = "ByAVk7ieB_lGotPvDDfJ_QicNwDBtokqxJBEnK99fow";
+const FIXED_PUBLIC_X  = "wZU-m5GGgJDb7Dc7TgX6VjlfFnpoxbXNZJkPF3KFxkM";
+const FIXED_KEYID     = "6IXd2r-9d4Xve6TN7Qq6isShaY1zh4berqSW_w1pbVk";
+const FIXED_CREATED   = 1700000000;
+const FIXED_EXPIRES   = 1700086400;
+
+/**
+ * RFC 9421 §2.5 signature base, hardcoded from fixture inputs.
+ * Line order: @authority, @target-uri, @signature-params (no trailing newline).
+ */
+const FIXED_RFC9421_BASE =
+  `"@authority": example.com\n` +
+  `"@target-uri": https://example.com/articles/secret\n` +
+  `"@signature-params": ("@authority" "@target-uri");created=${FIXED_CREATED};keyid="${FIXED_KEYID}";tag="web-bot-auth";expires=${FIXED_EXPIRES}`;
+
+async function makeFixedConformanceRequest(): Promise<{ req: Request; publicJwk: JsonWebKey }> {
+  const publicJwk: JsonWebKey = { kty: "OKP", crv: "Ed25519", x: FIXED_PUBLIC_X };
+  const privateJwk: JsonWebKey = { kty: "OKP", crv: "Ed25519", x: FIXED_PUBLIC_X, d: FIXED_PRIVATE_D };
+
+  const privKey = await crypto.subtle.importKey(
+    "jwk",
+    privateJwk,
+    { name: "Ed25519" },
+    false,
+    ["sign"],
+  );
+
+  // Sign ONLY the hardcoded literal — not a runtime-constructed base.
+  const sigBytes = await crypto.subtle.sign(
+    { name: "Ed25519" },
+    privKey,
+    new TextEncoder().encode(FIXED_RFC9421_BASE),
+  );
+
+  const paramSegment = `;created=${FIXED_CREATED};keyid="${FIXED_KEYID}";tag="web-bot-auth";expires=${FIXED_EXPIRES}`;
+  const sigInputHeader = `${LABEL}=("@authority" "@target-uri")${paramSegment}`;
+  const sigHeader = `${LABEL}=:${b64url(sigBytes)}:`;
+
+  const req = new Request(TARGET_URL, {
+    headers: {
+      "signature-input": sigInputHeader,
+      signature: sigHeader,
+    },
+  });
+
+  return { req, publicJwk };
+}
+
 describe("verifyWebBotAuth", () => {
+  it("proves RFC 9421 base conformance via hardcoded literal (not self-consistent)", async () => {
+    // This test signs a hardcoded, manually-derived RFC 9421 signature base.
+    // The verifier must reconstruct the exact same bytes; any divergence in
+    // line order, component value, or newline handling causes an Ed25519 failure.
+    const { req, publicJwk } = await makeFixedConformanceRequest();
+    const ok = await verifyWebBotAuth(req, {
+      fetchDirectory: directoryFrom(publicJwk),
+      now: () => FIXED_CREATED + 60, // midway through the validity window
+    });
+    expect(ok).toBe(true);
+  });
+
   it("returns true for a valid Ed25519 web-bot-auth signature", async () => {
     const v = await makeVector();
     const ok = await verifyWebBotAuth(v.req, {
@@ -296,5 +380,33 @@ describe("verifyWebBotAuth", () => {
     });
     expect(fetched).toBe(true);
     expect(ok).toBe(true);
+  });
+
+  it("normalizes mixed-case host and non-default port in @authority and @target-uri", async () => {
+    // The verifier uses `new URL(req.url)` which normalises the host to
+    // lowercase and retains a non-default port.  The signer must do the same;
+    // this test exercises that path independently of the happy-path fixture.
+    // `new URL('https://Example.COM:8443/path').href` === 'https://example.com:8443/path'
+    // `new URL('https://Example.COM:8443/path').host` === 'example.com:8443'
+    const rawUrl = "https://Example.COM:8443/path";
+    const v = await makeVector({ url: rawUrl, components: ["@authority", "@target-uri"] });
+    const ok = await verifyWebBotAuth(v.req, {
+      fetchDirectory: directoryFrom(v.publicJwk),
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("returns false (no throw) for well-formed Signature-Input with invalid base64 Signature value", async () => {
+    // Exercises the base64-decode→null reject path: parseSignatureHeader returns
+    // null when the byte-sequence value contains non-base64 characters.
+    const req = new Request(TARGET_URL, {
+      headers: {
+        "signature-input": `${LABEL}=("@authority" "@target-uri");created=1700000000;keyid="x";tag="web-bot-auth";expires=1700086400`,
+        signature: `${LABEL}=:!!!notb64!!!:`,
+      },
+    });
+    await expect(
+      verifyWebBotAuth(req, { fetchDirectory: async () => [] }),
+    ).resolves.toBe(false);
   });
 });
