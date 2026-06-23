@@ -17,3 +17,7 @@ export { PaywallError, SettlementFailedError, HydrationFailedError, BackendUnrea
 // Visitor classifier
 export { classify } from "./detect.js";
 export type { Classification, ClassifyDeps, ClassifyResult } from "./detect.js";
+
+// Web Bot Auth verifier (RFC 9421 Ed25519)
+export { verifyWebBotAuth } from "./webbotauth.js";
+export type { VerifyWebBotAuthDeps } from "./webbotauth.js";
