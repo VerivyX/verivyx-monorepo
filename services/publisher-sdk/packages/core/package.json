@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Zero-dependency x402 paywall SDK for publishers",
   "type": "module",
+  "license": "MIT",
   "sideEffects": false,
   "exports": {
     ".": {

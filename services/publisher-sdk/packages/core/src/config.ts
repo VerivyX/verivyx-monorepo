@@ -63,7 +63,7 @@ export function resolveConfig(
   env: Record<string, string | undefined> = {},
 ): ResolvedConfig {
   // --- domain ---
-  const domain = opts?.domain ?? env["VERIVYX_DOMAIN"];
+  const domain = (opts?.domain ?? env["VERIVYX_DOMAIN"] ?? "").trim();
   if (!domain) {
     throw new ConfigError(
       "VERIVYX_DOMAIN is required (set via opts.domain or VERIVYX_DOMAIN env var)",
@@ -71,7 +71,7 @@ export function resolveConfig(
   }
 
   // --- token ---
-  const token = opts?.token ?? env["VERIVYX_TOKEN"];
+  const token = (opts?.token ?? env["VERIVYX_TOKEN"] ?? "").trim();
   if (!token) {
     throw new ConfigError(
       "VERIVYX_TOKEN is required (set via opts.token or VERIVYX_TOKEN env var)",
@@ -107,7 +107,13 @@ export function resolveConfig(
   if (opts?.timeoutMs !== undefined) {
     timeoutMs = opts.timeoutMs;
   } else if (env["VERIVYX_TIMEOUT_MS"] !== undefined) {
-    timeoutMs = parseInt(env["VERIVYX_TIMEOUT_MS"], 10);
+    const parsed = parseInt(env["VERIVYX_TIMEOUT_MS"], 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new ConfigError(
+        `VERIVYX_TIMEOUT_MS must be a positive integer, got "${env["VERIVYX_TIMEOUT_MS"]}"`,
+      );
+    }
+    timeoutMs = parsed;
   } else {
     timeoutMs = 800;
   }

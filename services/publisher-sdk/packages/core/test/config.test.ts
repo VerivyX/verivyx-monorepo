@@ -19,4 +19,27 @@ describe("resolveConfig", () => {
     expect(c.domain).toBe("b.com");
     expect(c.match).toEqual(["/a/*", "/b/*"]);
   });
+
+  it("throws ConfigError when VERIVYX_TIMEOUT_MS is non-numeric", () => {
+    expect(() =>
+      resolveConfig(
+        { domain: "a.com", token: "t" },
+        { VERIVYX_TIMEOUT_MS: "abc" },
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it("accepts a numeric VERIVYX_TIMEOUT_MS from env", () => {
+    const c = resolveConfig(
+      { domain: "a.com", token: "t" },
+      { VERIVYX_TIMEOUT_MS: "1500" },
+    );
+    expect(c.timeoutMs).toBe(1500);
+  });
+
+  it("throws ConfigError when token is whitespace-only", () => {
+    expect(() =>
+      resolveConfig({ domain: "a.com", token: "   " }, {}),
+    ).toThrow(ConfigError);
+  });
 });
