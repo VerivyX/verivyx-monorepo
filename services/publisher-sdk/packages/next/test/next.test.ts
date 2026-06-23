@@ -58,20 +58,79 @@ describe("verivyxNext", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("proxy() returns undefined for non-ai-bot requests", async () => {
-    const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock({ classification: "human" }) } as never);
-    const proxyFn = vx.proxy();
-    const result = await proxyFn(new Request("https://ex.com/articles/x"));
-    expect(result).toBeUndefined();
+  /**
+   * proxy() tests use the REAL classifier (no mock injection — proxy() ignores
+   * _core entirely). proxy() is a coarse, network-free pre-filter; the route
+   * handler is the authoritative gate.
+   */
+  describe("proxy()", () => {
+    it("returns 402 for a clear AI-bot UA with no payment header", async () => {
+      // GPTBot matches the "gptbot" needle in the real classifier → ai-bot → 402.
+      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+      const proxyFn = vx.proxy();
+      const result = await proxyFn(
+        new Request("https://ex.com/articles/x", {
+          headers: { "user-agent": "GPTBot/1.0" },
+        }),
+      );
+      expect(result).toBeInstanceOf(Response);
+      expect(result?.status).toBe(402);
+    });
+
+    it("returns undefined (pass-through) for a normal browser UA", async () => {
+      // A Chrome UA has no matching needle → human → proxy lets it through.
+      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+      const proxyFn = vx.proxy();
+      const result = await proxyFn(
+        new Request("https://ex.com/articles/x", {
+          headers: {
+            "user-agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          },
+        }),
+      );
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined (pass-through) when a payment header is present", async () => {
+      // Even a GPTBot UA is passed through when PAYMENT-SIGNATURE is present;
+      // the route handler handles authorization.
+      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+      const proxyFn = vx.proxy();
+      const result = await proxyFn(
+        new Request("https://ex.com/articles/x", {
+          headers: {
+            "user-agent": "GPTBot/1.0",
+            "payment-signature": "sig123",
+          },
+        }),
+      );
+      expect(result).toBeUndefined();
+    });
   });
 
-  it("proxy() returns 402 for clear ai-bot with no payment header", async () => {
-    const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock({ classification: "ai-bot" }) } as never);
-    const proxyFn = vx.proxy();
-    const result = await proxyFn(
-      new Request("https://ex.com/articles/x", { headers: { "user-agent": "GPTBot" } }),
+  it("seoPreview: crawler request receives 200 HTML with JSON-LD, handler not called", async () => {
+    // Force classification to "crawler" via the mock so we don't need real DNS.
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    } as never);
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Googlebot/2.1" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
     );
-    expect(result).toBeInstanceOf(Response);
-    expect(result?.status).toBe(402);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    // Anti-cloaking JSON-LD marker must be present in the preview HTML.
+    expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

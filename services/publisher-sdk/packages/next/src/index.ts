@@ -31,8 +31,10 @@
 
 import {
   verivyx,
+  resolveConfig,
   createSearchCrawlerVerifier,
   classify,
+  verifyWebBotAuth as coreVerifyWebBotAuth,
   buildPreviewHtml,
   buildPaywallJsonLd,
 } from "@verivyx/paywall";
@@ -171,6 +173,7 @@ function buildSeoPreviewResponse(
   seoPreview: (c: { slug: string }) => { title: string; excerpt: string },
 ): Response {
   const { title, excerpt } = seoPreview({ slug });
+  // Mirrors core's preview construction (packages/core/src/index.ts buildPreviewBuilders) — keep in sync.
   const jsonLd = buildPaywallJsonLd({ title, description: excerpt, url });
   const html = buildPreviewHtml({ title, excerpt, url, jsonLd });
   return new Response(html, {
@@ -219,6 +222,17 @@ export function verivyxNext(opts?: NextAdapterOptions): {
     });
 
   const trustProxy = opts?.trustProxy !== false; // default true
+
+  // Build a real resolved config once for use by proxy()'s classify call.
+  // resolveConfig throws ConfigError when domain/token are absent — same
+  // behaviour as verivyx() itself, so verivyxNext always requires them.
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const env: Record<string, string | undefined> = proc?.env ?? {};
+  const cfg = resolveConfig(opts, env);
+
+  // The verifyWebBotAuth dep used by proxy() mirrors what the core uses:
+  // caller override if supplied, otherwise the bundled RFC 9421 verifier.
+  const proxyVerifyWebBotAuth = opts?.verifyWebBotAuth ?? coreVerifyWebBotAuth;
 
   return {
     protect(handler, o) {
@@ -283,10 +297,10 @@ export function verivyxNext(opts?: NextAdapterOptions): {
       /**
        * Coarse pre-filter for `proxy.ts` — defense-in-depth ONLY.
        *
-       * This is NOT the body gate. The route handler (via `protect()`) is the
-       * authoritative gate and must be present. This function is an optional
-       * short-circuit at the proxy layer to shed obviously-unpaid bot traffic
-       * early, before it reaches the route handler.
+       * proxy() uses the real core classify() function directly (no mock).
+       * It is a coarse, network-free pre-filter: shed obviously-unpaid bot
+       * traffic early before it reaches the route handler. The route handler
+       * (via protect()) remains the authoritative gate.
        *
        * Returns a 402 Response only when the request looks like a clear
        * unpaid bot (ai-bot / signed-agent UA with no payment header).
@@ -304,12 +318,13 @@ export function verivyxNext(opts?: NextAdapterOptions): {
           return undefined;
         }
 
-        // Use the core's exported classify to detect obvious unpaid bots.
-        // We pass minimal deps (no crawler DNS verification at this layer).
+        // Use the core's exported classify with a real resolved config.
+        // No crawler DNS verification at this layer (proxy does NOT need it —
+        // crawler → preview is the route handler's job, not the proxy's).
         let classification: string;
         try {
-          const result = await classify(req, undefined as never, {
-            verifyWebBotAuth: async () => false,
+          const result = await classify(req, cfg, {
+            verifyWebBotAuth: proxyVerifyWebBotAuth,
           });
           classification = result.classification;
         } catch {
