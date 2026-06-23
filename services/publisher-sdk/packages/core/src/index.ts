@@ -28,3 +28,7 @@ export type { VerifyWebBotAuthDeps } from "./webbotauth.js";
 
 // SEO preview + anti-cloaking JSON-LD builders
 export { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
+
+// Verivyx backend client (authorize / requirements)
+export { VerivyxClient } from "./client.js";
+export type { AuthorizeInput, AuthorizeResult, RequirementsResult, ClientDeps } from "./client.js";
