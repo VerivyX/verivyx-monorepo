@@ -12,13 +12,26 @@ export interface Logger {
 }
 
 /**
- * Minimal placeholder for the gate decision type.
- * Expanded in Task 7 (decision.ts) with full reason codes and metadata.
+ * Minimal placeholder for the x402 payment requirement shape.
+ * Expanded in Task 11 (x402 emitter) with full wire-format fields.
  */
-export interface GateDecision {
-  // expanded in Task 7
-  allowed: boolean;
-  reason: string;
+export interface PaymentRequirement {
+  // expanded in Task 11
+  scheme: string;
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+}
+
+/**
+ * Minimal placeholder for the proof-of-work challenge shape.
+ * Expanded in a later task when the PoW challenge/verify path is implemented.
+ */
+export interface PowChallenge {
+  // expanded in later task
+  difficulty: number;
+  nonce: string;
 }
 
 /** Price specification — either a shorthand string or a structured object. */

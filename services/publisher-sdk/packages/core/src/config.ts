@@ -1,4 +1,5 @@
-import type { Logger, GateDecision, Price } from "./types.js";
+import type { Logger, Price } from "./types.js";
+import type { GateDecision } from "./decision.js";
 
 /** Options accepted by the SDK — all fields optional (resolved to defaults). */
 export interface VerivyxOptions {
