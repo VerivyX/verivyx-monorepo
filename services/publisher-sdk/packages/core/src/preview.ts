@@ -65,8 +65,10 @@ function hardenJsonLdForScript(json: string): string {
  *   isAccessibleForFree false
  *   hasPart            WebPageElement { isAccessibleForFree: false, cssSelector: ".vx-paywalled" }
  *
- * Returns a compact JSON string (no pretty-print) suitable for embedding in
- * a <script type="application/ld+json"> tag (after `hardenJsonLdForScript`).
+ * Returns a compact JSON string (no pretty-print) that is already hardened
+ * for embedding directly in a <script type="application/ld+json"> tag —
+ * all `<` characters are Unicode-escaped to `<` so no `</script>`
+ * sequence can appear verbatim in the output.
  */
 export function buildPaywallJsonLd(p: {
   title: string;
@@ -86,7 +88,7 @@ export function buildPaywallJsonLd(p: {
       cssSelector: ".vx-paywalled",
     },
   };
-  return JSON.stringify(schema);
+  return hardenJsonLdForScript(JSON.stringify(schema));
 }
 
 /**

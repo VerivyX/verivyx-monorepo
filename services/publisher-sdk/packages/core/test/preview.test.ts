@@ -63,6 +63,33 @@ describe("buildPaywallJsonLd", () => {
     const result = buildPaywallJsonLd(base);
     expect(result).toContain(".vx-paywalled");
   });
+
+  // XSS/breakout hardening — buildPaywallJsonLd must itself produce safe output
+  it("output contains no raw < when title has </script> payload", () => {
+    const result = buildPaywallJsonLd({
+      title: "</script><script>alert(1)</script>",
+      description: "d",
+      url: "https://x/y",
+    });
+    // No raw `<` must remain — all are Unicode-escaped
+    expect(result).not.toMatch(/<(?!\\u003c)/);
+    // The escape sentinel must be present
+    expect(result).toContain("\\u003c");
+    // The hardened output must not contain the literal breakout sequence
+    expect(result).not.toContain("</script>");
+  });
+
+  it("hardened output round-trips back to original value via JSON.parse", () => {
+    const title = "</script><script>alert(1)</script>";
+    const result = buildPaywallJsonLd({
+      title,
+      description: "d",
+      url: "https://x/y",
+    });
+    // Replace \\u003c back with < so JSON.parse sees valid JSON
+    const roundTripped = JSON.parse(result.replace(/\\u003c/g, "<")) as Record<string, unknown>;
+    expect(roundTripped["headline"]).toBe(title);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -152,6 +179,25 @@ describe("buildPreviewHtml", () => {
     });
     expect(html).not.toContain('href="https://example.com/?a=1&b="2""');
     expect(html).toContain("&amp;");
+  });
+
+  // Double-harden idempotency: buildPreviewHtml's hardenJsonLdForScript call is a no-op
+  // when the jsonLd argument already came from buildPaywallJsonLd (which now hardens itself).
+  it("double-hardening via buildPreviewHtml is idempotent — no corruption", () => {
+    const jsonLd = buildPaywallJsonLd({
+      title: "</script><script>alert(1)</script>",
+      description: "d",
+      url: "https://x/y",
+    });
+    // Pass the already-hardened jsonLd through buildPreviewHtml — must not corrupt the output
+    const html = buildPreviewHtml({ title: "T", excerpt: "E", url: "https://x/y", jsonLd });
+    // The ld+json block body must contain no raw </script>
+    const ldStart = html.indexOf('<script type="application/ld+json">') + '<script type="application/ld+json">'.length;
+    const ldEnd = html.indexOf("</script>", ldStart);
+    const ldBody = html.slice(ldStart, ldEnd);
+    expect(ldBody).not.toContain("</script>");
+    // The sentinel must still be present (not double-escaped)
+    expect(ldBody).toContain("\\u003c");
   });
 
   // </script> breakout hardening: jsonLd containing </script> must not close the tag early
