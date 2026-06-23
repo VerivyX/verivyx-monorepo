@@ -133,13 +133,11 @@ function build200Empty(): Response {
 /**
  * Build the `response()` function for a given decision.
  *
- * The response is computed lazily on first call and then memoised.  This
- * avoids running async preview builders multiple times while still keeping
- * the `response()` signature synchronous for the common (non-preview) cases.
- *
- * For teaser/preview paths the builder is called eagerly at decision-creation
- * time (in `applyFailMode`) and the resulting HTML is stored in `previewHtml`,
- * so `response()` remains synchronous.
+ * Each call to `response()` constructs a fresh `Response` object from the
+ * pre-resolved decision fields.  For teaser/preview paths the builder is
+ * awaited once at decision-creation time (in `applyFailMode`) and the
+ * resulting HTML is captured in `previewHtml`, so `response()` remains
+ * fully synchronous.
  */
 function buildResponseFn(
   input: DecisionInput,
@@ -238,21 +236,20 @@ export function makeDecision(
  * Behaviour is governed by `cfg.failMode`:
  *   "closed"  → 503, not allowed
  *   "open"    → 200, allowed (host handler runs)
- *   "teaser"  → 200 preview (if builder provided), else 402; not allowed
+ *   "teaser"  → 200 preview (if builder provided and resolves), else 402; not allowed
  *
- * For "teaser" the preview is built synchronously by calling `builders.buildPreview()`
- * if provided.  Because preview building may be async in Task 10, callers that
- * need async teaser previews should `await` the builder before calling
- * `applyFailMode`, then pass `previewHtml` directly — or Task 13 (`protect()`)
- * will handle this orchestration.
+ * For "teaser" the preview builder is awaited up front so the resulting
+ * `GateDecision.response()` can return a fully-buffered `Response` with no
+ * `ReadableStream` involved.  If the builder rejects, the function falls back
+ * to a 402 — never a silent 200 with an empty body.
  *
  * @param cfg      - Resolved SDK configuration.
  * @param builders - Optional preview builders (Task 10 integration point).
  */
-export function applyFailMode(
+export async function applyFailMode(
   cfg: ResolvedConfig,
   builders: PreviewBuilders,
-): GateDecision {
+): Promise<GateDecision> {
   const allowed = cfg.failMode === "open";
 
   if (cfg.failMode !== "teaser" || !builders.buildPreview) {
@@ -263,55 +260,21 @@ export function applyFailMode(
     };
   }
 
-  // Teaser mode with a builder: call it eagerly to capture result (sync or
-  // async).  Storing the raw result (string or Promise<string>) lets response()
-  // build correctly in both cases.
-  //
-  // Sync builder  → previewResult is a string, response() is fully synchronous.
-  // Async builder → previewResult is a Promise<string>; response() returns a
-  //   Response whose body is a ReadableStream that resolves the promise and
-  //   streams the HTML — callers can still `await res.text()` normally.
-  const previewResult = builders.buildPreview();
+  // Teaser mode with a builder: await it once so response() stays synchronous
+  // and always returns a fully-buffered Response (no ReadableStream).
+  // If the builder rejects, fall back to 402 — never leak content silently.
+  let previewHtml: string | undefined;
+  try {
+    previewHtml = await builders.buildPreview();
+  } catch {
+    // Builder rejected — treat as "no preview available".
+    previewHtml = undefined;
+  }
 
   return {
     allowed: false,
     reason: "error",
-    response: () => buildTeaserResponse(previewResult),
+    response: () => buildErrorResponse(cfg, previewHtml),
   };
 }
 
-/**
- * Build a 200 preview Response that handles both sync and async preview HTML.
- *
- * - string        → synchronous body, no streaming overhead.
- * - Promise<string> → body is a ReadableStream that resolves and enqueues the
- *   HTML before closing.  Callers use `await res.text()` as normal.
- */
-function buildTeaserResponse(previewResult: string | Promise<string>): Response {
-  if (typeof previewResult === "string") {
-    return build200Preview(previewResult);
-  }
-
-  // Async path: wrap the promise in a ReadableStream so Response can be
-  // constructed synchronously while the body resolves on the microtask queue.
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      void previewResult.then(
-        (html) => {
-          controller.enqueue(encoder.encode(html));
-          controller.close();
-        },
-        (_err) => {
-          // If the builder rejects, close without content — never leak.
-          controller.close();
-        },
-      );
-    },
-  });
-
-  return new Response(stream, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
-}

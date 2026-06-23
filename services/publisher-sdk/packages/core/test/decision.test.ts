@@ -106,16 +106,16 @@ describe("makeDecision", () => {
 });
 
 describe("applyFailMode", () => {
-  it('closed -> 503 response, not allowed', () => {
-    const decision = applyFailMode(cfg, {});
+  it('closed -> 503 response, not allowed', async () => {
+    const decision = await applyFailMode(cfg, {});
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe("error");
     const res = decision.response();
     expect(res.status).toBe(503);
   });
 
-  it('open -> allowed decision', () => {
-    const decision = applyFailMode(cfgOpen, {});
+  it('open -> allowed decision', async () => {
+    const decision = await applyFailMode(cfgOpen, {});
     expect(decision.allowed).toBe(true);
     expect(decision.reason).toBe("error");
     // open mode: handler runs, response is 200
@@ -125,7 +125,7 @@ describe("applyFailMode", () => {
 
   it('teaser -> preview response (200) when preview builder provided', async () => {
     const previewHtml = "<p>Preview content</p>";
-    const decision = applyFailMode(cfgTeaser, {
+    const decision = await applyFailMode(cfgTeaser, {
       buildPreview: async () => previewHtml,
     });
     expect(decision.allowed).toBe(false);
@@ -136,12 +136,39 @@ describe("applyFailMode", () => {
     expect(text).toBe(previewHtml);
   });
 
-  it('teaser -> 402 when no preview builder', () => {
-    const decision = applyFailMode(cfgTeaser, {});
+  it('teaser -> 402 when no preview builder', async () => {
+    const decision = await applyFailMode(cfgTeaser, {});
     expect(decision.allowed).toBe(false);
     const res = decision.response();
     // no preview builder, fallback to 402
     expect(res.status).toBe(402);
+  });
+
+  it('teaser -> 402 (non-200) and no protected content when builder rejects', async () => {
+    const decision = await applyFailMode(cfgTeaser, {
+      buildPreview: async () => { throw new Error("builder failed"); },
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe("error");
+    const res = decision.response();
+    // Must NOT be 200 — silent 200-empty is the bug being fixed.
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBe(402);
+    const text = await res.text();
+    // Body must not contain protected or preview content.
+    expect(text).not.toContain("Preview content");
+  });
+
+  it('teaser -> 200 with HTML when builder returns a plain string synchronously', async () => {
+    const previewHtml = "<p>Sync preview</p>";
+    const decision = await applyFailMode(cfgTeaser, {
+      buildPreview: () => previewHtml,
+    });
+    expect(decision.allowed).toBe(false);
+    const res = decision.response();
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toBe(previewHtml);
   });
 });
 
