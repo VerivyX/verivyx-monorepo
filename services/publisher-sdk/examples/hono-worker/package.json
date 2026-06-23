@@ -1,0 +1,18 @@
+{
+  "name": "@verivyx/example-hono-worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@verivyx/paywall-hono": "^0.1.0",
+    "@verivyx/paywall": "^0.1.0"
+  },
+  "devDependencies": {
+    "hono": "^4.0.0",
+    "vitest": "^2.0.0",
+    "typescript": "^5.5.0"
+  }
+}
