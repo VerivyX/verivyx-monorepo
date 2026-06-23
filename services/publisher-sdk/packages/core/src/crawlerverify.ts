@@ -110,7 +110,7 @@ function parseIPv6(addr: string): bigint | null {
     const left = halves[0] === "" ? [] : (halves[0] ?? "").split(":");
     const right = halves[1] === "" ? [] : (halves[1] ?? "").split(":");
     const missing = 8 - left.length - right.length;
-    if (missing < 0) return null;
+    if (missing < 1) return null; // "::" must expand at least one group
     const groups = [
       ...left,
       ...Array<string>(missing).fill("0"),

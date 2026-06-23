@@ -60,4 +60,20 @@ describe("createSearchCrawlerVerifier", () => {
     await verify("66.249.66.2", "Googlebot");
     expect((fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1);
   });
+  it("re-fetches after the TTL expires", async () => {
+    let t = 0;
+    const fetch = mockFetch({ [urls.g]: googleJson, [urls.b]: bingJson });
+    const verify = createSearchCrawlerVerifier({ fetch, googlebotUrl: urls.g, bingbotUrl: urls.b, cacheTtlMs: 1000, now: () => t });
+    await verify("66.249.66.1", "Googlebot");   // fetches + caches at t=0
+    t = 1001;
+    await verify("66.249.66.1", "Googlebot");   // TTL elapsed → re-fetch
+    expect((fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(2);
+  });
+});
+
+describe("ipInCidr — malformed IPv6 rejection", () => {
+  it("rejects an over-specified :: that expands zero groups", () => {
+    // "1:2:3:4:5:6:7::8" has 8 groups before expansion; :: must replace ≥1, so this is invalid.
+    expect(ipInCidr("1:2:3:4:5:6:7::8", "::/0")).toBe(false);
+  });
 });
