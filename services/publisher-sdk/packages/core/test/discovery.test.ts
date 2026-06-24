@@ -35,3 +35,30 @@ describe("rslRobotsBlock", () => {
     expect(rslRobotsBlock(base)).toBe("License: https://example.com/license.xml\nContent-Usage: train-ai=n, search=y");
   });
 });
+describe("CRLF injection guard", () => {
+  it("rslRobotsBlock throws on LF in licenseUrl", () => {
+    expect(() => rslRobotsBlock({ licenseUrl: "https://x.com/a\nDisallow: /" })).toThrow(
+      "discovery URL must be a single-line absolute URL"
+    );
+  });
+  it("rslRobotsBlock throws on CR in licenseUrl", () => {
+    expect(() => rslRobotsBlock({ licenseUrl: "https://x.com/a\r" })).toThrow(
+      "discovery URL must be a single-line absolute URL"
+    );
+  });
+  it("rslLinkHeader throws on LF in licenseUrl", () => {
+    expect(() => rslLinkHeader({ licenseUrl: "https://x.com/a\nb" })).toThrow(
+      "discovery URL must be a single-line absolute URL"
+    );
+  });
+  it("rslLinkHeader throws on LF in paymentUrl", () => {
+    expect(() =>
+      rslLinkHeader({ licenseUrl: "https://x.com/ok", paymentUrl: "https://x.com/pay\nb" })
+    ).toThrow("discovery URL must be a single-line absolute URL");
+  });
+  it("rslLinkTag throws on LF in licenseUrl", () => {
+    expect(() => rslLinkTag({ licenseUrl: "https://x.com/a\nb" })).toThrow(
+      "discovery URL must be a single-line absolute URL"
+    );
+  });
+});

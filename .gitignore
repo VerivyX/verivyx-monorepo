@@ -12,6 +12,7 @@
 *.md
 !README.md
 !**/README.md
+!services/publisher-sdk/RELEASING.md
 /docs/
 *.pdf
 

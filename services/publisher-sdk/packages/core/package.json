@@ -34,6 +34,7 @@
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

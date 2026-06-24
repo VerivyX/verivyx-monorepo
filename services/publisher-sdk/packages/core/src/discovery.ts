@@ -22,6 +22,21 @@ export interface DiscoveryOptions {
 }
 
 /**
+ * Guard against CR/LF injection in URLs that are embedded in header or
+ * robots-block contexts. A newline in a URL would allow injecting extra
+ * HTTP header fields or robots.txt directives.
+ *
+ * Throws a descriptive error so the publisher can fix their config.
+ */
+function assertSingleLine(url: string, field: string): void {
+  if (/[\r\n]/.test(url)) {
+    throw new Error(
+      `discovery URL must be a single-line absolute URL (field: ${field})`
+    );
+  }
+}
+
+/**
  * Minimal HTML attribute escaper — used only for the `href` inside `rslLinkTag`.
  * The Link HEADER uses angle-brackets as RFC 8288 delimiters and must NOT be
  * HTML-escaped; the escaping is therefore intentionally restricted to the tag.
@@ -48,6 +63,8 @@ export function contentUsageHeader(o: DiscoveryOptions): string {
  * e.g. `<https://example.com/license.xml>; rel="license"`
  */
 export function rslLinkHeader(o: DiscoveryOptions): string {
+  assertSingleLine(o.licenseUrl, "licenseUrl");
+  if (o.paymentUrl) assertSingleLine(o.paymentUrl, "paymentUrl");
   let v = `<${o.licenseUrl}>; rel="license"`;
   if (o.paymentUrl) {
     v += `, <${o.paymentUrl}>; rel="payment"`;
@@ -61,6 +78,7 @@ export function rslLinkHeader(o: DiscoveryOptions): string {
  * e.g. `<link rel="license" href="https://example.com/license.xml">`
  */
 export function rslLinkTag(o: DiscoveryOptions): string {
+  assertSingleLine(o.licenseUrl, "licenseUrl");
   return `<link rel="license" href="${esc(o.licenseUrl)}">`;
 }
 
@@ -72,5 +90,6 @@ export function rslLinkTag(o: DiscoveryOptions): string {
  *   Content-Usage: train-ai=n, search=y
  */
 export function rslRobotsBlock(o: DiscoveryOptions): string {
+  assertSingleLine(o.licenseUrl, "licenseUrl");
   return `License: ${o.licenseUrl}\nContent-Usage: ${contentUsageHeader(o)}`;
 }

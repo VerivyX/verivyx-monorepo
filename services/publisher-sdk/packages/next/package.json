@@ -28,6 +28,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json"
