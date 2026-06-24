@@ -38,19 +38,25 @@ export const GET = vx.protect(handler, {
 });
 ```
 
-### Middleware pre-filter (optional, defense-in-depth)
+### Proxy pre-filter (optional, defense-in-depth)
 
 ```ts
-// middleware.ts
+// proxy.ts (Next 16; middleware.ts on Next <=15)
 import { verivyxNext } from "@verivyx/paywall-next";
-const vx = verivyxNext();
-const preFilter = vx.proxy();
+import type { NextRequest } from "next/server";
 
-export async function middleware(req: Request) {
-  const early = await preFilter(req);
-  if (early) return early;
+// reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env (throws at startup if unset)
+const vx = verivyxNext();
+const preFilter = vx.proxy(); // coarse, network-free pre-filter — the route handler is the real gate
+
+export async function proxy(req: NextRequest) {
+  return (await preFilter(req)) ?? undefined; // 402 for clear unpaid bots, else continue
 }
+
+export const config = { matcher: ["/articles/:path*", "/api/:path*"] };
 ```
+
+The proxy is defense-in-depth only — it sheds obviously-unpaid bot traffic early (no network call). The route handler (`vx.protect(handler)`) remains the authoritative gate and must always be present.
 
 ## Config
 
