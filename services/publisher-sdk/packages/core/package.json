@@ -4,7 +4,17 @@
   "description": "Zero-dependency x402 paywall SDK for publishers",
   "type": "module",
   "license": "MIT",
+  "author": "Verivyx",
   "sideEffects": false,
+  "keywords": ["paywall", "x402", "ai", "bot", "stellar", "verivyx"],
+  "homepage": "https://docs.verivyx.com/docs/sdk",
+  "bugs": { "url": "https://github.com/VerivyX/verivyx-monorepo/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VerivyX/verivyx-monorepo.git",
+    "directory": "services/publisher-sdk/packages/core"
+  },
+  "publishConfig": { "access": "public" },
   "exports": {
     ".": {
       "import": {
@@ -21,7 +31,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "engines": { "node": ">=18" },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",

@@ -4,7 +4,17 @@
   "description": "Hono adapter for the Verivyx paywall SDK (Cloudflare Workers / Vercel Edge)",
   "type": "module",
   "license": "MIT",
+  "author": "Verivyx",
   "sideEffects": false,
+  "keywords": ["paywall", "x402", "ai", "bot", "stellar", "verivyx"],
+  "homepage": "https://docs.verivyx.com/docs/sdk",
+  "bugs": { "url": "https://github.com/VerivyX/verivyx-monorepo/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VerivyX/verivyx-monorepo.git",
+    "directory": "services/publisher-sdk/packages/hono"
+  },
+  "publishConfig": { "access": "public" },
   "exports": {
     ".": {
       "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
@@ -14,7 +24,7 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.cts",
-  "files": ["dist"],
+  "files": ["dist", "README.md", "LICENSE"],
   "engines": { "node": ">=18" },
   "scripts": {
     "build": "tsup",
