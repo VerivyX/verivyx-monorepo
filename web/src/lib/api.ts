@@ -18,6 +18,8 @@ export type CreatorUser = {
   role?: 'ADMIN' | 'CREATOR';
   /** True once the user has been granted MCP non-custodial wallet early access. */
   mcpEarlyAccess?: boolean;
+  /** True once the domain has been verified via .well-known/verivyx.txt (SDK provisioning). */
+  domainVerified?: boolean;
 };
 
 export type AdminStats = {

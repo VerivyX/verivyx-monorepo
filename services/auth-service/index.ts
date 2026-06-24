@@ -323,6 +323,7 @@ type PublicUser = {
   role: string;
   paywallEnabled: boolean;
   mcpEarlyAccess: boolean;
+  domainVerified: boolean;
   createdAt?: Date;
 };
 
@@ -338,6 +339,7 @@ function shapeUser(u: {
   role: string;
   paywallEnabled: boolean;
   mcpEarlyAccess: boolean;
+  domainVerified?: boolean;
   createdAt?: Date;
 }): PublicUser {
   return {
@@ -354,6 +356,7 @@ function shapeUser(u: {
     role: u.role,
     paywallEnabled: u.paywallEnabled,
     mcpEarlyAccess: u.mcpEarlyAccess,
+    domainVerified: u.domainVerified ?? false,
     createdAt: u.createdAt,
   };
 }

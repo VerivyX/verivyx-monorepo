@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { AlertTriangle, ArrowLeft, LogOut, RefreshCw, X } from 'lucide-react';
 import { api, clearSession, getStoredUser, type CreatorUser } from '@/lib/api';
 import { EmbedPanel } from './EmbedPanel';
+import { SdkPanel } from './SdkPanel';
 import { WordPressPanel } from './WordPressPanel';
 
 type Tab = 'sdk' | 'wordpress' | 'embed';
@@ -20,10 +21,11 @@ function isTab(v: string | null): v is Tab {
   return v === 'sdk' || v === 'wordpress' || v === 'embed';
 }
 
-function IntegrationsInner({ user, refreshing, onRefresh }: {
+function IntegrationsInner({ user, refreshing, onRefresh, onVerified }: {
   user: CreatorUser;
   refreshing: boolean;
   onRefresh: () => void;
+  onVerified: (domain: string) => void;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -118,9 +120,7 @@ function IntegrationsInner({ user, refreshing, onRefresh }: {
 
         {/* Tab panels */}
         {activeTab === 'sdk' && (
-          <div className="surface-card p-6">
-            SDK setup — coming in the next step.
-          </div>
+          <SdkPanel user={user} onVerified={onVerified} />
         )}
         {activeTab === 'wordpress' && <WordPressPanel user={user} />}
         {activeTab === 'embed' && <EmbedPanel user={user} />}
@@ -199,7 +199,20 @@ export default function IntegrationsPage() {
         </div>
       }
     >
-      <IntegrationsInner user={user} refreshing={refreshing} onRefresh={load} />
+      <IntegrationsInner
+        user={user}
+        refreshing={refreshing}
+        onRefresh={load}
+        onVerified={async (_domain) => {
+          // Refresh user from the server so domainVerified reflects the new state.
+          try {
+            const meRes = await api.me();
+            setUser(meRes.user);
+          } catch {
+            // Best-effort; the token is already shown — silently ignore.
+          }
+        }}
+      />
     </Suspense>
   );
 }
