@@ -109,6 +109,26 @@ describe("verivyxNext", () => {
     expect(res.headers.get("content-usage")).toBeNull();
   });
 
+  it("allowed path: PAYMENT-RESPONSE and advertise headers coexist on same response", async () => {
+    const { GET, handler } = wrap(
+      {
+        classification: "paid",
+        authorize: { authorized: true, transaction: "tx", paymentResponse: "cmVjZWlwdA==" },
+      },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await GET(
+      new Request("https://ex.com/articles/x", { headers: { "payment-signature": "s" } }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("SECRET BODY");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(res.headers.get("PAYMENT-RESPONSE")).toBe("cmVjZWlwdA==");
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
+  });
+
   /**
    * proxy() tests use the REAL classifier (no mock injection — proxy() ignores
    * _core entirely). proxy() is a coarse, network-free pre-filter; the route

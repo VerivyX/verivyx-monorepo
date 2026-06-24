@@ -135,10 +135,6 @@ function resolveIp(c: Context, trustProxy: boolean): string | undefined {
   return xri !== undefined && xri !== "" ? xri : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /**
  * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
  * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.

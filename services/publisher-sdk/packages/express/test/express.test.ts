@@ -144,6 +144,27 @@ describe("verivyxExpress", () => {
     expect(res.headers["content-usage"]).toBeUndefined();
   });
 
+  it("allowed path: PAYMENT-RESPONSE and advertise headers coexist on same response", async () => {
+    const { app, handler } = makeApp(
+      {
+        classification: "paid",
+        authorize: { authorized: true, transaction: "tx", paymentResponse: "cmVjZWlwdA==" },
+      },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("PAYMENT-SIGNATURE", "sig");
+    expect(res.status).toBe(200);
+    expect(res.text).toBe("SECRET BODY");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(
+      res.headers["payment-response"] ?? res.headers["PAYMENT-RESPONSE"],
+    ).toBe("cmVjZWlwdA==");
+    expect(res.headers["content-usage"]).toBe("train-ai=n, search=y");
+    expect(res.headers["link"]).toContain('rel="license"');
+  });
+
   it("propagates errors from protect() to next(err)", async () => {
     const vx = verivyxExpress({
       domain: "ex.com",

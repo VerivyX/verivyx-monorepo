@@ -76,6 +76,25 @@ describe("verivyxHono", () => {
     expect(res.headers.get("content-usage")).toBeNull();
   });
 
+  it("allowed path: PAYMENT-RESPONSE and advertise headers coexist on same response", async () => {
+    const { a, handler } = makeApp(
+      {
+        classification: "paid",
+        authorize: { authorized: true, transaction: "tx", paymentResponse: "cmVjZWlwdA==" },
+      },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await a.request("/articles/my-article", {
+      headers: { "payment-signature": "sig" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("SECRET BODY");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(res.headers.get("payment-response")).toBe("cmVjZWlwdA==");
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
+  });
+
   it("calls handler and returns 200 for mocked-paid request", async () => {
     const { a, handler } = makeApp({
       classification: "paid",
