@@ -2,15 +2,20 @@ import { describe, it, expect, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 import { verivyx } from "@verivyx/paywall";
+import type { DiscoveryOptions } from "@verivyx/paywall";
 import { verivyxExpress, sendWebResponse } from "../src/index.js";
 
 // Build an Express app whose underlying paywall core is mocked (no network).
 // `_core` is the internal injection seam — pass a `verivyx.mock(...)` instance.
-function makeApp(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
+function makeApp(
+  coreOverrides: Parameters<typeof verivyx.mock>[0],
+  adapterOpts?: { advertise?: DiscoveryOptions },
+) {
   const vx = verivyxExpress({
     domain: "ex.com",
     token: "t",
     _core: verivyx.mock(coreOverrides),
+    ...adapterOpts,
   });
   const app = express();
   const handler = vi.fn((_req: express.Request, res: express.Response) =>
@@ -114,6 +119,29 @@ describe("verivyxExpress", () => {
     expect(res.headers["content-type"]).toMatch(/text\/html/);
     expect(res.text).toMatch(/isAccessibleForFree|vx-paywalled/);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("attaches Link + Content-Usage headers when advertise is set (denied path)", async () => {
+    const { app, handler } = makeApp(
+      { classification: "ai-bot" },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "GPTBot");
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+    expect(res.headers["content-usage"]).toBe("train-ai=n, search=y");
+    expect(res.headers["link"]).toContain('rel="license"');
+  });
+
+  it("omits advertise headers by default (no advertise option)", async () => {
+    const { app } = makeApp({ classification: "ai-bot" });
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "GPTBot");
+    expect(res.status).toBe(402);
+    expect(res.headers["content-usage"]).toBeUndefined();
   });
 
   it("propagates errors from protect() to next(err)", async () => {

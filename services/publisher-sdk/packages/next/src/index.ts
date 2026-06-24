@@ -37,8 +37,10 @@ import {
   verifyWebBotAuth as coreVerifyWebBotAuth,
   buildSeoPreviewResponse,
   attachPaymentResponse,
+  rslLinkHeader,
+  contentUsageHeader,
 } from "@verivyx/paywall";
-import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
+import type { VerivyxOptions, Verivyx, DiscoveryOptions } from "@verivyx/paywall";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,6 +77,13 @@ export interface NextAdapterOptions extends VerivyxOptions {
    * should never set this; omit it and the adapter constructs the real core.
    */
   _core?: Verivyx;
+
+  /**
+   * When set, attach RSL `Link` and AIPREF `Content-Usage` headers to both
+   * the denied (402) and allowed handler responses.
+   * Default undefined = OFF (no headers added; existing behavior unchanged).
+   */
+  advertise?: DiscoveryOptions;
 }
 
 /**
@@ -149,6 +158,21 @@ function resolveIp(
 }
 
 // (buildSeoPreviewResponse and attachPaymentResponse are imported from @verivyx/paywall)
+
+/**
+ * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
+ * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
+ * Returns the same Response unchanged when `advertise` is undefined.
+ */
+function withAdvertiseHeaders(res: Response, advertise: DiscoveryOptions | undefined): Response {
+  if (advertise === undefined) {
+    return res;
+  }
+  const headers = new Headers(res.headers);
+  headers.append("Link", rslLinkHeader(advertise));
+  headers.set("Content-Usage", contentUsageHeader(advertise));
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 // ---------------------------------------------------------------------------
 // Adapter factory
@@ -260,17 +284,24 @@ export function verivyxNext(opts?: NextAdapterOptions): {
           const isPreviewCandidate =
             decision.reason === "crawler" || decision.reason === "human-unverified";
           if (isPreviewCandidate && o?.seoPreview !== undefined) {
-            return buildSeoPreviewResponse(resolvedSlug, req.url, o.seoPreview);
+            return withAdvertiseHeaders(
+              buildSeoPreviewResponse(resolvedSlug, req.url, o.seoPreview),
+              opts?.advertise,
+            );
           }
           // Handler is NOT called — return the gate response (402 or preview).
-          return decision.response();
+          return withAdvertiseHeaders(decision.response(), opts?.advertise);
         }
 
         // 4b. Allowed — call the original handler.
         const res = await handler(req, ctx);
 
-        // 5. Attach the settlement receipt header when a payment was processed.
-        return attachPaymentResponse(res, decision.paymentResponse);
+        // 5. Attach the settlement receipt header when a payment was processed,
+        //    then attach discovery headers (single clone when both apply).
+        return withAdvertiseHeaders(
+          attachPaymentResponse(res, decision.paymentResponse),
+          opts?.advertise,
+        );
       };
     },
 

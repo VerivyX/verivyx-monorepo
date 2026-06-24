@@ -28,8 +28,10 @@ import {
   verivyx,
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
+  rslLinkHeader,
+  contentUsageHeader,
 } from "@verivyx/paywall";
-import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
+import type { VerivyxOptions, Verivyx, DiscoveryOptions } from "@verivyx/paywall";
 import type { IncomingHttpHeaders } from "node:http";
 import type { Socket } from "node:net";
 
@@ -80,6 +82,13 @@ export interface ExpressAdapterOptions extends VerivyxOptions {
    *   `const vx = opts?._core ?? verivyx(opts, { verifyCrawlerDns });`
    */
   _core?: Verivyx;
+
+  /**
+   * When set, attach RSL `Link` and AIPREF `Content-Usage` headers to both
+   * the denied (402) and allowed handler responses.
+   * Default undefined = OFF (no headers added; existing behavior unchanged).
+   */
+  advertise?: DiscoveryOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +210,22 @@ async function readRawBody(
 }
 
 /**
+ * Attach RSL + AIPREF discovery headers to an Express response.
+ * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
+ * No-op when `advertise` is undefined.
+ */
+function attachAdvertiseHeaders(
+  res: ExpressResponse,
+  advertise: DiscoveryOptions | undefined,
+): void {
+  if (advertise === undefined) {
+    return;
+  }
+  res.append("Link", rslLinkHeader(advertise));
+  res.setHeader("Content-Usage", contentUsageHeader(advertise));
+}
+
+/**
  * Convert a Web API `Response` to an Express response.
  * Copies status, all response headers, and the body.
  *
@@ -310,9 +335,11 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
             const isPreviewCandidate =
               decision.reason === "crawler" || decision.reason === "human-unverified";
             if (isPreviewCandidate && o?.seoPreview !== undefined) {
+              attachAdvertiseHeaders(res, opts?.advertise);
               await sendWebResponse(res, buildSeoPreviewResponse(slug, absoluteUrl, o.seoPreview));
               return;
             }
+            attachAdvertiseHeaders(res, opts?.advertise);
             await sendWebResponse(res, decision.response());
             return;
           }
@@ -321,6 +348,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
           if (decision.paymentResponse !== undefined) {
             res.setHeader("PAYMENT-RESPONSE", decision.paymentResponse);
           }
+          attachAdvertiseHeaders(res, opts?.advertise);
 
           // Delegate to the original Express handler.
           handler(req, res, next);

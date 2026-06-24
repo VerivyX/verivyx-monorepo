@@ -1,10 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
 import { verivyx } from "@verivyx/paywall";
-import type { Verivyx } from "@verivyx/paywall";
+import type { Verivyx, DiscoveryOptions } from "@verivyx/paywall";
 import { verivyxNext } from "../src/index.js";
 
-function wrap(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
-  const vx = verivyxNext({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) });
+function wrap(
+  coreOverrides: Parameters<typeof verivyx.mock>[0],
+  adapterOpts?: { advertise?: DiscoveryOptions },
+) {
+  const vx = verivyxNext({
+    domain: "ex.com",
+    token: "t",
+    _core: verivyx.mock(coreOverrides),
+    ...adapterOpts,
+  });
   const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
   return { GET: vx.protect(handler), handler };
 }
@@ -74,6 +82,31 @@ describe("verivyxNext", () => {
     );
     expect(res.status).toBe(200);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches Link + Content-Usage headers when advertise is set (denied path)", async () => {
+    const { GET, handler } = wrap(
+      { classification: "ai-bot" },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await GET(
+      new Request("https://ex.com/articles/x", { headers: { "user-agent": "GPTBot" } }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
+  });
+
+  it("omits advertise headers by default (no advertise option)", async () => {
+    const { GET } = wrap({ classification: "ai-bot" });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", { headers: { "user-agent": "GPTBot" } }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(402);
+    expect(res.headers.get("content-usage")).toBeNull();
   });
 
   /**

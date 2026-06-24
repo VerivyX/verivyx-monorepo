@@ -26,8 +26,10 @@ import {
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
   attachPaymentResponse,
+  rslLinkHeader,
+  contentUsageHeader,
 } from "@verivyx/paywall";
-import type { VerivyxOptions, Verivyx } from "@verivyx/paywall";
+import type { VerivyxOptions, Verivyx, DiscoveryOptions } from "@verivyx/paywall";
 import type { Context, MiddlewareHandler } from "hono";
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,13 @@ export interface HonoAdapterOptions extends VerivyxOptions {
    * should never set this; omit it and the adapter constructs the real core.
    */
   _core?: Verivyx;
+
+  /**
+   * When set, attach RSL `Link` and AIPREF `Content-Usage` headers to both
+   * the denied (402) and allowed handler responses.
+   * Default undefined = OFF (no headers added; existing behavior unchanged).
+   */
+  advertise?: DiscoveryOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +133,25 @@ function resolveIp(c: Context, trustProxy: boolean): string | undefined {
   }
   const xri = c.req.header("x-real-ip");
   return xri !== undefined && xri !== "" ? xri : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
+ * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
+ * Returns the same Response unchanged when `advertise` is undefined.
+ */
+function withAdvertiseHeaders(res: Response, advertise: DiscoveryOptions | undefined): Response {
+  if (advertise === undefined) {
+    return res;
+  }
+  const headers = new Headers(res.headers);
+  headers.append("Link", rslLinkHeader(advertise));
+  headers.set("Content-Usage", contentUsageHeader(advertise));
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 // ---------------------------------------------------------------------------
@@ -214,16 +242,23 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           const isPreviewCandidate =
             decision.reason === "crawler" || decision.reason === "human-unverified";
           if (isPreviewCandidate && o?.seoPreview !== undefined) {
-            return buildSeoPreviewResponse(slug, raw.url, o.seoPreview);
+            return withAdvertiseHeaders(
+              buildSeoPreviewResponse(slug, raw.url, o.seoPreview),
+              opts?.advertise,
+            );
           }
-          return decision.response();
+          return withAdvertiseHeaders(decision.response(), opts?.advertise);
         }
 
         // 6. Allowed — call the original Hono handler.
         const res = await handler(c);
 
-        // 7. Attach the settlement receipt header when a payment was processed.
-        return attachPaymentResponse(res, decision.paymentResponse);
+        // 7. Attach the settlement receipt header when a payment was processed,
+        //    then attach discovery headers (single clone when both apply).
+        return withAdvertiseHeaders(
+          attachPaymentResponse(res, decision.paymentResponse),
+          opts?.advertise,
+        );
       };
     },
   };

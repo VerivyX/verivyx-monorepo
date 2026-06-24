@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import { verivyx } from "@verivyx/paywall";
-import type { Verivyx } from "@verivyx/paywall";
+import type { Verivyx, DiscoveryOptions } from "@verivyx/paywall";
 import { verivyxHono } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -25,8 +25,16 @@ function makeCaptureCore(): { core: Verivyx; capturedIp: () => string | null } {
   return { core, capturedIp: () => captured };
 }
 
-function makeApp(coreOverrides: Parameters<typeof verivyx.mock>[0]) {
-  const vx = verivyxHono({ domain: "ex.com", token: "t", _core: verivyx.mock(coreOverrides) });
+function makeApp(
+  coreOverrides: Parameters<typeof verivyx.mock>[0],
+  adapterOpts?: { advertise?: DiscoveryOptions },
+) {
+  const vx = verivyxHono({
+    domain: "ex.com",
+    token: "t",
+    _core: verivyx.mock(coreOverrides),
+    ...adapterOpts,
+  });
   const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
     c.body("SECRET BODY", 200),
   );
@@ -43,6 +51,29 @@ describe("verivyxHono", () => {
     });
     expect(res.status).toBe(402);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("attaches Link + Content-Usage headers when advertise is set (denied path)", async () => {
+    const { a, handler } = makeApp(
+      { classification: "ai-bot" },
+      { advertise: { licenseUrl: "https://ex.com/license.xml" } },
+    );
+    const res = await a.request("/articles/x", {
+      headers: { "user-agent": "GPTBot" },
+    });
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
+  });
+
+  it("omits advertise headers by default (no advertise option)", async () => {
+    const { a } = makeApp({ classification: "ai-bot" });
+    const res = await a.request("/articles/x", {
+      headers: { "user-agent": "GPTBot" },
+    });
+    expect(res.status).toBe(402);
+    expect(res.headers.get("content-usage")).toBeNull();
   });
 
   it("calls handler and returns 200 for mocked-paid request", async () => {
