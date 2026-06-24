@@ -145,7 +145,7 @@ function CodeHero({ framework, domain }: { framework: Framework; domain: string 
       // vx.protect — the core SDK call (violet)
       .replace(
         /(vx\.protect)/g,
-        '<span style="color:#a78bfa">$1</span>',
+        '<span style="color:#7e5afe">$1</span>',
       )
       // verivyxNext / verivyxExpress / verivyxHono — constructor (mint)
       .replace(
@@ -197,7 +197,7 @@ function CodeHero({ framework, domain }: { framework: Framework; domain: string 
           <span>
             <span className="text-[var(--color-ink-400,#94a3b8)]">search crawler</span>
             <span className="mx-1.5 text-[var(--color-ink-600,#475569)]">→</span>
-            <span style={{ color: '#a78bfa' }}>preview</span>
+            <span style={{ color: 'var(--color-stellar-violet)' }}>preview</span>
           </span>
           <span>
             <span className="text-[var(--color-ink-400,#94a3b8)]">AI agent</span>
@@ -439,7 +439,7 @@ export function SdkPanel({
   };
 
   // ---- Verified return state (no wizard) ----
-  if (isVerified && !reissuing && step === 1) {
+  if (isVerified && !reissuing) {
     const verifiedDomain = user.domain!;
     return (
       <div className="space-y-6">
@@ -572,7 +572,7 @@ export function SdkPanel({
 
             {busy && !nonce ? (
               <div className="flex items-center gap-2 text-sm text-[var(--color-ink-500)]">
-                <RefreshCw size={14} className="animate-spin" /> Getting your verification code…
+                <RefreshCw size={14} className="motion-safe:animate-spin" /> Getting your verification code…
               </div>
             ) : nonce ? (
               <>
@@ -639,7 +639,7 @@ export function SdkPanel({
                 >
                   {busy ? (
                     <>
-                      <RefreshCw size={13} className="animate-spin" /> Verifying…
+                      <RefreshCw size={13} className="motion-safe:animate-spin" /> Verifying…
                     </>
                   ) : (
                     'Verify'

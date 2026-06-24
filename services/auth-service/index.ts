@@ -1513,7 +1513,7 @@ app.get('/api/v1/admin/creators', adminGuard, async (_req: AuthedRequest, res: R
     orderBy: { createdAt: 'desc' },
     select: {
       id: true, email: true, domain: true, stellar_address: true,
-      emailVerified: true, pricePerRequest: true, platformFee: true, apiKey: true,
+      emailVerified: true, domainVerified: true, pricePerRequest: true, platformFee: true, apiKey: true,
       paywallEnabled: true, mcpEarlyAccess: true, createdAt: true, role: true,
       events: {
         where: { createdAt: { gte: since7d } },
