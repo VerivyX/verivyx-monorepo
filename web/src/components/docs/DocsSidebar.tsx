@@ -19,6 +19,7 @@ export const DOCS_NAV: { title: string; items: Item[] }[] = [
     items: [
       { label: 'Embed script', href: '/docs/embed' },
       { label: 'WordPress plugin', href: '/docs/wordpress' },
+      { label: 'SDK (any framework)', href: '/docs/sdk' },
       { label: 'How agents pay (x402)', href: '/docs/x402' },
     ],
   },
