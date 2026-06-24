@@ -62,7 +62,7 @@ export function EmbedPanel({ user }: { user: CreatorUser }) {
       </div>
 
       {error && (
-        <div className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
+        <div role="alert" className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
           <span className="flex-1">{error}</span>
           <button

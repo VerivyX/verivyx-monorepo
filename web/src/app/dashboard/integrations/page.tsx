@@ -70,7 +70,7 @@ function IntegrationsInner({ user, refreshing, onRefresh, onVerified }: {
 
           <div className="flex items-center gap-3">
             <button onClick={onRefresh} disabled={refreshing} className="btn-ghost text-sm">
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
+              <RefreshCw size={14} className={refreshing ? 'motion-safe:animate-spin' : ''} /> Refresh
             </button>
             <button
               onClick={async () => {
@@ -182,7 +182,7 @@ export default function IntegrationsPage() {
           </div>
         ) : (
           <div className="flex items-center gap-3 text-sm">
-            <RefreshCw size={16} className="animate-spin" /> Loading integrations…
+            <RefreshCw size={16} className="motion-safe:animate-spin" /> Loading integrations…
           </div>
         )}
       </div>
@@ -194,7 +194,7 @@ export default function IntegrationsPage() {
       fallback={
         <div className="grid min-h-screen place-items-center bg-white text-[var(--color-ink-500)]">
           <div className="flex items-center gap-3 text-sm">
-            <RefreshCw size={16} className="animate-spin" /> Loading…
+            <RefreshCw size={16} className="motion-safe:animate-spin" /> Loading…
           </div>
         </div>
       }

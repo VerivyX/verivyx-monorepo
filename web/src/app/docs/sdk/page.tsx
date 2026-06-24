@@ -28,17 +28,19 @@ export const GET = vx.protect(
   {
     // Optional: pass an SEO preview for HTML pages so search engines
     // index a meaningful excerpt even when the full body is withheld.
-    seoPreview: async (_req, ctx) => {
-      const { slug } = (await ctx.params) ?? {};
-      const article = await getArticle(slug);
+    seoPreview: ({ slug }) => {
+      const article = getArticleSync(slug);   // fetch by slug
       return { title: article.title, excerpt: article.excerpt };
     },
   },
-);
+);`;
 
-// Defense-in-depth: strip internal headers before forwarding to a
-// downstream origin (use in a proxy layer, not a content handler).
-// import { proxy } from "@verivyx/paywall-next";`;
+const nextProxyFileSnippet = `// proxy.ts — Next.js coarse pre-filter (defense-in-depth only)
+// The route handler (vx.protect) is the authoritative gate; this is additive.
+import { verivyxNext } from "@verivyx/paywall-next";
+
+const vx = verivyxNext();
+export const proxy = vx.proxy();   // instance method, NOT a named export`;
 
 const expressSnippet = `import express from "express";
 import { verivyxExpress } from "@verivyx/paywall-express";
@@ -67,9 +69,9 @@ VERIVYX_DOMAIN=example.com   # required — must match the domain registered in 
 
 const envFullSnippet = `VERIVYX_TOKEN=vx_live_…
 VERIVYX_DOMAIN=example.com
-VERIVYX_MATCH=**             # glob pattern for routes to protect (default: **)
-VERIVYX_FAIL_MODE=teaser     # teaser | open | closed  (default: teaser)
-VERIVYX_TIMEOUT_MS=800       # backend timeout in ms   (default: 800)`;
+VERIVYX_MATCH=articles/**,blog/**   # comma-separated glob list (default: empty — no routes matched)
+VERIVYX_FAIL_MODE=teaser            # teaser | open | closed  (default: teaser)
+VERIVYX_TIMEOUT_MS=800              # backend timeout in ms   (default: 800)`;
 
 export default function SdkDocs() {
   return (
@@ -124,10 +126,16 @@ export default function SdkDocs() {
       <P>
         That is the minimum. For HTML pages that benefit from SEO indexing you can pass an optional{' '}
         <C>seoPreview</C> callback — the SDK serves the preview to verified search crawlers while withholding
-        the full body from everyone else. The <C>proxy()</C> helper (imported separately) strips
-        Verivyx-internal headers when forwarding to a downstream origin:
+        the full body from everyone else:
       </P>
       <CodeBlock lang="ts" code={nextProxySnippet} />
+      <P>
+        For defense-in-depth you can also add a <C>proxy.ts</C> pre-filter using <C>vx.proxy()</C> —
+        an <em>instance method</em> on the adapter, not a separate named export. It sheds obvious
+        unpaid-bot traffic before it reaches the route handler; the route handler remains the
+        authoritative gate:
+      </P>
+      <CodeBlock lang="ts" code={nextProxyFileSnippet} />
 
       <H2 id="install-express">Express</H2>
       <H3 id="install-express-pkg">Install</H3>
@@ -163,14 +171,14 @@ export default function SdkDocs() {
         You can also pass any option directly to the factory function — the constructor argument takes
         precedence over the environment variable:
       </P>
-      <CodeBlock lang="ts" code={`const vx = verivyxNext({\n  token: process.env.VERIVYX_TOKEN,\n  domain: "example.com",\n  match: "**",\n  failMode: "teaser",\n  timeoutMs: 800,\n});`} />
+      <CodeBlock lang="ts" code={`const vx = verivyxNext({\n  token: process.env.VERIVYX_TOKEN,\n  domain: "example.com",\n  match: ["articles/**", "blog/**"],\n  failMode: "teaser",\n  timeoutMs: 800,\n});`} />
       <P>Full list of options (all optional when the env vars are set):</P>
       <Table
         head={['Option / env var', 'Type', 'Default', 'Description']}
         rows={[
           [<><C>token</C> / <C>VERIVYX_TOKEN</C></>, 'string', '—', 'Required. Your domain token from the dashboard. Server-only — never expose this to the browser.'],
           [<><C>domain</C> / <C>VERIVYX_DOMAIN</C></>, 'string', '—', 'Required. The domain you registered in Verivyx (e.g. example.com).'],
-          [<><C>match</C> / <C>VERIVYX_MATCH</C></>, 'string (glob)', <C>**</C>, 'Glob pattern for routes to protect. Unmatched routes bypass the gate entirely.'],
+          [<><C>match</C> / <C>VERIVYX_MATCH</C></>, 'string[]', <C>[]</C>, 'Array of glob patterns for routes to protect. When empty (the default) no routes are matched — set at least one pattern to enable the gate. The env var accepts a comma-separated list: articles/**,blog/**'],
           [<><C>failMode</C> / <C>VERIVYX_FAIL_MODE</C></>, <><C>teaser</C> | <C>open</C> | <C>closed</C></>, <C>teaser</C>, 'Behaviour when the Verivyx backend is unreachable. See the failMode table below.'],
           [<><C>timeoutMs</C> / <C>VERIVYX_TIMEOUT_MS</C></>, 'number', <C>800</C>, 'Backend request timeout in milliseconds. Requests that exceed this fall through to failMode.'],
         ]}
@@ -230,8 +238,9 @@ export default function SdkDocs() {
         code={`export const GET = vx.protect(
   async (_req, ctx) => Response.json(await getArticle((await ctx.params).slug)),
   {
-    seoPreview: async (_req, ctx) => {
-      const a = await getArticle((await ctx.params).slug);
+    // seoPreview receives { slug } — a sync callback, no req/ctx needed.
+    seoPreview: ({ slug }) => {
+      const a = getArticleSync(slug);   // look up the article by slug
       return { title: a.title, excerpt: a.excerpt };   // string fields
     },
   },
