@@ -40,6 +40,10 @@ export type { AuthorizeInput, AuthorizeResult, RequirementsResult, ClientDeps } 
 // Post-response settlement helper
 export { attachPaymentResponse } from "./settle.js";
 
+// RSL 1.0 + AIPREF discovery emitters
+export { contentUsageHeader, rslLinkHeader, rslLinkTag, rslRobotsBlock } from "./discovery.js";
+export type { DiscoveryOptions } from "./discovery.js";
+
 // ===========================================================================
 // verivyx() / protect() orchestration — Task 13 capstone
 // ===========================================================================
