@@ -1,9 +1,0 @@
-{
-  "name": "oz-session-pay-spike",
-  "version": "0.0.0",
-  "private": true,
-  "type": "commonjs",
-  "dependencies": {
-    "@stellar/stellar-sdk": "^16.0.1"
-  }
-}
