@@ -1,0 +1,7 @@
+{
+  "name": "verivyx-publisher-sdk",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*", "examples/*"],
+  "license": "MIT"
+}

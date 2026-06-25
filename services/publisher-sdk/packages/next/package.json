@@ -1,0 +1,53 @@
+{
+  "name": "@verivyx/paywall-next",
+  "version": "0.1.0",
+  "description": "Next.js adapter for the Verivyx paywall SDK",
+  "type": "module",
+  "license": "MIT",
+  "author": "Verivyx",
+  "sideEffects": false,
+  "keywords": ["paywall", "x402", "ai", "bot", "stellar", "verivyx"],
+  "homepage": "https://docs.verivyx.com/docs/sdk",
+  "bugs": { "url": "https://github.com/VerivyX/verivyx-monorepo/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VerivyX/verivyx-monorepo.git",
+    "directory": "services/publisher-sdk/packages/next"
+  },
+  "publishConfig": { "access": "public" },
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@verivyx/paywall": "^0.1.0"
+  },
+  "peerDependencies": {
+    "next": ">=15 <17",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "next": "^15.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

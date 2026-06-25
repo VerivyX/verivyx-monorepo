@@ -1,0 +1,47 @@
+{
+  "name": "@verivyx/paywall",
+  "version": "0.1.0",
+  "description": "Zero-dependency x402 paywall SDK for publishers",
+  "type": "module",
+  "license": "MIT",
+  "author": "Verivyx",
+  "sideEffects": false,
+  "keywords": ["paywall", "x402", "ai", "bot", "stellar", "verivyx"],
+  "homepage": "https://docs.verivyx.com/docs/sdk",
+  "bugs": { "url": "https://github.com/VerivyX/verivyx-monorepo/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VerivyX/verivyx-monorepo.git",
+    "directory": "services/publisher-sdk/packages/core"
+  },
+  "publishConfig": { "access": "public" },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "engines": { "node": ">=18" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "tsup": "^8.1.0",
+    "vitest": "^1.6.0"
+  }
+}

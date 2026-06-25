@@ -18,6 +18,8 @@ export type CreatorUser = {
   role?: 'ADMIN' | 'CREATOR';
   /** True once the user has been granted MCP non-custodial wallet early access. */
   mcpEarlyAccess?: boolean;
+  /** True once the domain has been verified via .well-known/verivyx.txt (SDK provisioning). */
+  domainVerified?: boolean;
 };
 
 export type AdminStats = {
@@ -336,6 +338,15 @@ export const api = {
     request<{ redirect_to: string }>(`/api/v1/oauth/consent/reject`, {
       method: 'POST',
       body: JSON.stringify({ consent_challenge }),
+    }),
+
+  sdkProvisionInit: () =>
+    request<{ nonce: string }>(`/api/v1/sdk/provision/init`, { method: "POST" }),
+
+  sdkProvisionVerify: (site: string, nonce: string) =>
+    request<{ token: string }>(`/api/v1/sdk/provision/verify`, {
+      method: "POST",
+      body: JSON.stringify({ site, nonce }),
     }),
 };
 
