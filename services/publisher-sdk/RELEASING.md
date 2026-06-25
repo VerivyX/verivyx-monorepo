@@ -64,9 +64,40 @@ Ensure `NPM_TOKEN` is set in your environment or that you are already authentica
 
 ## CI path (GitHub Actions Trusted Publishing)
 
-Pushing a tag matching `sdk-v*` (e.g. `sdk-v0.2.0`) triggers `.github/workflows/release.yml`, which publishes all four packages using OIDC provenance (no long-lived npm token needed).
+CI publishing is **not committed by default** (no workflow file lives in the repo). To enable it, create `.github/workflows/release.yml` with the recipe below; then pushing a tag matching `sdk-v*` (e.g. `sdk-v0.2.0`) publishes all four packages using OIDC provenance (no long-lived npm token needed).
 
-**IMPORTANT: this workflow is intentionally inert until you complete the one-time setup below.**
+```yaml
+name: Release SDK
+on:
+  push:
+    tags: ["sdk-v*"]
+permissions:
+  contents: read
+  id-token: write          # npm Trusted Publishing (OIDC) + provenance
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/publisher-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm -w packages/core run build
+      - run: npm -w packages/express run build
+      - run: npm -w packages/next run build
+      - run: npm -w packages/hono run build
+      - run: npm publish -w packages/core --provenance --access public
+      - run: npm publish -w packages/express --provenance --access public
+      - run: npm publish -w packages/next --provenance --access public
+      - run: npm publish -w packages/hono --provenance --access public
+```
+
+**This workflow is inert until you complete the one-time Trusted-Publishing setup below.**
 
 ### One-time setup: enable Trusted Publishing on npmjs
 
