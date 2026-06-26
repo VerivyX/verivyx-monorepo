@@ -210,6 +210,62 @@ async function readRawBody(
 }
 
 /**
+ * Check whether a pathname matches any of the given glob patterns.
+ * Supports `*` (any segment chars except `/`) and `**` (any chars including `/`).
+ */
+function pathMatchesAny(pathname: string, patterns: string[]): boolean {
+  for (const pattern of patterns) {
+    // Build a regex from the glob pattern:
+    // 1. Escape all regex metacharacters except * and ?.
+    // 2. Replace ** with a placeholder, then * with [^/]*, then restore **.
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const regexStr =
+      "^" +
+      escaped
+        .replace(/\*\*/g, "\x00")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\x00/g, ".*") +
+      "$";
+    if (new RegExp(regexStr).test(pathname)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build a Web API `Request` from an Express request.
+ * Resolves the trusted client IP, builds absolute URL, and reads the raw body.
+ */
+async function buildWebRequest(
+  req: ExpressRequest,
+  opts: ExpressAdapterOptions | undefined,
+): Promise<Request> {
+  const ip = resolveIp(req, opts);
+  const host =
+    (typeof req.get === "function" ? req.get("host") : undefined) ??
+    (typeof req.headers.host === "string" ? req.headers.host : undefined) ??
+    "localhost";
+  const protocol = req.protocol ?? "http";
+  const absoluteUrl = `${protocol}://${host}${req.originalUrl}`;
+  const webHeaders = toWebHeaders(req.headers, ip);
+
+  let rawBody: Uint8Array | undefined;
+  try {
+    rawBody = await readRawBody(req);
+  } catch {
+    rawBody = undefined;
+  }
+
+  return new Request(absoluteUrl, {
+    method: req.method,
+    headers: webHeaders,
+    body: rawBody !== undefined ? rawBody : undefined,
+    ...(rawBody !== undefined ? { duplex: "half" } : {}),
+  } as RequestInit);
+}
+
+/**
  * Attach RSL + AIPREF discovery headers to an Express response.
  * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
  * No-op when `advertise` is undefined.
@@ -273,6 +329,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
     handler: RequestHandler,
     o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
   ): RequestHandler;
+  middleware(): RequestHandler;
 } {
   // Resolve the core: use the injected `_core` (tests) or build the real one.
   // Only pass `verifyWebBotAuth` to the core deps when the caller overrode it;
@@ -299,29 +356,8 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
         next: NextFunction,
       ): Promise<void> {
         try {
-          // 1. Resolve trusted client IP.
-          const ip = resolveIp(req, opts);
-
-          // 2. Build a Web Request from the Express request.
-          //    Absolute URL is required for the core's URL-based slug derivation.
-          const absoluteUrl = `${req.protocol}://${req.get("host") ?? "localhost"}${req.originalUrl}`;
-          const webHeaders = toWebHeaders(req.headers, ip);
-
-          let rawBody: Uint8Array | undefined;
-          try {
-            rawBody = await readRawBody(req);
-          } catch {
-            // Body read failure — proceed with no body (safe: auth/classify do not need it).
-            rawBody = undefined;
-          }
-
-          const webReq = new Request(absoluteUrl, {
-            method: req.method,
-            headers: webHeaders,
-            body: rawBody !== undefined ? rawBody : undefined,
-            // duplex required for request bodies in some environments
-            ...(rawBody !== undefined ? { duplex: "half" } : {}),
-          } as RequestInit);
+          // 1+2. Build a Web Request (resolves IP, builds absolute URL, reads body).
+          const webReq = await buildWebRequest(req, opts);
 
           // 3. Ask the core to evaluate the request (decision overload).
           const slug =
@@ -336,7 +372,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
               decision.reason === "crawler" || decision.reason === "human-unverified";
             if (isPreviewCandidate && o?.seoPreview !== undefined) {
               attachAdvertiseHeaders(res, opts?.advertise);
-              await sendWebResponse(res, buildSeoPreviewResponse(slug, absoluteUrl, o.seoPreview));
+              await sendWebResponse(res, buildSeoPreviewResponse(slug, webReq.url, o.seoPreview));
               return;
             }
             attachAdvertiseHeaders(res, opts?.advertise);
@@ -358,5 +394,51 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
         }
       };
     },
+
+    middleware(): RequestHandler {
+      return async (req, res, next) => {
+        try {
+          const rawPath = req.originalUrl ?? req.url ?? "/";
+          const pathname = rawPath.split("?")[0] ?? rawPath;
+
+          // If match patterns are configured and this path doesn't match, pass through.
+          if (
+            opts?.match !== undefined &&
+            opts.match.length > 0 &&
+            !pathMatchesAny(pathname, opts.match)
+          ) {
+            return next();
+          }
+
+          const webReq = await buildWebRequest(req, opts);
+          const slug = pathname.split("/").filter(Boolean).pop() ?? "";
+          const decision = await vx.protect(webReq, { slug });
+
+          if (decision.allowed) {
+            if (decision.paymentResponse !== undefined) {
+              res.setHeader("PAYMENT-RESPONSE", decision.paymentResponse);
+            }
+            return next();
+          }
+
+          attachAdvertiseHeaders(res, opts?.advertise);
+          await sendWebResponse(res, decision.response());
+        } catch (err) {
+          next(err as Error);
+        }
+      };
+    },
   };
+}
+
+/**
+ * Convenience export: create a Verivyx Express app-level middleware in one call.
+ *
+ * ```ts
+ * import { verivyxMiddleware } from "@verivyx/paywall-express";
+ * app.use(verivyxMiddleware({ domain: "example.com", token: process.env.VX_TOKEN }));
+ * ```
+ */
+export function verivyxMiddleware(opts?: ExpressAdapterOptions): RequestHandler {
+  return verivyxExpress(opts).middleware();
 }
