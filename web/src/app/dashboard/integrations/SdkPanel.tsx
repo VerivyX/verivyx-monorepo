@@ -15,6 +15,7 @@ import {
 import { api, normalizeDomain, type CreatorUser } from '@/lib/api';
 import { type Framework, FRAMEWORKS, envBlock, snippetFor } from './snippets';
 import { provisionErrorMessage } from './provision-errors';
+import { dnsRecordName } from './dns-record-name';
 
 // ---------------------------------------------------------------------------
 // Framework selector
@@ -585,7 +586,12 @@ export function SdkPanel({
                     <dt className="text-[var(--color-ink-400,#94a3b8)]">Type</dt>
                     <dd className="font-mono text-[var(--color-ink-800,#1e293b)]">TXT</dd>
                     <dt className="text-[var(--color-ink-400,#94a3b8)]">Name / Host</dt>
-                    <dd className="font-mono text-[var(--color-ink-800,#1e293b)]">@ <span className="text-[var(--color-ink-400,#94a3b8)]">(your root domain {domain})</span></dd>
+                    <dd className="font-mono text-[var(--color-ink-800,#1e293b)]">
+                      {dnsRecordName(domain).name}
+                      <span className="block font-sans text-xs text-[var(--color-ink-400,#94a3b8)]">
+                        Creates the record at <span className="font-mono">{dnsRecordName(domain).host}</span>. Most panels: enter the name shown above (for a root domain, <span className="font-mono">@</span>); some want the full name.
+                      </span>
+                    </dd>
                     <dt className="text-[var(--color-ink-400,#94a3b8)]">Value</dt>
                     <dd className="min-w-0">
                       <div className="flex flex-wrap items-center gap-3">
