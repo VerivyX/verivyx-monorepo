@@ -12,11 +12,12 @@ describe("verivyxProxy settling gate", () => {
     const proxy = verivyxProxy(opts(coreReturning({ allowed: true, reason: "human", response: () => new Response(null) })));
     expect(await proxy(new Request("https://x.com/articles/a", { headers: { "user-agent": "Mozilla/5.0" } }))).toBeUndefined();
   });
-  it("passes paid: allowed + paymentResponse → defined, carries PAYMENT-RESPONSE", async () => {
+  it("passes paid: allowed + paymentResponse → NextResponse.next() with PAYMENT-RESPONSE header (not empty body)", async () => {
     const proxy = verivyxProxy(opts(coreReturning({ allowed: true, reason: "paid", response: () => new Response(null), paymentResponse: "settled" })));
     const out = await proxy(new Request("https://x.com/articles/a", { headers: { "payment-signature": "sig" } }));
+    // Must be defined (NextResponse.next()) — a plain Response(null) would short-circuit with empty body.
     expect(out).toBeDefined();
-    expect(out!.headers.get("payment-response") ?? out!.headers.get("x-payment-response")).toBeTruthy();
+    expect(out!.headers.get("payment-response")).toBe("settled");
   });
   it("match: non-matching path → undefined, core not called", async () => {
     let called = false;

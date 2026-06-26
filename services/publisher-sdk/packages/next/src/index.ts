@@ -39,6 +39,7 @@ import {
   contentUsageHeader,
 } from "@verivyx/paywall";
 import type { VerivyxOptions, Verivyx, GateDecision, DiscoveryOptions } from "@verivyx/paywall";
+import { NextResponse } from "next/server";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -360,11 +361,12 @@ export function verivyxNext(opts?: NextAdapterOptions): {
         }
         if (decision.allowed) {
           if (decision.paymentResponse) {
-            // Build a minimal pass-through response that carries the settlement
-            // receipt header. Using a plain 200 Response (not NextResponse.next())
-            // avoids a `next/server` runtime dependency here; the middleware host
-            // is responsible for forwarding the response to the client.
-            return attachPaymentResponse(new Response(null), decision.paymentResponse);
+            // Pass through to the page while surfacing the settlement receipt.
+            // NextResponse.next() is required here — a plain Response would
+            // short-circuit the request and return an empty body to the agent.
+            return NextResponse.next({
+              headers: { "PAYMENT-RESPONSE": decision.paymentResponse },
+            });
           }
           return undefined;
         }
