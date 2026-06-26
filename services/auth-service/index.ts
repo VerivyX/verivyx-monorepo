@@ -21,7 +21,7 @@ import {
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
-import { verifyWellKnown } from './wellknown.js';
+import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
 
 declare global {
@@ -1320,18 +1320,18 @@ app.get('/api/v1/auth/transactions', authGuard, async (req: Request, res: Respon
   });
 });
 
-// --- SDK domain provisioning (.well-known/verivyx.txt handshake) ---
+// --- SDK domain provisioning (DNS TXT handshake) ---
 //
-// Non-WordPress publishers prove domain ownership by hosting a nonce at
-// https://<site>/.well-known/verivyx.txt. Flow:
-//   1. POST /api/v1/sdk/provision/init   → { nonce }  (store nonce, TTL 10 min)
-//   2. Publisher writes nonce to the .well-known URL.
+// Non-WordPress publishers prove domain ownership by adding a DNS TXT record
+// `verivyx-site-verification=<nonce>` to the domain apex. Flow:
+//   1. POST /api/v1/sdk/provision/init   → { nonce }  (store nonce, TTL 60 min)
+//   2. Publisher adds a DNS TXT record `verivyx-site-verification=<nonce>` to the domain apex.
 //   3. POST /api/v1/sdk/provision/verify { site, nonce }
-//                                        → { token }  (SSRF-guarded fetch+verify,
+//                                        → { token }  (DNS TXT lookup+verify,
 //                                                       then issues per-domain token)
 // Reuses the same wpInternalToken column as the WP Connect handshake.
 
-const PROVISION_TTL_MS = 10 * 60_000;
+const PROVISION_TTL_MS = 60 * 60_000;
 
 interface ProvisionPending {
   nonce: string;
@@ -1350,7 +1350,7 @@ function pruneProvisionPending(): void {
 }
 
 // POST /api/v1/sdk/provision/init
-// Auth-guarded. Issues a nonce the publisher must host at .well-known/verivyx.txt.
+// Auth-guarded. Issues a nonce the publisher must add as a DNS TXT record `verivyx-site-verification=<nonce>` to the domain apex.
 app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Response) => {
   const ip = reqIp(req);
   if (!rateLimit(`sdkinit:${ip}`, 10, 60 * 60_000)) {
@@ -1363,7 +1363,7 @@ app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Resp
 });
 
 // POST /api/v1/sdk/provision/verify
-// Auth-guarded. Verifies the nonce is live at the site's .well-known URL then
+// Auth-guarded. Verifies the nonce is present as a DNS TXT record on the apex domain then
 // issues (or reissues) the per-domain token on the authenticated user account.
 app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, res: Response) => {
   const ip = reqIp(req);
@@ -1384,7 +1384,7 @@ app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, r
 
   let verified: boolean;
   try {
-    verified = await verifyWellKnown(site, nonce);
+    verified = await verifyDomainTxt(site, nonce);
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'verify_failed';
     return res.status(msg === 'invalid_site' ? 400 : 502).json({ error: msg });
