@@ -440,7 +440,10 @@ export function SdkPanel({
   };
 
   // ---- Verified return state (no wizard) ----
-  if (isVerified && !reissuing) {
+  // Skip this when we hold a freshly-issued `token` — that token is shown once,
+  // only in Step 3, so a just-completed verify (which flips isVerified via the
+  // api.me() refresh in onVerified) must still render Step 3 to reveal it.
+  if (isVerified && !reissuing && !token) {
     const verifiedDomain = user.domain!;
     return (
       <div className="space-y-6">
