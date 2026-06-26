@@ -130,9 +130,9 @@ describe("verivyxNext", () => {
   });
 
   /**
-   * proxy() tests use the REAL classifier (no mock injection — proxy() ignores
-   * _core entirely). proxy() is a coarse, network-free pre-filter; the route
-   * handler is the authoritative gate.
+   * proxy() is the authoritative settling gate — it runs the full core pipeline
+   * (classify → authorize → verify+settle → failMode). Tests inject `_core` to
+   * avoid any network access; the injected decision IS the gate decision.
    */
   describe("proxy()", () => {
     it("returns 402 for a clear AI-bot UA (core: not allowed)", async () => {

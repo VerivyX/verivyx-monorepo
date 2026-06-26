@@ -18,6 +18,15 @@ describe("verivyxProxy settling gate", () => {
     // Must be defined (NextResponse.next()) — a plain Response(null) would short-circuit with empty body.
     expect(out).toBeDefined();
     expect(out!.headers.get("payment-response")).toBe("settled");
+    // NextResponse.next() sets x-middleware-next: "1"; a plain Response does not.
+    // This guards against a regression where we'd return new Response(null, {headers: {"PAYMENT-RESPONSE": ...}})
+    // instead of NextResponse.next() — the plain Response would serve an empty body to the agent.
+    expect(out!.headers.get("x-middleware-next")).toBe("1");
+  });
+  it("core throws → undefined (safe fail, don't break the site)", async () => {
+    const core = { protect: async () => { throw new Error("boom"); } } as any;
+    const proxy = verivyxProxy({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    expect(await proxy(new Request("https://x.com/articles/a", { headers: { "user-agent": "GPTBot" } }))).toBeUndefined();
   });
   it("match: non-matching path → undefined, core not called", async () => {
     let called = false;
