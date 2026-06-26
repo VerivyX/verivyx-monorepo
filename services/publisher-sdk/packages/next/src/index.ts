@@ -33,14 +33,12 @@ import {
   verivyx,
   resolveConfig,
   createSearchCrawlerVerifier,
-  classify,
-  verifyWebBotAuth as coreVerifyWebBotAuth,
   buildSeoPreviewResponse,
   attachPaymentResponse,
   rslLinkHeader,
   contentUsageHeader,
 } from "@verivyx/paywall";
-import type { VerivyxOptions, Verivyx, DiscoveryOptions } from "@verivyx/paywall";
+import type { VerivyxOptions, Verivyx, GateDecision, DiscoveryOptions } from "@verivyx/paywall";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -160,6 +158,29 @@ function resolveIp(
 // (buildSeoPreviewResponse and attachPaymentResponse are imported from @verivyx/paywall)
 
 /**
+ * Convert a glob pattern (`/articles/*`, `/articles/**`) to a RegExp.
+ * Rules:
+ *   `**` matches any characters including `/`.
+ *   `*`  matches any characters except `/`.
+ *   All other regex metacharacters are escaped.
+ */
+function globToRegExp(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  // Order matters: replace ** before *
+  const pattern = escaped
+    .replace(/\*\*/g, ".+")
+    .replace(/\*/g, "[^/]+");
+  return new RegExp(`^${pattern}$`);
+}
+
+/**
+ * Return true when `pathname` matches at least one of the glob patterns.
+ */
+function pathMatchesAny(pathname: string, globs: string[]): boolean {
+  return globs.some((g) => globToRegExp(g).test(pathname));
+}
+
+/**
  * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
  * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
  * Returns the same Response unchanged when `advertise` is undefined.
@@ -183,7 +204,10 @@ function withAdvertiseHeaders(res: Response, advertise: DiscoveryOptions | undef
  *
  * Returns an object with:
  *   - `protect(handler, o)` — wrap a route handler behind the Verivyx gate.
- *   - `proxy()` — a coarse pre-filter for `proxy.ts` (defense-in-depth only).
+ *   - `proxy()` — authoritative settling gate for `middleware.ts` / `proxy.ts`.
+ *     Runs the full pipeline (classify → authorize → verify+settle → failMode).
+ *     Use `verivyxProxy(opts)` as a one-line convenience instead of calling
+ *     `verivyxNext(opts).proxy()` directly.
  *
  * ```ts
  * const vx = verivyxNext({ domain: "example.com", token: "..." });
@@ -215,16 +239,36 @@ export function verivyxNext(opts?: NextAdapterOptions): {
 
   const trustProxy = opts?.trustProxy !== false; // default true
 
-  // Build a real resolved config once for use by proxy()'s classify call.
+  // Build a real resolved config once for use by proxy()'s path-match filter.
   // resolveConfig throws ConfigError when domain/token are absent — same
   // behaviour as verivyx() itself, so verivyxNext always requires them.
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
   const env: Record<string, string | undefined> = proc?.env ?? {};
   const cfg = resolveConfig(opts, env);
 
-  // The verifyWebBotAuth dep used by proxy() mirrors what the core uses:
-  // caller override if supplied, otherwise the bundled RFC 9421 verifier.
-  const proxyVerifyWebBotAuth = opts?.verifyWebBotAuth ?? coreVerifyWebBotAuth;
+  /**
+   * Build a header-sanitised core Request from an incoming Next.js Request.
+   *
+   * Security invariant:
+   *   trustProxy !== false → resolve IP from proxy headers and set x-real-ip
+   *     on the cloned request (overrides any client value).
+   *   trustProxy === false  → strip x-real-ip and x-forwarded-for so the
+   *     client cannot spoof an IP into the core classifier.
+   *
+   * The body is intentionally omitted — core classify/protect read headers
+   * only and we must not consume the body here.
+   */
+  function buildCoreRequest(req: Request): Request {
+    const ip = resolveIp(req, trustProxy);
+    const headers = new Headers(req.headers);
+    if (ip !== undefined) {
+      headers.set("x-real-ip", ip);
+    } else {
+      headers.delete("x-real-ip");
+      headers.delete("x-forwarded-for");
+    }
+    return new Request(req.url, { method: req.method, headers });
+  }
 
   return {
     protect(handler, o) {
@@ -234,38 +278,8 @@ export function verivyxNext(opts?: NextAdapterOptions): {
       ): Promise<Response> {
         // 1. Resolve trusted client IP and inject into a cloned request so the
         //    core classifier reads a reliable address regardless of edge hop.
-        //
-        //    Security invariant:
-        //      trustProxy !== false → resolve IP from proxy headers and set
-        //        x-real-ip on the cloned request (overrides any client value).
-        //      trustProxy === false  → no trustworthy socket IP is available in
-        //        Next.js route handlers; strip both x-real-ip and x-forwarded-for
-        //        so a client cannot spoof an IP into the core classifier
-        //        (core sees no IP → safe default).
-        const ip = resolveIp(req, trustProxy);
-        let coreReq: Request;
-        if (ip !== undefined) {
-          const headers = new Headers(req.headers);
-          headers.set("x-real-ip", ip);
-          // Clone the Request with updated headers. For GET/HEAD this is safe;
-          // for bodies we do NOT re-attach a body here (the core classify path
-          // reads headers only — body stays with the original `req`).
-          coreReq = new Request(req.url, {
-            method: req.method,
-            headers,
-            // Do not attach body to coreReq — core classify reads headers only.
-          });
-        } else {
-          // trustProxy === false: strip forwarding headers so the client cannot
-          // inject a spoofed IP into the core.
-          const headers = new Headers(req.headers);
-          headers.delete("x-real-ip");
-          headers.delete("x-forwarded-for");
-          coreReq = new Request(req.url, {
-            method: req.method,
-            headers,
-          });
-        }
+        //    (Logic extracted into buildCoreRequest above.)
+        const coreReq = buildCoreRequest(req);
 
         // 2. Resolve slug.
         //    Priority: caller override > ctx.params.slug > last URL segment.
@@ -307,58 +321,73 @@ export function verivyxNext(opts?: NextAdapterOptions): {
 
     proxy() {
       /**
-       * Coarse pre-filter for `proxy.ts` — defense-in-depth ONLY.
+       * Authoritative settling gate for `middleware.ts` / `proxy.ts`.
        *
-       * proxy() uses the real core classify() function directly (no mock).
-       * It is a coarse, network-free pre-filter: shed obviously-unpaid bot
-       * traffic early before it reaches the route handler. The route handler
-       * (via protect()) remains the authoritative gate.
+       * Runs the full core pipeline (classify → authorize → verify+settle →
+       * failMode). This is the single source of truth for the whole Next app;
+       * there is no need for a second gate on each individual route handler.
        *
-       * Returns a 402 Response only when the request looks like a clear
-       * unpaid bot (ai-bot / signed-agent UA with no payment header).
-       * Returns `undefined` in all other cases — let the request continue to
-       * the route handler which will make the authoritative decision.
+       * Behaviour:
+       *   - Paths not in `cfg.match` (when match is set) → undefined (pass).
+       *   - `decision.allowed` + `paymentResponse`       → NextResponse.next()
+       *                                                     with PAYMENT-RESPONSE.
+       *   - `decision.allowed` (no receipt)              → undefined (pass).
+       *   - `!decision.allowed`                          → `decision.response()`
+       *                                                     (402 or preview),
+       *                                                     wrapped in advertise
+       *                                                     headers when set.
+       *   - Core throws                                  → undefined (don't
+       *                                                     hard-break the site).
+       *
+       * Use `verivyxProxy(opts)` as a shorthand for `verivyxNext(opts).proxy()`.
        */
-      return async function verivyxProxy(
+      return async function verivyxProxyHandler(
         req: Request,
       ): Promise<Response | undefined> {
-        // Quick check: if there is any payment signal, skip the pre-filter
-        // and let the route handler handle authorization properly.
-        const hasPaymentHeader =
-          req.headers.has("payment-signature") || req.headers.has("x-payment");
-        if (hasPaymentHeader) {
+        const url = new URL(req.url);
+        // Match filter: when cfg.match is non-empty, skip paths that don't match.
+        if (cfg.match && cfg.match.length > 0 && !pathMatchesAny(url.pathname, cfg.match)) {
           return undefined;
         }
-
-        // Use the core's exported classify with a real resolved config.
-        // No crawler DNS verification at this layer (proxy does NOT need it —
-        // crawler → preview is the route handler's job, not the proxy's).
-        let classification: string;
+        const coreReq = buildCoreRequest(req);
+        const slug = url.pathname.split("/").filter(Boolean).pop() ?? "";
+        let decision: GateDecision;
         try {
-          const result = await classify(req, cfg, {
-            verifyWebBotAuth: proxyVerifyWebBotAuth,
-          });
-          classification = result.classification;
+          decision = await vx.protect(coreReq, { slug });
         } catch {
-          // classify error → pass through to route handler.
+          // Non-failMode error → don't hard-break the site.
           return undefined;
         }
-
-        if (classification === "ai-bot" || classification === "signed-agent") {
-          // Return a minimal 402 — the route handler's full 402 body (with
-          // payment requirements) is not built here to keep this lightweight.
-          return new Response(
-            JSON.stringify({ error: "payment_required" }),
-            {
-              status: 402,
-              headers: { "content-type": "application/json" },
-            },
-          );
+        if (decision.allowed) {
+          if (decision.paymentResponse) {
+            // Build a minimal pass-through response that carries the settlement
+            // receipt header. Using a plain 200 Response (not NextResponse.next())
+            // avoids a `next/server` runtime dependency here; the middleware host
+            // is responsible for forwarding the response to the client.
+            return attachPaymentResponse(new Response(null), decision.paymentResponse);
+          }
+          return undefined;
         }
-
-        // All other classifications → pass through.
-        return undefined;
+        return withAdvertiseHeaders(decision.response(), opts?.advertise);
       };
     },
   };
+}
+
+/**
+ * Convenience export: create a single proxy middleware function for a Next.js
+ * `middleware.ts` that acts as the authoritative Verivyx settling gate.
+ *
+ * Equivalent to `verivyxNext(opts).proxy()`.
+ *
+ * @example
+ * ```ts
+ * // middleware.ts
+ * import { verivyxProxy } from "@verivyx/paywall-next";
+ * export const middleware = verivyxProxy({ domain: "example.com", token: process.env.VX_TOKEN });
+ * export const config = { matcher: ["/articles/:path*"] };
+ * ```
+ */
+export function verivyxProxy(opts?: NextAdapterOptions): (req: Request) => Promise<Response | undefined> {
+  return verivyxNext(opts).proxy();
 }

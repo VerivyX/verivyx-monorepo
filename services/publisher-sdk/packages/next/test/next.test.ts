@@ -135,8 +135,8 @@ describe("verivyxNext", () => {
    * handler is the authoritative gate.
    */
   describe("proxy()", () => {
-    it("returns 402 for a clear AI-bot UA with no payment header", async () => {
-      // GPTBot matches the "gptbot" needle in the real classifier → ai-bot → 402.
+    it("returns 402 for a clear AI-bot UA (core: not allowed)", async () => {
+      // GPTBot: real core classifies as ai-bot → !allowed → proxy returns 402.
       const vx = verivyxNext({ domain: "ex.com", token: "t" });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
@@ -148,9 +148,18 @@ describe("verivyxNext", () => {
       expect(result?.status).toBe(402);
     });
 
-    it("returns undefined (pass-through) for a normal browser UA", async () => {
-      // A Chrome UA has no matching needle → human → proxy lets it through.
-      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+    it("returns undefined (pass-through) for an allowed human (mocked core)", async () => {
+      // proxy() is the authoritative gate — uses full core pipeline.
+      // Inject a stub core returning allowed:true directly (no network needed).
+      const allowedCore: Verivyx = {
+        protect: async () => ({
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        }),
+      } as unknown as Verivyx;
+      const vx = verivyxNext({ domain: "ex.com", token: "t", _core: allowedCore });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
         new Request("https://ex.com/articles/x", {
@@ -163,10 +172,17 @@ describe("verivyxNext", () => {
       expect(result).toBeUndefined();
     });
 
-    it("returns undefined (pass-through) when a payment header is present", async () => {
-      // Even a GPTBot UA is passed through when PAYMENT-SIGNATURE is present;
-      // the route handler handles authorization.
-      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+    it("returns undefined (pass-through) when payment is settled (mocked core)", async () => {
+      // proxy() now runs the full pipeline. When allowed + no paymentResponse → undefined.
+      const paidCore: Verivyx = {
+        protect: async () => ({
+          allowed: true,
+          reason: "paid" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        }),
+      } as unknown as Verivyx;
+      const vx = verivyxNext({ domain: "ex.com", token: "t", _core: paidCore });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
         new Request("https://ex.com/articles/x", {
