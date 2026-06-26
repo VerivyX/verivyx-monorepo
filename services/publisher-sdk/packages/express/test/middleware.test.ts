@@ -56,6 +56,15 @@ describe("verivyxMiddleware (express)", () => {
     )(fakeReq("/articles/a", "agent", { "payment-signature": "sig" }), res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(res.headers["payment-response"]).toBe("settled");
+    expect(res._body).toBeUndefined();
+  });
+
+  it("core throws: calls next(err)", async () => {
+    const next = vi.fn();
+    const boom = new Error("boom");
+    const core = { protect: async () => { throw boom; } } as any;
+    await verivyxMiddleware(opts(core))(fakeReq("/articles/a", "GPTBot"), fakeRes(), next);
+    expect(next).toHaveBeenCalledWith(boom);
   });
 
   it("match: non-matching path → next(), core not called", async () => {

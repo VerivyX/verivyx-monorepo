@@ -399,7 +399,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
       return async (req, res, next) => {
         try {
           const rawPath = req.originalUrl ?? req.url ?? "/";
-          const pathname = rawPath.split("?")[0] ?? rawPath;
+          const pathname = rawPath.split("?")[0]!;
 
           // If match patterns are configured and this path doesn't match, pass through.
           if (
