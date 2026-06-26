@@ -1354,7 +1354,7 @@ function pruneProvisionPending(): void {
 app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Response) => {
   const ip = reqIp(req);
   if (!rateLimit(`sdkinit:${ip}`, 10, 60 * 60_000)) {
-    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    return res.status(429).json({ error: 'rate_limited' });
   }
   pruneProvisionPending();
   const nonce = newNonce();
@@ -1368,7 +1368,7 @@ app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Resp
 app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, res: Response) => {
   const ip = reqIp(req);
   if (!rateLimit(`sdkverify:${ip}`, 10, 60 * 60_000)) {
-    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    return res.status(429).json({ error: 'rate_limited' });
   }
   const site = String(req.body?.site ?? '').trim().toLowerCase();
   const nonce = String(req.body?.nonce ?? '').trim();
