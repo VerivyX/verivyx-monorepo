@@ -1,6 +1,6 @@
 {
   "name": "@verivyx/paywall-hono",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hono adapter for the Verivyx paywall SDK (Cloudflare Workers / Vercel Edge)",
   "type": "module",
   "license": "MIT",

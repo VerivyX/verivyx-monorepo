@@ -93,6 +93,24 @@ function firstHop(xff: string | null | undefined): string | undefined {
 }
 
 /**
+ * Return true when `pathname` matches any of the `patterns`.
+ * Supports `*` (single-segment wildcard) and `**` (multi-segment wildcard).
+ * Performs an anchored full-path match.
+ */
+function pathMatchesAny(pathname: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    // Escape regex metacharacters except * which we handle specially.
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    // Replace ** before * so the two-step substitution is order-safe.
+    const regexStr = escaped
+      .replace(/\*\*/g, "") // placeholder for **
+      .replace(/\*/g, "[^/]*")   // single-segment wildcard
+      .replace(//g, ".*"); // multi-segment wildcard
+    return new RegExp("^" + regexStr + "$").test(pathname);
+  });
+}
+
+/**
  * Extract the last non-empty path segment from a URL pathname.
  * Used as a fallback slug when `c.req.param("slug")` is unavailable.
  */
@@ -157,12 +175,15 @@ function withAdvertiseHeaders(res: Response, advertise: DiscoveryOptions | undef
 /**
  * Create a Verivyx Hono adapter.
  *
- * Returns an object with a single `protect(handler)` method that wraps a
- * Hono route handler behind the Verivyx paywall gate.
+ * Returns an object with `protect(handler)` (per-route gate) and
+ * `middleware()` (whole-app settling gate).
  *
  * ```ts
  * const vx = verivyxHono({ domain: "example.com", token: "..." });
+ * // Per-route:
  * app.get("/articles/:slug", vx.protect(async (c) => c.json({ content: "..." })));
+ * // Whole-app:
+ * app.use("*", vx.middleware());
  * ```
  */
 export function verivyxHono(opts?: HonoAdapterOptions): {
@@ -170,6 +191,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
     handler: (c: Context) => Response | Promise<Response>,
     o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
   ): MiddlewareHandler;
+  middleware(): MiddlewareHandler;
 } {
   // Resolve the core: use the injected `_core` (tests) or build the real one.
   // Only pass `verifyWebBotAuth` to the core deps when the caller overrode it;
@@ -186,42 +208,42 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
 
   const trustProxy = opts?.trustProxy !== false; // default true
 
+  /**
+   * Build a core-compatible `Request` from a Hono context.
+   * Resolves the trusted client IP (CF/proxy headers) and sets `x-real-ip`
+   * on the cloned request, or strips forwarding headers when trustProxy:false.
+   *
+   * Security invariant: a client can never inject a fake IP into the core
+   * classifier — either CF/proxy value wins, or no IP is seen at all.
+   */
+  function buildCoreRequest(c: Context): Request {
+    const raw = c.req.raw;
+    const ip = resolveIp(c, trustProxy);
+    if (ip !== undefined) {
+      const headers = new Headers(raw.headers);
+      headers.set("x-real-ip", ip);
+      return new Request(raw, { headers });
+    } else {
+      // trustProxy === false: strip forwarding headers so the client cannot
+      // inject a spoofed IP into the core.
+      const headers = new Headers(raw.headers);
+      headers.delete("x-real-ip");
+      headers.delete("x-forwarded-for");
+      return new Request(raw, { headers });
+    }
+  }
+
   return {
     protect(
       handler: (c: Context) => Response | Promise<Response>,
       o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
     ): MiddlewareHandler {
       return async function verivyxHonoGuard(c): Promise<Response> {
-        // 1. Get the raw Web Request from Hono context.
+        // 1. Build a core-compatible request (IP resolution + header hygiene).
+        const coreReq = buildCoreRequest(c);
         const raw = c.req.raw;
 
-        // 2. Resolve trusted client IP and inject into a cloned request so the
-        //    core classifier reads a reliable address regardless of edge hop.
-        //
-        //    Security invariant:
-        //      trustProxy !== false → resolve IP from CF/proxy headers and set
-        //        x-real-ip on the cloned request (overrides any client value).
-        //      trustProxy === false  → no socket IP is available in edge runtimes;
-        //        strip both x-real-ip and x-forwarded-for so a client cannot
-        //        spoof an IP into the core classifier (core sees no IP → safe).
-        const ip = resolveIp(c, trustProxy);
-        let coreReq: Request;
-        if (ip !== undefined) {
-          const headers = new Headers(raw.headers);
-          headers.set("x-real-ip", ip);
-          // Clone the Request with updated headers. For GET/HEAD this is safe;
-          // the core classify path reads headers only — body stays with raw.
-          coreReq = new Request(raw, { headers });
-        } else {
-          // trustProxy === false: strip forwarding headers so the client cannot
-          // inject a spoofed IP into the core.
-          const headers = new Headers(raw.headers);
-          headers.delete("x-real-ip");
-          headers.delete("x-forwarded-for");
-          coreReq = new Request(raw, { headers });
-        }
-
-        // 3. Resolve slug.
+        // 2. Resolve slug.
         //    Priority: Hono named param "slug" > last URL path segment.
         const paramSlug: string | undefined = c.req.param("slug");
         const slug: string =
@@ -229,10 +251,10 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
             ? paramSlug
             : lastPathSegment(new URL(raw.url).pathname);
 
-        // 4. Ask the core to evaluate the request (decision overload).
+        // 3. Ask the core to evaluate the request (decision overload).
         const decision = await vx.protect(coreReq, { slug });
 
-        // 5. Denied — check if this is a crawler/human-unverified that we can
+        // 4. Denied — check if this is a crawler/human-unverified that we can
         //    serve an SEO preview to instead of a bare 402. Handler NOT called.
         if (!decision.allowed) {
           const isPreviewCandidate =
@@ -246,10 +268,10 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           return withAdvertiseHeaders(decision.response(), opts?.advertise);
         }
 
-        // 6. Allowed — call the original Hono handler.
+        // 5. Allowed — call the original Hono handler.
         const res = await handler(c);
 
-        // 7. Attach the settlement receipt header when a payment was processed,
+        // 6. Attach the settlement receipt header when a payment was processed,
         //    then attach discovery headers (single clone when both apply).
         return withAdvertiseHeaders(
           attachPaymentResponse(res, decision.paymentResponse),
@@ -257,5 +279,57 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         );
       };
     },
+
+    middleware(): MiddlewareHandler {
+      return async (c, next) => {
+        // 1. Path-match filter: when match is set, skip non-matching paths.
+        const pathname = c.req.path;
+        if (opts?.match !== undefined && opts.match.length > 0 && !pathMatchesAny(pathname, opts.match)) {
+          return next();
+        }
+
+        // 2. Build a core-compatible request (IP resolution + header hygiene).
+        const coreReq = buildCoreRequest(c);
+
+        // 3. Slug = last path segment (middleware has no named :slug param).
+        const slug = pathname.split("/").filter(Boolean).pop() ?? "";
+
+        // 4. Gate decision.
+        const decision = await vx.protect(coreReq, { slug });
+
+        if (decision.allowed) {
+          // 5a. Allowed — run downstream handlers first.
+          await next();
+          // 5b. Attach settlement receipt on the outbound response.
+          //     After next(), c.res holds the downstream Response.
+          //     Reassign to a mutable clone so we can set the header.
+          if (decision.paymentResponse !== undefined) {
+            c.res = new Response(c.res.body, c.res);
+            c.res.headers.set("PAYMENT-RESPONSE", decision.paymentResponse);
+          }
+          return;
+        }
+
+        // 5c. Blocked — short-circuit; next() is NOT called.
+        return withAdvertiseHeaders(decision.response(), opts?.advertise);
+      };
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Top-level convenience export
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole-app Hono middleware that gates every matched route behind the
+ * Verivyx settling paywall.
+ *
+ * ```ts
+ * import { verivyxHonoMiddleware } from "@verivyx/paywall-hono";
+ * app.use("*", verivyxHonoMiddleware({ domain: "example.com", token: "..." }));
+ * ```
+ */
+export function verivyxHonoMiddleware(opts?: HonoAdapterOptions): MiddlewareHandler {
+  return verivyxHono(opts).middleware();
 }
