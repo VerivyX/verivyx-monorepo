@@ -109,9 +109,9 @@ export default function SdkDocs() {
         </Link>
       </div>
       <P>
-        The wizard walks you through three steps: add your domain, prove ownership via a
-        well-known file, and get your token + ready-to-paste snippet. You can re-issue the token at any time
-        if it is rotated or lost.
+        The wizard walks you through three steps: add your domain, prove ownership via a DNS TXT record
+        (<C>verivyx-site-verification=&lt;code&gt;</C> at your apex domain), and get your token + ready-to-paste
+        snippet. You can re-issue the token at any time if it is rotated or lost.
       </P>
 
       <H2 id="install-next">Next.js (App Router)</H2>
