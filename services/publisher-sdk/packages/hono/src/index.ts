@@ -122,6 +122,41 @@ function pathMatchesAny(pathname: string, patterns: string[]): boolean {
 }
 
 /**
+ * Rebuild the absolute request URL using `X-Forwarded-Host` / `X-Forwarded-Proto`
+ * when `trustProxy` is enabled, so the x402 resource URL reflects the public host
+ * rather than the internal address assigned by a reverse proxy.
+ *
+ * When `trustProxy` is false the raw request URL is returned unchanged.
+ */
+function publicUrl(req: Request, trustProxy: boolean): string {
+  if (!trustProxy) return req.url;
+  const u = new URL(req.url);
+  const fwdProto = req.headers.get("x-forwarded-proto");
+  if (fwdProto) {
+    const p = fwdProto.split(",")[0];
+    if (p !== undefined) u.protocol = p.trim() + ":";
+  }
+  const fwdHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (fwdHost) {
+    const h = fwdHost.split(",")[0];
+    if (h !== undefined) {
+      const trimmed = h.trim();
+      // If the forwarded host includes a port ("host:port"), split it.
+      // Otherwise clear any internal port so we only expose the public host.
+      const colonIdx = trimmed.lastIndexOf(":");
+      if (colonIdx !== -1) {
+        u.hostname = trimmed.slice(0, colonIdx);
+        u.port = trimmed.slice(colonIdx + 1);
+      } else {
+        u.hostname = trimmed;
+        u.port = "";
+      }
+    }
+  }
+  return u.toString();
+}
+
+/**
  * Extract the last non-empty path segment from a URL pathname.
  * Used as a fallback slug when `c.req.param("slug")` is unavailable.
  */
@@ -230,17 +265,18 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
   function buildCoreRequest(c: Context): Request {
     const raw = c.req.raw;
     const ip = resolveIp(c, trustProxy);
+    const url = publicUrl(raw, trustProxy);
     if (ip !== undefined) {
       const headers = new Headers(raw.headers);
       headers.set("x-real-ip", ip);
-      return new Request(raw, { headers });
+      return new Request(url, { method: raw.method, headers });
     } else {
       // trustProxy === false: strip forwarding headers so the client cannot
       // inject a spoofed IP into the core.
       const headers = new Headers(raw.headers);
       headers.delete("x-real-ip");
       headers.delete("x-forwarded-for");
-      return new Request(raw, { headers });
+      return new Request(url, { method: raw.method, headers });
     }
   }
 
@@ -272,7 +308,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
             decision.reason === "crawler" || decision.reason === "human-unverified";
           if (isPreviewCandidate && o?.seoPreview !== undefined) {
             return withAdvertiseHeaders(
-              buildSeoPreviewResponse(slug, raw.url, o.seoPreview),
+              buildSeoPreviewResponse(slug, publicUrl(raw, trustProxy), o.seoPreview),
               opts?.advertise,
             );
           }
@@ -327,7 +363,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           decision.reason === "crawler" || decision.reason === "human-unverified";
         if (isPreviewCandidate && opts?.seoPreview !== undefined) {
           return withAdvertiseHeaders(
-            buildSeoPreviewResponse(slug, c.req.raw.url, opts.seoPreview),
+            buildSeoPreviewResponse(slug, publicUrl(c.req.raw, trustProxy), opts.seoPreview),
             opts.advertise,
           );
         }

@@ -170,6 +170,41 @@ function resolveIp(
 // (buildSeoPreviewResponse and attachPaymentResponse are imported from @verivyx/paywall)
 
 /**
+ * Rebuild the absolute request URL using `X-Forwarded-Host` / `X-Forwarded-Proto`
+ * when `trustProxy` is enabled, so the x402 resource URL reflects the public host
+ * rather than the internal address assigned by a reverse proxy.
+ *
+ * When `trustProxy` is false the raw `req.url` is returned unchanged.
+ */
+function publicUrl(req: Request, trustProxy: boolean): string {
+  if (!trustProxy) return req.url;
+  const u = new URL(req.url);
+  const fwdProto = req.headers.get("x-forwarded-proto");
+  if (fwdProto) {
+    const p = fwdProto.split(",")[0];
+    if (p !== undefined) u.protocol = p.trim() + ":";
+  }
+  const fwdHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (fwdHost) {
+    const h = fwdHost.split(",")[0];
+    if (h !== undefined) {
+      const trimmed = h.trim();
+      // If the forwarded host includes a port ("host:port"), split it.
+      // Otherwise clear any internal port so we only expose the public host.
+      const colonIdx = trimmed.lastIndexOf(":");
+      if (colonIdx !== -1) {
+        u.hostname = trimmed.slice(0, colonIdx);
+        u.port = trimmed.slice(colonIdx + 1);
+      } else {
+        u.hostname = trimmed;
+        u.port = "";
+      }
+    }
+  }
+  return u.toString();
+}
+
+/**
  * Convert a glob pattern (`/articles/*`, `/articles/**`) to a RegExp.
  * Rules:
  *   `**` matches any characters including `/`.
@@ -279,7 +314,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
       headers.delete("x-real-ip");
       headers.delete("x-forwarded-for");
     }
-    return new Request(req.url, { method: req.method, headers });
+    return new Request(publicUrl(req, trustProxy), { method: req.method, headers });
   }
 
   return {
@@ -311,7 +346,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
             decision.reason === "crawler" || decision.reason === "human-unverified";
           if (isPreviewCandidate && o?.seoPreview !== undefined) {
             return withAdvertiseHeaders(
-              buildSeoPreviewResponse(resolvedSlug, req.url, o.seoPreview),
+              buildSeoPreviewResponse(resolvedSlug, publicUrl(req, trustProxy), o.seoPreview),
               opts?.advertise,
             );
           }
@@ -387,7 +422,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
           decision.reason === "crawler" || decision.reason === "human-unverified";
         if (isPreviewCandidate && opts?.seoPreview !== undefined) {
           return withAdvertiseHeaders(
-            buildSeoPreviewResponse(slug, req.url, opts.seoPreview),
+            buildSeoPreviewResponse(slug, publicUrl(req, trustProxy), opts.seoPreview),
             opts.advertise,
           );
         }

@@ -158,6 +158,33 @@ describe("verivyxHono", () => {
     expect(capturedIp()).toBe("1.2.3.4");
   });
 
+  it("honors x-forwarded-host/proto for the core request URL (trustProxy)", async () => {
+    let seenUrl = "";
+    const core: Verivyx = {
+      protect: async (r: Request) => {
+        seenUrl = r.url;
+        return {
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        };
+      },
+    } as unknown as Verivyx;
+    const vx = verivyxHono({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(async (c) => c.body("ok", 200)));
+    await a.request("https://internal-host:3100/articles/a", {
+      headers: {
+        "x-forwarded-host": "demo.example.com",
+        "x-forwarded-proto": "https",
+        "user-agent": "Mozilla/5.0",
+      },
+    });
+    expect(new URL(seenUrl).host).toBe("demo.example.com");
+    expect(new URL(seenUrl).protocol).toBe("https:");
+  });
+
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
     const { core, capturedIp } = makeCaptureCore();
     const vx = verivyxHono({ domain: "ex.com", token: "t", trustProxy: false, _core: core });

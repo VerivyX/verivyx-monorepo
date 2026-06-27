@@ -242,6 +242,35 @@ describe("verivyxNext", () => {
     expect(capturedIp()).toBe("5.5.5.5");
   });
 
+  it("honors x-forwarded-host/proto for the core request URL (trustProxy)", async () => {
+    let seenUrl = "";
+    const core: Verivyx = {
+      protect: async (r: Request) => {
+        seenUrl = r.url;
+        return {
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        };
+      },
+    } as unknown as Verivyx;
+    const vx = verivyxNext({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    const GET = vx.protect(vi.fn(async () => new Response("ok")));
+    await GET(
+      new Request("https://internal-host:3100/articles/a", {
+        headers: {
+          "x-forwarded-host": "demo.example.com",
+          "x-forwarded-proto": "https",
+          "user-agent": "Mozilla/5.0",
+        },
+      }),
+      { params: Promise.resolve({ slug: "a" }) },
+    );
+    expect(new URL(seenUrl).host).toBe("demo.example.com");
+    expect(new URL(seenUrl).protocol).toBe("https:");
+  });
+
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
     const { core, capturedIp } = makeCaptureCore();
     const vx = verivyxNext({ domain: "ex.com", token: "t", trustProxy: false, _core: core });
