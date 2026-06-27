@@ -352,7 +352,10 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
             if (isHU && opts?.humanUnlock !== undefined) {
               const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
               const html = buildUnlockHtml({ slug, url: publicUrl(raw, trustProxy), authBase, domain: cfg.domain, seo });
-              return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+              return withAdvertiseHeaders(
+                new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+                opts?.advertise,
+              );
             }
             return withAdvertiseHeaders(
               buildSeoPreviewResponse(slug, publicUrl(raw, trustProxy), o.seoPreview),
@@ -417,7 +420,10 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           if (isHU && opts?.humanUnlock !== undefined) {
             const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
             const html = buildUnlockHtml({ slug, url: publicUrl(c.req.raw, trustProxy), authBase, domain: cfg.domain, seo });
-            return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+            return withAdvertiseHeaders(
+              new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+              opts?.advertise,
+            );
           }
           return withAdvertiseHeaders(
             buildSeoPreviewResponse(slug, publicUrl(c.req.raw, trustProxy), opts.seoPreview),

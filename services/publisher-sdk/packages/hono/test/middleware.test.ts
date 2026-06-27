@@ -191,6 +191,22 @@ describe("verivyxHonoMiddleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it("middleware/humanUnlock + advertise: unlock 200 response carries Link + Content-Usage headers", async () => {
+    const next = vi.fn();
+    const c = fakeCtx("/articles/a", "Mozilla/5.0", { "accept": "text/html" });
+    const out = await verivyxHonoMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+      advertise: { licenseUrl: "https://ex.com/license.xml" },
+    })(c, next);
+    expect((out as Response).status).toBe(200);
+    expect(await (out as Response).text()).toContain("crypto.subtle.digest");
+    expect((out as Response).headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect((out as Response).headers.get("link")).toContain('rel="license"');
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it("seoPreview: bot-unpaid + seoPreview → still 402, next NOT called", async () => {
     const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
     const next = vi.fn();

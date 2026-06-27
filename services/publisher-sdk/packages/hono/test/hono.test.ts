@@ -380,6 +380,25 @@ describe("verivyxHono", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("protect/humanUnlock + advertise: unlock 200 response carries Link + Content-Usage headers", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+      advertise: { licenseUrl: "https://ex.com/license.xml" },
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("falls back to last path segment when :slug param missing", async () => {
     const vx = verivyxHono({
       domain: "ex.com",
