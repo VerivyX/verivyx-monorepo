@@ -26,8 +26,10 @@
 import type { Request as ExpressRequest, RequestHandler, Response as ExpressResponse, NextFunction } from "express";
 import {
   verivyx,
+  resolveConfig,
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
+  buildUnlockHtml,
   rslLinkHeader,
   contentUsageHeader,
 } from "@verivyx/paywall";
@@ -103,6 +105,16 @@ export interface ExpressAdapterOptions extends VerivyxOptions {
    * are set, the per-call value takes precedence.
    */
   seoPreview?: (ctx: { slug: string }) => { title: string; excerpt: string };
+
+  /**
+   * When set, human-unverified real-browser visitors receive an interactive
+   * PoW unlock page (from core's `buildUnlockHtml`) instead of the static
+   * teaser. Crawlers always get the static teaser. Machines still get 402.
+   *
+   * `authBase` overrides the API base used for the challenge/verify endpoints
+   * (defaults to `cfg.apiBase` / VERIVYX_API_BASE).
+   */
+  humanUnlock?: { authBase?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +387,10 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
         : {}),
     });
 
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const env: Record<string, string | undefined> = proc?.env ?? {};
+  const cfg = resolveConfig(opts, env);
+
   return {
     protect(
       handler: RequestHandler,
@@ -402,10 +418,19 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
           //     Accept includes text/html). Machine clients / x402 agents must
           //     receive the 402 so they can pay.
           if (!decision.allowed) {
+            const isHU = decision.reason === "human-unverified";
             const previewable =
               decision.reason === "crawler" ||
-              (decision.reason === "human-unverified" && isBrowserNavigation(webReq));
+              (isHU && isBrowserNavigation(webReq));
             if (previewable && o?.seoPreview !== undefined) {
+              const seo = o.seoPreview({ slug });
+              if (isHU && opts?.humanUnlock !== undefined) {
+                const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+                const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, seo });
+                attachAdvertiseHeaders(res, opts?.advertise);
+                await sendWebResponse(res, new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
+                return;
+              }
               attachAdvertiseHeaders(res, opts?.advertise);
               await sendWebResponse(res, buildSeoPreviewResponse(slug, webReq.url, o.seoPreview));
               return;
@@ -459,10 +484,19 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
           // Denied — crawlers always get the SEO teaser; human-unverified only
           // gets the teaser for real browser navigations (Sec-Fetch-Mode or
           // Accept:text/html). Machine clients / x402 agents must get the 402.
+          const isHU = decision.reason === "human-unverified";
           const previewable =
             decision.reason === "crawler" ||
-            (decision.reason === "human-unverified" && isBrowserNavigation(webReq));
+            (isHU && isBrowserNavigation(webReq));
           if (previewable && opts?.seoPreview !== undefined) {
+            const seo = opts.seoPreview({ slug });
+            if (isHU && opts?.humanUnlock !== undefined) {
+              const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+              const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, seo });
+              attachAdvertiseHeaders(res, opts?.advertise);
+              await sendWebResponse(res, new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
+              return;
+            }
             attachAdvertiseHeaders(res, opts?.advertise);
             await sendWebResponse(res, buildSeoPreviewResponse(slug, webReq.url, opts.seoPreview));
             return;

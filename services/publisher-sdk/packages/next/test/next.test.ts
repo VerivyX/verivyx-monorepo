@@ -358,6 +358,114 @@ describe("verivyxNext", () => {
     expect(new URL(seenUrl).protocol).toBe("https:");
   });
 
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers (protect)
+  // ---------------------------------------------------------------------------
+
+  it("protect/humanUnlock: human-unverified + browser accept:text/html + humanUnlock → 200 unlock page", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no PoW script)", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: crawler + humanUnlock → static teaser (NO unlock script)", async () => {
+    const crawlerCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "crawler" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: crawlerCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: machine (no browser headers) + humanUnlock → 402", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "*/*" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(402);
+  });
+
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
     const { core, capturedIp } = makeCaptureCore();
     const vx = verivyxNext({ domain: "ex.com", token: "t", trustProxy: false, _core: core });

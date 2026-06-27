@@ -34,6 +34,7 @@ import {
   resolveConfig,
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
+  buildUnlockHtml,
   attachPaymentResponse,
   rslLinkHeader,
   contentUsageHeader,
@@ -97,6 +98,16 @@ export interface NextAdapterOptions extends VerivyxOptions {
    * are set, the per-call value takes precedence.
    */
   seoPreview?: (ctx: { slug: string }) => { title: string; excerpt: string };
+
+  /**
+   * When set, human-unverified real-browser visitors receive an interactive
+   * PoW unlock page (from core's `buildUnlockHtml`) instead of the static
+   * teaser. Crawlers always get the static teaser. Machines still get 402.
+   *
+   * `authBase` overrides the API base used for the challenge/verify endpoints
+   * (defaults to `cfg.apiBase` / VERIVYX_API_BASE).
+   */
+  humanUnlock?: { authBase?: string };
 }
 
 /**
@@ -367,10 +378,20 @@ export function verivyxNext(opts?: NextAdapterOptions): {
         //     or Accept includes text/html). Machine clients / x402 agents
         //     (no browser headers) must receive the 402 so they can pay.
         if (!decision.allowed) {
+          const isHU = decision.reason === "human-unverified";
           const previewable =
             decision.reason === "crawler" ||
-            (decision.reason === "human-unverified" && isBrowserNavigation(req));
+            (isHU && isBrowserNavigation(req));
           if (previewable && o?.seoPreview !== undefined) {
+            const seo = o.seoPreview({ slug: resolvedSlug });
+            if (isHU && opts?.humanUnlock !== undefined) {
+              const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+              const html = buildUnlockHtml({ slug: resolvedSlug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, seo });
+              return withAdvertiseHeaders(
+                new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+                opts?.advertise,
+              );
+            }
             return withAdvertiseHeaders(
               buildSeoPreviewResponse(resolvedSlug, publicUrl(req, trustProxy), o.seoPreview),
               opts?.advertise,
@@ -445,10 +466,20 @@ export function verivyxNext(opts?: NextAdapterOptions): {
         // Denied — crawlers always get the SEO teaser; human-unverified only
         // gets the teaser when this is a real browser navigation (Sec-Fetch-Mode
         // or Accept:text/html). Machine clients / x402 agents must get the 402.
+        const isHU = decision.reason === "human-unverified";
         const previewable =
           decision.reason === "crawler" ||
-          (decision.reason === "human-unverified" && isBrowserNavigation(req));
+          (isHU && isBrowserNavigation(req));
         if (previewable && opts?.seoPreview !== undefined) {
+          const seo = opts.seoPreview({ slug });
+          if (isHU && opts?.humanUnlock !== undefined) {
+            const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+            const html = buildUnlockHtml({ slug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, seo });
+            return withAdvertiseHeaders(
+              new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+              opts.advertise,
+            );
+          }
           return withAdvertiseHeaders(
             buildSeoPreviewResponse(slug, publicUrl(req, trustProxy), opts.seoPreview),
             opts.advertise,

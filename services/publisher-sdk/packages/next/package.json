@@ -1,6 +1,6 @@
 {
   "name": "@verivyx/paywall-next",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Next.js adapter for the Verivyx paywall SDK",
   "type": "module",
   "license": "MIT",
@@ -34,7 +34,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@verivyx/paywall": "^0.1.0"
+    "@verivyx/paywall": "^0.2.0"
   },
   "peerDependencies": {
     "next": ">=15 <17",

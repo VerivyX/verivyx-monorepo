@@ -116,4 +116,52 @@ describe("verivyxProxy settling gate", () => {
     expect(out?.status).toBe(200);
     expect(out?.headers.get("content-type")).toContain("text/html");
   });
+
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers
+  // ---------------------------------------------------------------------------
+
+  it("humanUnlock: human-unverified + browser accept:text/html + humanUnlock:{} → 200 unlock page with PoW script", async () => {
+    const huCore = coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) });
+    const out = await verivyxProxy({
+      ...opts(huCore),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }));
+    expect(out!.status).toBe(200);
+    expect(await out!.text()).toContain("crypto.subtle.digest");
+  });
+
+  it("humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no unlock script)", async () => {
+    const huCore = coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) });
+    const out = await verivyxProxy({
+      ...opts(huCore),
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }));
+    expect(out!.status).toBe(200);
+    const body = await out!.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("humanUnlock: crawler + humanUnlock + browser → static teaser (NO unlock script)", async () => {
+    const crawlerCore = coreReturning({ allowed: false, reason: "crawler", response: () => new Response("x", { status: 402 }) });
+    const out = await verivyxProxy({
+      ...opts(crawlerCore),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }));
+    expect(out!.status).toBe(200);
+    const body = await out!.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("humanUnlock: machine (no browser headers) + humanUnlock → 402", async () => {
+    const huCore = coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) });
+    const out = await verivyxProxy({
+      ...opts(huCore),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(new Request("https://pub.com/seven-wonders", { headers: { "accept": "*/*" } }));
+    expect(out!.status).toBe(402);
+  });
 });

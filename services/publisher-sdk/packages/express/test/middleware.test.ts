@@ -139,6 +139,60 @@ describe("verivyxMiddleware (express)", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers (middleware)
+  // ---------------------------------------------------------------------------
+
+  it("middleware/humanUnlock: human-unverified + browser accept:text/html + humanUnlock → 200 unlock page with PoW script", async () => {
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(fakeReq("/articles/a", "Mozilla/5.0", { "accept": "text/html" }), res, next);
+    expect(res.statusCode).toBe(200);
+    expect(res._body.toString()).toContain("crypto.subtle.digest");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("middleware/humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no PoW script)", async () => {
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(fakeReq("/articles/a", "Mozilla/5.0", { "accept": "text/html" }), res, next);
+    expect(res.statusCode).toBe(200);
+    expect(res._body.toString()).not.toContain("crypto.subtle.digest");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("middleware/humanUnlock: crawler + humanUnlock → static teaser (NO unlock script)", async () => {
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "crawler", response: () => new Response("x", { status: 402 }) })),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(fakeReq("/articles/a", "Googlebot/2.1", { "accept": "text/html" }), res, next);
+    expect(res.statusCode).toBe(200);
+    expect(res._body.toString()).not.toContain("crypto.subtle.digest");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("middleware/humanUnlock: machine (accept:*/*) + humanUnlock → 402, next NOT called", async () => {
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      humanUnlock: {},
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    })(fakeReq("/articles/a", "undici/5.0", { "accept": "*/*" }), res, next);
+    expect(res.statusCode).toBe(402);
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it("seoPreview: bot-unpaid + seoPreview → still 402, next NOT called", async () => {
     const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
     const next = vi.fn();

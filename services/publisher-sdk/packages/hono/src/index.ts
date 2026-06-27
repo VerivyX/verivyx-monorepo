@@ -23,8 +23,10 @@
 
 import {
   verivyx,
+  resolveConfig,
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
+  buildUnlockHtml,
   attachPaymentResponse,
   rslLinkHeader,
   contentUsageHeader,
@@ -88,6 +90,16 @@ export interface HonoAdapterOptions extends VerivyxOptions {
    * are set, the per-call value takes precedence.
    */
   seoPreview?: (ctx: { slug: string }) => { title: string; excerpt: string };
+
+  /**
+   * When set, human-unverified real-browser visitors receive an interactive
+   * PoW unlock page (from core's `buildUnlockHtml`) instead of the static
+   * teaser. Crawlers always get the static teaser. Machines still get 402.
+   *
+   * `authBase` overrides the API base used for the challenge/verify endpoints
+   * (defaults to `cfg.apiBase` / VERIVYX_API_BASE).
+   */
+  humanUnlock?: { authBase?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +286,10 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
 
   const trustProxy = opts?.trustProxy !== false; // default true
 
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const env: Record<string, string | undefined> = proc?.env ?? {};
+  const cfg = resolveConfig(opts, env);
+
   /**
    * Build a core-compatible `Request` from a Hono context.
    * Resolves the trusted client IP (CF/proxy headers) and sets `x-real-ip`
@@ -327,10 +343,17 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         //    includes text/html). Machine clients / x402 agents must get the 402.
         //    Handler NOT called.
         if (!decision.allowed) {
+          const isHU = decision.reason === "human-unverified";
           const previewable =
             decision.reason === "crawler" ||
-            (decision.reason === "human-unverified" && isBrowserNavigation(c.req.raw));
+            (isHU && isBrowserNavigation(c.req.raw));
           if (previewable && o?.seoPreview !== undefined) {
+            const seo = o.seoPreview({ slug });
+            if (isHU && opts?.humanUnlock !== undefined) {
+              const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+              const html = buildUnlockHtml({ slug, url: publicUrl(raw, trustProxy), authBase, domain: cfg.domain, seo });
+              return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+            }
             return withAdvertiseHeaders(
               buildSeoPreviewResponse(slug, publicUrl(raw, trustProxy), o.seoPreview),
               opts?.advertise,
@@ -385,10 +408,17 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         //     only gets the teaser for real browser navigations (Sec-Fetch-Mode
         //     or Accept:text/html). Machine clients / x402 agents get the 402.
         //     next() is NOT called.
+        const isHU = decision.reason === "human-unverified";
         const previewable =
           decision.reason === "crawler" ||
-          (decision.reason === "human-unverified" && isBrowserNavigation(c.req.raw));
+          (isHU && isBrowserNavigation(c.req.raw));
         if (previewable && opts?.seoPreview !== undefined) {
+          const seo = opts.seoPreview({ slug });
+          if (isHU && opts?.humanUnlock !== undefined) {
+            const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+            const html = buildUnlockHtml({ slug, url: publicUrl(c.req.raw, trustProxy), authBase, domain: cfg.domain, seo });
+            return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+          }
           return withAdvertiseHeaders(
             buildSeoPreviewResponse(slug, publicUrl(c.req.raw, trustProxy), opts.seoPreview),
             opts.advertise,

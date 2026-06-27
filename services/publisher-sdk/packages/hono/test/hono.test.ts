@@ -312,6 +312,74 @@ describe("verivyxHono", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers (protect)
+  // ---------------------------------------------------------------------------
+
+  it("protect/humanUnlock: human-unverified + browser accept:text/html + humanUnlock → 200 unlock page with PoW script", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no PoW script)", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: crawler + humanUnlock → static teaser (NO unlock script)", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "crawler" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: machine (accept:*/*) + humanUnlock → 402", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "*/*" } });
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("falls back to last path segment when :slug param missing", async () => {
     const vx = verivyxHono({
       domain: "ex.com",
