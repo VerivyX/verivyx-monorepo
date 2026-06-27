@@ -2,7 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
+  ArrowLeft,
   Bot,
   CheckCircle2,
   Copy,
@@ -15,7 +17,6 @@ import {
   Zap,
 } from 'lucide-react';
 import { api, clearSession, getStoredUser, type CreatorUser } from '@/lib/api';
-import { DashboardHeader } from '@/components/DashboardHeader';
 
 // ─── CodeBlock ──────────────────────────────────────────────────────────────
 
@@ -247,26 +248,34 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
   ];
 
   return (
-    <div className="app-shell">
-      <DashboardHeader
-        crumb="Test integration"
-        width="read"
-        actions={
+    <div className="min-h-screen bg-[var(--color-cream-50)]">
+      {/* Header */}
+      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
+          <div className="flex items-center gap-2 text-sm">
+            <Link href="/dashboard" className="btn-ghost text-sm">
+              <ArrowLeft size={14} /> Dashboard
+            </Link>
+            <span className="text-[var(--color-ink-500)]">/</span>
+            <p className="font-semibold tracking-tight">Test integration</p>
+          </div>
           <button
             onClick={async () => { await api.oauthLogout().catch(() => {}); clearSession(); router.push('/'); }}
             className="btn-primary text-sm"
           >
             <LogOut size={14} /> Logout
           </button>
-        }
-      />
+        </div>
+      </header>
 
-      <main className="app-main app-width-read">
+      <main className="mx-auto max-w-4xl px-6 py-10">
         {/* Page title */}
         <div>
-          <p className="eyebrow">Integration · {domain}</p>
-          <h1 className="page-title">Test your integration</h1>
-          <p className="page-lead">
+          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+            Integration · {domain}
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">Test your integration</h1>
+          <p className="mt-2 text-sm text-[var(--color-ink-500)]">
             Run these curl commands from a terminal to walk through each access flow end-to-end.
           </p>
         </div>
@@ -313,10 +322,10 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
         {/* ── Section 1: Bot/AI Agent Flow ─────────────────────────────────── */}
         <div className="mt-10">
           <SectionHeader
-            icon={<Bot size={18} className="text-[var(--color-stellar-violet)]" />}
-            title="Bot / AI agent flow"
+            icon={<Bot size={18} className="text-indigo-500" />}
+            title="Bot / AI Agent Flow"
             subtitle="Walk through the full x402 payment cycle as an AI agent would experience it."
-            borderColor="border-[var(--color-stellar-violet)]"
+            borderColor="border-indigo-400"
           />
           <div className="mt-6">
             {botSteps.map((s, idx) => (
@@ -326,7 +335,7 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
                 title={s.title}
                 description={s.description}
                 code={s.code}
-                accentColor="bg-[var(--color-stellar-violet-soft)] text-[var(--color-stellar-violet)]"
+                accentColor="bg-indigo-100 text-indigo-700"
               />
             ))}
           </div>
@@ -335,10 +344,10 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
         {/* ── Section 2: Human Verification Flow ───────────────────────────── */}
         <div className="mt-6">
           <SectionHeader
-            icon={<Heart size={18} className="text-[var(--color-stellar-mint-700)]" />}
-            title="Human verification flow"
+            icon={<Heart size={18} className="text-emerald-500" />}
+            title="Human Verification Flow"
             subtitle="Simulate the proof-of-work challenge that real browsers solve to gain free access."
-            borderColor="border-[var(--color-stellar-mint)]"
+            borderColor="border-emerald-400"
           />
           <div className="mt-6">
             {humanSteps.map((s, idx) => (
@@ -348,7 +357,7 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
                 title={s.title}
                 description={s.description}
                 code={s.code}
-                accentColor="bg-[color-mix(in_srgb,var(--color-stellar-mint)_18%,transparent)] text-[var(--color-stellar-mint-700)]"
+                accentColor="bg-emerald-100 text-emerald-700"
               />
             ))}
           </div>
@@ -357,17 +366,17 @@ curl -X POST ${origin}/api/v1/content/hydrate \\
         {/* ── Section 3: System Health ──────────────────────────────────────── */}
         <div className="mt-6">
           <SectionHeader
-            icon={<Zap size={18} className="text-[var(--color-ink-500)]" />}
-            title="System health"
+            icon={<Zap size={18} className="text-slate-500" />}
+            title="System Health"
             subtitle="Quick pings to verify each service is up and responding."
-            borderColor="border-[var(--color-cream-300)]"
+            borderColor="border-slate-300"
           />
           <div className="mt-6 flex flex-col gap-4">
             {healthChecks.map((h) => (
               <div key={h.label} className="flex gap-4">
                 <div className="flex flex-col items-center gap-2 shrink-0">
-                  <div className="grid h-8 w-8 place-items-center rounded-full bg-[var(--color-ink-50)] text-[var(--color-ink-500)]">
-                    <span className="h-2 w-2 rounded-full bg-[var(--color-ink-300)] block" />
+                  <div className="grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-slate-500">
+                    <span className="h-2 w-2 rounded-full bg-slate-400 block" />
                   </div>
                 </div>
                 <div className="flex-1 pb-4">

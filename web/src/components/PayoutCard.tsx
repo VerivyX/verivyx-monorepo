@@ -111,16 +111,16 @@ export default function PayoutCard({ onChange }: { onChange?: (ready: boolean) =
   return (
     <div className="surface-card p-6">
       <div className="flex items-center justify-between">
-        <h2 className="card-title">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Wallet size={18} /> USDC wallet
         </h2>
         {status &&
           (status.ready ? (
-            <span className="status-pill status-pill--ok">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
               <CheckCircle2 size={12} /> Active
             </span>
           ) : (
-            <span className="status-pill status-pill--warn">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
               <AlertTriangle size={12} /> Action needed
             </span>
           ))}
