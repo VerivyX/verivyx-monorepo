@@ -85,9 +85,12 @@ export interface NextAdapterOptions extends VerivyxOptions {
   advertise?: DiscoveryOptions;
 
   /**
-   * When set, unverified humans and search crawlers (reason: "human-unverified"
-   * or "crawler") receive a 200 HTML teaser page instead of a bare 402.
-   * Bots / agents (reason: "bot-unpaid") still get the 402 x402 response.
+   * When set, search crawlers (reason: "crawler") always receive a 200 HTML
+   * teaser page. Unverified humans (reason: "human-unverified") also receive
+   * the teaser — but ONLY when the request is a real browser top-level
+   * navigation (Sec-Fetch-Mode: navigate OR Accept includes text/html).
+   * Machine clients and x402 payment agents that lack those browser headers
+   * receive the 402 x402 response so they can pay.
    *
    * Used by both `protect()` (when set on the factory opts) and `proxy()`.
    * `protect()` also accepts `seoPreview` in its per-call options `o`; if both
@@ -168,6 +171,23 @@ function resolveIp(
 }
 
 // (buildSeoPreviewResponse and attachPaymentResponse are imported from @verivyx/paywall)
+
+/**
+ * Return true when the request looks like a real top-level browser navigation.
+ *
+ * Real browsers send `Sec-Fetch-Mode: navigate` on top-level page loads AND/OR
+ * an `Accept` header that includes `text/html`. Machine clients (undici, fetch,
+ * x402 payment agents) send neither — they must receive the 402 so they can pay.
+ *
+ * Crawlers (search bots) are handled separately: they always get the SEO teaser
+ * regardless of this check, so this function is only consulted for
+ * `reason === "human-unverified"`.
+ */
+function isBrowserNavigation(req: Request): boolean {
+  const secFetchMode = req.headers.get("sec-fetch-mode") ?? "";
+  const accept = req.headers.get("accept") ?? "";
+  return secFetchMode === "navigate" || accept.includes("text/html");
+}
 
 /**
  * Rebuild the absolute request URL using `X-Forwarded-Host` / `X-Forwarded-Proto`
@@ -341,10 +361,16 @@ export function verivyxNext(opts?: NextAdapterOptions): {
 
         // 4a. Denied — check if this is a crawler/human-unverified that we can
         //     serve an SEO preview to instead of a bare 402.
+        //     Crawlers always get the teaser (verified search bots need the
+        //     SEO preview + JSON-LD). human-unverified gets the teaser ONLY
+        //     when this is a real browser navigation (Sec-Fetch-Mode:navigate
+        //     or Accept includes text/html). Machine clients / x402 agents
+        //     (no browser headers) must receive the 402 so they can pay.
         if (!decision.allowed) {
-          const isPreviewCandidate =
-            decision.reason === "crawler" || decision.reason === "human-unverified";
-          if (isPreviewCandidate && o?.seoPreview !== undefined) {
+          const previewable =
+            decision.reason === "crawler" ||
+            (decision.reason === "human-unverified" && isBrowserNavigation(req));
+          if (previewable && o?.seoPreview !== undefined) {
             return withAdvertiseHeaders(
               buildSeoPreviewResponse(resolvedSlug, publicUrl(req, trustProxy), o.seoPreview),
               opts?.advertise,
@@ -416,11 +442,13 @@ export function verivyxNext(opts?: NextAdapterOptions): {
           }
           return undefined;
         }
-        // Denied — check if this is a crawler/human-unverified that we can
-        // serve an SEO preview to instead of a bare 402.
-        const isPreviewCandidate =
-          decision.reason === "crawler" || decision.reason === "human-unverified";
-        if (isPreviewCandidate && opts?.seoPreview !== undefined) {
+        // Denied — crawlers always get the SEO teaser; human-unverified only
+        // gets the teaser when this is a real browser navigation (Sec-Fetch-Mode
+        // or Accept:text/html). Machine clients / x402 agents must get the 402.
+        const previewable =
+          decision.reason === "crawler" ||
+          (decision.reason === "human-unverified" && isBrowserNavigation(req));
+        if (previewable && opts?.seoPreview !== undefined) {
           return withAdvertiseHeaders(
             buildSeoPreviewResponse(slug, publicUrl(req, trustProxy), opts.seoPreview),
             opts.advertise,

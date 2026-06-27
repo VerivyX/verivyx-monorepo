@@ -225,7 +225,7 @@ describe("verivyxHono", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("seoPreview: human-unverified request receives 200 HTML with JSON-LD, handler not called", async () => {
+  it("seoPreview: human-unverified + browser accept:text/html → 200 teaser, handler not called", async () => {
     const vx = verivyxHono({
       domain: "ex.com",
       token: "t",
@@ -239,7 +239,71 @@ describe("verivyxHono", () => {
       seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
     }));
     const res = await a.request("/articles/my-article", {
-      headers: { "user-agent": "Mozilla/5.0" },
+      headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,application/xhtml+xml,*/*" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    const body = await res.text();
+    expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser, handler not called", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Mozilla/5.0", "sec-fetch-mode": "navigate" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + machine headers (accept:*/*) → 402 so x402 agent can pay", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "undici/5.0", "accept": "*/*" },
+    });
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: crawler + no browser headers → still 200 teaser (crawlers always previewed)", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: ({ slug }) => ({ title: `Article: ${slug}`, excerpt: "A teaser." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Googlebot/2.1" },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/text\/html/);

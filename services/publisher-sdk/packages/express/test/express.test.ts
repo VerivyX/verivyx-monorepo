@@ -99,7 +99,7 @@ describe("verivyxExpress", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("seoPreview: human-unverified request receives 200 HTML with JSON-LD, handler not called", async () => {
+  it("seoPreview: human-unverified + browser accept:text/html → 200 teaser", async () => {
     const vx = verivyxExpress({
       domain: "ex.com",
       token: "t",
@@ -114,7 +114,73 @@ describe("verivyxExpress", () => {
     }));
     const res = await request(app)
       .get("/articles/my-post")
-      .set("User-Agent", "Mozilla/5.0");
+      .set("User-Agent", "Mozilla/5.0")
+      .set("Accept", "text/html,application/xhtml+xml,*/*");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/html/);
+    expect(res.text).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser", async () => {
+    const vx = verivyxExpress({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const app = express();
+    const handler = vi.fn((_req: express.Request, res: express.Response) =>
+      res.status(200).send("SECRET BODY"),
+    );
+    app.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "Mozilla/5.0")
+      .set("Sec-Fetch-Mode", "navigate");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/html/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + machine headers (accept:*/*) → 402 so x402 agent can pay", async () => {
+    const vx = verivyxExpress({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const app = express();
+    const handler = vi.fn((_req: express.Request, res: express.Response) =>
+      res.status(200).send("SECRET BODY"),
+    );
+    app.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "undici/5.0")
+      .set("Accept", "*/*");
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: crawler + no browser headers → still 200 teaser (crawlers always previewed)", async () => {
+    const vx = verivyxExpress({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const app = express();
+    const handler = vi.fn((_req: express.Request, res: express.Response) =>
+      res.status(200).send("SECRET BODY"),
+    );
+    app.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: ({ slug }) => ({ title: `Article: ${slug}`, excerpt: "A teaser." }),
+    }));
+    const res = await request(app)
+      .get("/articles/my-post")
+      .set("User-Agent", "Googlebot/2.1");
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/html/);
     expect(res.text).toMatch(/isAccessibleForFree|vx-paywalled/);

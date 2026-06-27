@@ -81,10 +81,10 @@ describe("verivyxHonoMiddleware", () => {
     expect(called).toBe(false);
   });
 
-  it("seoPreview: human-unverified + seoPreview → 200 text/html teaser, next NOT called", async () => {
+  it("seoPreview: human-unverified + browser accept:text/html → 200 teaser, next NOT called", async () => {
     const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
     const next = vi.fn();
-    const c = fakeCtx("/articles/a", "Mozilla/5.0");
+    const c = fakeCtx("/articles/a", "Mozilla/5.0", { "accept": "text/html,application/xhtml+xml,*/*" });
     const out = await verivyxHonoMiddleware({
       ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
       seoPreview,
@@ -94,6 +94,44 @@ describe("verivyxHonoMiddleware", () => {
     const body = await (out as Response).text();
     expect(body).toContain("Teaser Title");
     expect(body).toContain("Teaser excerpt.");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser, next NOT called", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const next = vi.fn();
+    const c = fakeCtx("/articles/a", "Mozilla/5.0", { "sec-fetch-mode": "navigate" });
+    const out = await verivyxHonoMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    })(c, next);
+    expect((out as Response).status).toBe(200);
+    expect((out as Response).headers.get("content-type")).toContain("text/html");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + machine headers (accept:*/*) → 402, next NOT called", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const next = vi.fn();
+    const c = fakeCtx("/articles/a", "undici/5.0", { "accept": "*/*" });
+    const out = await verivyxHonoMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    })(c, next);
+    expect((out as Response).status).toBe(402);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: crawler + no browser headers → still 200 teaser, next NOT called", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const next = vi.fn();
+    const c = fakeCtx("/articles/a", "Googlebot/2.1");
+    const out = await verivyxHonoMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "crawler", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    })(c, next);
+    expect((out as Response).status).toBe(200);
+    expect((out as Response).headers.get("content-type")).toContain("text/html");
     expect(next).not.toHaveBeenCalled();
   });
 

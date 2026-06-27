@@ -76,9 +76,12 @@ export interface HonoAdapterOptions extends VerivyxOptions {
   advertise?: DiscoveryOptions;
 
   /**
-   * When set, unverified humans and search crawlers (reason: "human-unverified"
-   * or "crawler") receive a 200 HTML teaser page instead of a bare 402.
-   * Bots / agents (reason: "bot-unpaid") still get the 402 x402 response.
+   * When set, search crawlers (reason: "crawler") always receive a 200 HTML
+   * teaser page. Unverified humans (reason: "human-unverified") also receive
+   * the teaser — but ONLY when the request is a real browser top-level
+   * navigation (Sec-Fetch-Mode: navigate OR Accept includes text/html).
+   * Machine clients and x402 payment agents that lack those browser headers
+   * receive the 402 x402 response so they can pay.
    *
    * Used by both `protect()` (when set on the factory opts) and `middleware()`.
    * `protect()` also accepts `seoPreview` in its per-call options `o`; if both
@@ -200,6 +203,23 @@ function resolveIp(c: Context, trustProxy: boolean): string | undefined {
 }
 
 /**
+ * Return true when the request looks like a real top-level browser navigation.
+ *
+ * Real browsers send `Sec-Fetch-Mode: navigate` on top-level page loads AND/OR
+ * an `Accept` header that includes `text/html`. Machine clients (undici, fetch,
+ * x402 payment agents) send neither — they must receive the 402 so they can pay.
+ *
+ * Crawlers (search bots) are handled separately: they always get the SEO teaser
+ * regardless of this check, so this function is only consulted for
+ * `reason === "human-unverified"`.
+ */
+function isBrowserNavigation(req: Request): boolean {
+  const secFetchMode = req.headers.get("sec-fetch-mode") ?? "";
+  const accept = req.headers.get("accept") ?? "";
+  return secFetchMode === "navigate" || accept.includes("text/html");
+}
+
+/**
  * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
  * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
  * Returns the same Response unchanged when `advertise` is undefined.
@@ -301,12 +321,16 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         // 3. Ask the core to evaluate the request (decision overload).
         const decision = await vx.protect(coreReq, { slug });
 
-        // 4. Denied — check if this is a crawler/human-unverified that we can
-        //    serve an SEO preview to instead of a bare 402. Handler NOT called.
+        // 4. Denied — crawlers always get the SEO teaser (verified search bots
+        //    need the preview + JSON-LD). human-unverified gets the teaser ONLY
+        //    for real browser navigations (Sec-Fetch-Mode:navigate or Accept
+        //    includes text/html). Machine clients / x402 agents must get the 402.
+        //    Handler NOT called.
         if (!decision.allowed) {
-          const isPreviewCandidate =
-            decision.reason === "crawler" || decision.reason === "human-unverified";
-          if (isPreviewCandidate && o?.seoPreview !== undefined) {
+          const previewable =
+            decision.reason === "crawler" ||
+            (decision.reason === "human-unverified" && isBrowserNavigation(c.req.raw));
+          if (previewable && o?.seoPreview !== undefined) {
             return withAdvertiseHeaders(
               buildSeoPreviewResponse(slug, publicUrl(raw, trustProxy), o.seoPreview),
               opts?.advertise,
@@ -357,11 +381,14 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           return;
         }
 
-        // 5c. Blocked — check if this is a crawler/human-unverified that we can
-        //     serve an SEO preview to instead of a bare 402. next() is NOT called.
-        const isPreviewCandidate =
-          decision.reason === "crawler" || decision.reason === "human-unverified";
-        if (isPreviewCandidate && opts?.seoPreview !== undefined) {
+        // 5c. Blocked — crawlers always get the SEO teaser; human-unverified
+        //     only gets the teaser for real browser navigations (Sec-Fetch-Mode
+        //     or Accept:text/html). Machine clients / x402 agents get the 402.
+        //     next() is NOT called.
+        const previewable =
+          decision.reason === "crawler" ||
+          (decision.reason === "human-unverified" && isBrowserNavigation(c.req.raw));
+        if (previewable && opts?.seoPreview !== undefined) {
           return withAdvertiseHeaders(
             buildSeoPreviewResponse(slug, publicUrl(c.req.raw, trustProxy), opts.seoPreview),
             opts.advertise,

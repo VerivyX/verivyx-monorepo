@@ -1,6 +1,6 @@
 {
   "name": "@verivyx/paywall-express",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Express adapter for the Verivyx paywall SDK",
   "type": "module",
   "license": "MIT",

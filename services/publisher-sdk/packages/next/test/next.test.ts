@@ -222,6 +222,93 @@ describe("verivyxNext", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Browser-navigation gate: teaser only for real browser navigations
+  // ---------------------------------------------------------------------------
+
+  it("protect/seoPreview: human-unverified + accept:text/html → 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,application/xhtml+xml,*/*" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Mozilla/5.0", "sec-fetch-mode": "navigate" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: human-unverified + machine headers (accept:*/*) → 402", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "undici/5.0", "accept": "*/*" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: crawler + no browser headers → still 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Googlebot/2.1" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
   // IP-trust security: verify what x-real-ip the CORE actually receives.
   // ---------------------------------------------------------------------------
 
