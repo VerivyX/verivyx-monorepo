@@ -83,6 +83,17 @@ export interface NextAdapterOptions extends VerivyxOptions {
    * Default undefined = OFF (no headers added; existing behavior unchanged).
    */
   advertise?: DiscoveryOptions;
+
+  /**
+   * When set, unverified humans and search crawlers (reason: "human-unverified"
+   * or "crawler") receive a 200 HTML teaser page instead of a bare 402.
+   * Bots / agents (reason: "bot-unpaid") still get the 402 x402 response.
+   *
+   * Used by both `protect()` (when set on the factory opts) and `proxy()`.
+   * `protect()` also accepts `seoPreview` in its per-call options `o`; if both
+   * are set, the per-call value takes precedence.
+   */
+  seoPreview?: (ctx: { slug: string }) => { title: string; excerpt: string };
 }
 
 /**
@@ -369,6 +380,16 @@ export function verivyxNext(opts?: NextAdapterOptions): {
             });
           }
           return undefined;
+        }
+        // Denied — check if this is a crawler/human-unverified that we can
+        // serve an SEO preview to instead of a bare 402.
+        const isPreviewCandidate =
+          decision.reason === "crawler" || decision.reason === "human-unverified";
+        if (isPreviewCandidate && opts?.seoPreview !== undefined) {
+          return withAdvertiseHeaders(
+            buildSeoPreviewResponse(slug, req.url, opts.seoPreview),
+            opts.advertise,
+          );
         }
         return withAdvertiseHeaders(decision.response(), opts?.advertise);
       };

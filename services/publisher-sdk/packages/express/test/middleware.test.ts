@@ -85,4 +85,31 @@ describe("verivyxMiddleware (express)", () => {
     expect(next).toHaveBeenCalledOnce();
     expect(called).toBe(false);
   });
+
+  it("seoPreview: human-unverified + seoPreview → 200 text/html teaser, next NOT called", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    })(fakeReq("/articles/a", "Mozilla/5.0"), res, next);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res._body.toString()).toContain("Teaser Title");
+    expect(res._body.toString()).toContain("Teaser excerpt.");
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: bot-unpaid + seoPreview → still 402, next NOT called", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const next = vi.fn();
+    const res = fakeRes();
+    await verivyxMiddleware({
+      ...opts(coreReturning({ allowed: false, reason: "bot-unpaid", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    })(fakeReq("/articles/a", "GPTBot"), res, next);
+    expect(res.statusCode).toBe(402);
+    expect(next).not.toHaveBeenCalled();
+  });
 });

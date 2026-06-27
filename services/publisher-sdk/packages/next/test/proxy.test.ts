@@ -35,4 +35,28 @@ describe("verivyxProxy settling gate", () => {
     expect(await proxy(new Request("https://x.com/pricing", { headers: { "user-agent": "GPTBot" } }))).toBeUndefined();
     expect(called).toBe(false);
   });
+
+  it("seoPreview: human-unverified + seoPreview → 200 text/html teaser (NOT 402)", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const proxy = verivyxProxy({
+      ...opts(coreReturning({ allowed: false, reason: "human-unverified", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    });
+    const out = await proxy(new Request("https://x.com/articles/a", { headers: { "user-agent": "Mozilla/5.0" } }));
+    expect(out?.status).toBe(200);
+    expect(out?.headers.get("content-type")).toContain("text/html");
+    const body = await out!.text();
+    expect(body).toContain("Teaser Title");
+    expect(body).toContain("Teaser excerpt.");
+  });
+
+  it("seoPreview: bot-unpaid + seoPreview → still 402 (teaser is humans/crawlers only)", async () => {
+    const seoPreview = () => ({ title: "Teaser Title", excerpt: "Teaser excerpt." });
+    const proxy = verivyxProxy({
+      ...opts(coreReturning({ allowed: false, reason: "bot-unpaid", response: () => new Response("x", { status: 402 }) })),
+      seoPreview,
+    });
+    const out = await proxy(new Request("https://x.com/articles/a", { headers: { "user-agent": "GPTBot" } }));
+    expect(out?.status).toBe(402);
+  });
 });
