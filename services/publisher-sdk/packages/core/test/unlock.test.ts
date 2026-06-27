@@ -23,9 +23,20 @@ describe("buildUnlockHtml", () => {
   });
   it("embeds the PoW unlock flow targeting the auth base + the challenge/verify endpoints", () => {
     expect(html).toContain("https://api.verivyx.com/api/v1/auth/challenge");
-    expect(html).toContain("/api/v1/auth/verify-human");
+    expect(html).toContain("https://api.verivyx.com/api/v1/auth/verify-human");
     expect(html).toContain("crypto.subtle.digest");
     expect(html).toContain("vx_session=");
+  });
+  it("fingerprint uses server-expected field names (not old short aliases)", () => {
+    expect(html).toContain("userAgent");
+    expect(html).toContain("languages");
+    expect(html).toContain("screenWidth");
+    expect(html).toContain("screenHeight");
+    expect(html).toContain("hardwareConcurrency");
+    // old wrong aliases must not appear
+    expect(html).not.toContain("ua:");
+    expect(html).not.toContain("lang:");
+    expect(html).not.toContain("hc:");
   });
   it("does not allow </script> breakout from injected values", () => {
     const evil = buildUnlockHtml({ slug: "</script><x>", url: "https://p/x", authBase: "https://api.verivyx.com", domain: "d" });

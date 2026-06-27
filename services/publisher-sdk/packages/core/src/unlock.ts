@@ -40,7 +40,7 @@ async function solve(ch,sa,df){var n=0;for(;;){if((lz(await sha(ch+':'+sa+':'+n)
 async function go(){try{
 var r=await fetch(C.challengeUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({domain:C.domain,slug:C.slug})});
 if(!r.ok)throw 0;var c=await r.json();var t0=Date.now();var nonce=await solve(c.challenge,c.salt,c.difficulty);var dur=Date.now()-t0;
-var fp={ua:navigator.userAgent,lang:navigator.language,tz:Intl.DateTimeFormat().resolvedOptions().timeZone,hc:navigator.hardwareConcurrency||0};
+var fp={userAgent:navigator.userAgent,languages:(navigator.languages&&navigator.languages.length)?Array.prototype.slice.call(navigator.languages):[navigator.language],hardwareConcurrency:navigator.hardwareConcurrency||1,screenWidth:screen.width,screenHeight:screen.height};
 var v=await fetch(C.verifyUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({challenge:c.challenge,nonce:nonce,fingerprint:fp,powDurationMs:dur})});
 if(!v.ok)throw 0;var j=await v.json();var tok=j.token||j.sessionToken||j.session;if(!tok)throw 0;
 document.cookie='vx_session='+tok+'; path=/; max-age=1800; SameSite=Lax';location.reload();
