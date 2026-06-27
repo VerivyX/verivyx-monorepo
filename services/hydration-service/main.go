@@ -98,7 +98,9 @@ func processXPaymentHeader(domain, slug, headerValue, agent, category string) (*
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Internal-Token", string(internalTok))
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Settle waits on an on-chain Soroban distribute() (~14s, testnet-variable).
+	// Keep this >= the gateway's relayer timeout so hydration isn't the bottleneck.
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

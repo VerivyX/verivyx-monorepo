@@ -312,7 +312,7 @@ func newFacilitator() *Facilitator {
 		baseURL:       baseURL,
 		apiKey:        os.Getenv("FACILITATOR_API_KEY"),
 		internalToken: os.Getenv("INTERNAL_TOKEN"),
-		client:        &http.Client{Timeout: 15 * time.Second},
+		client:        &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
