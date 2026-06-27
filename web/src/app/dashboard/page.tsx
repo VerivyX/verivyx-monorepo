@@ -33,7 +33,8 @@ import {
   type CreatorUser,
 } from '@/lib/api';
 import PayoutCard from '@/components/PayoutCard';
-import { LogoMark } from '@/components/Logo';
+import { DashboardHeader } from '@/components/DashboardHeader';
+import { Toast } from '@/components/Toast';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -203,19 +204,11 @@ export default function DashboardPage() {
   const paywallOn = user.paywallEnabled;
 
   return (
-    <div className="min-h-screen bg-[var(--color-cream-50)]">
-      {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <LogoMark size={32} />
-            <div>
-              <p className="text-sm font-semibold tracking-tight">Verivyx</p>
-              <p className="text-xs text-[var(--color-ink-500)]">Creator dashboard</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
+    <div className="app-shell">
+      <DashboardHeader
+        width="wide"
+        actions={
+          <>
             <PaywallStatusPill enabled={paywallOn} />
             <Link href="/dashboard/integrations" className="btn-yellow text-sm">
               <Zap size={14} /> Set up integration
@@ -230,7 +223,10 @@ export default function DashboardPage() {
               <Wallet size={14} /> Agent Wallet
             </Link>
             {user?.role === 'ADMIN' && (
-              <Link href="/admin" className="btn-ghost text-sm" style={{ color: '#a78bfa' }}>
+              <Link
+                href="/admin"
+                className="btn-ghost text-sm text-[var(--color-stellar-violet)]"
+              >
                 <Shield size={14} /> Admin
               </Link>
             )}
@@ -240,18 +236,16 @@ export default function DashboardPage() {
             <button onClick={handleLogout} className="btn-primary text-sm">
               <LogOut size={14} /> Logout
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <main className="mx-auto max-w-7xl px-6 py-10">
+      <main className="app-main app-width-wide">
         {/* Welcome */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
-            Welcome back
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">{user.email}</h1>
-          <p className="text-sm text-[var(--color-ink-500)]">
+        <div className="flex flex-col">
+          <p className="eyebrow">Welcome back</p>
+          <h1 className="page-title">{user.email}</h1>
+          <p className="page-lead">
             Domain · <span className="font-mono">{user.domain ?? '—'}</span> · Wallet{' '}
             <span className="font-mono">
               {(user.stellar_address ?? '').slice(0, 6)}…{(user.stellar_address ?? '').slice(-4)}
@@ -260,10 +254,10 @@ export default function DashboardPage() {
         </div>
 
         {error && (
-          <div className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
+          <div className="alert-error mt-6">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{error}</span>
-            <button onClick={() => setError(null)} className="text-[var(--color-stellar-rose)] hover:opacity-80">
+            <button onClick={() => setError(null)} className="hover:opacity-80" aria-label="Dismiss error">
               <X size={14} />
             </button>
           </div>
@@ -348,7 +342,7 @@ export default function DashboardPage() {
             <PayoutCard />
             <div className="surface-card p-6">
             <div className="flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-lg font-semibold">
+              <h2 className="card-title">
                 <Settings2 size={18} /> Embed & pricing
               </h2>
             </div>
@@ -482,7 +476,7 @@ export default function DashboardPage() {
           <div className="surface-card p-6 xl:col-span-2">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="flex items-center gap-2 text-lg font-semibold">
+                <h2 className="card-title">
                   <Bot size={18} /> Know Your Agent
                 </h2>
                 <p className="text-sm text-[var(--color-ink-500)]">
@@ -567,7 +561,7 @@ export default function DashboardPage() {
         <section className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-2">
           {/* PoW solve-time histogram */}
           <div className="surface-card p-6">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <h2 className="card-title">
               <Timer size={18} /> PoW solve-time · 7d
             </h2>
             <p className="mt-1 text-sm text-[var(--color-ink-500)]">
@@ -582,7 +576,7 @@ export default function DashboardPage() {
 
           {/* Top JA4 fingerprints */}
           <div className="surface-card p-6">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <h2 className="card-title">
               <Fingerprint size={18} /> Top JA4 fingerprints · 7d
             </h2>
             <p className="mt-1 text-sm text-[var(--color-ink-500)]">
@@ -638,14 +632,7 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* Toast */}
-      {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-8 z-50 flex justify-center">
-          <div className="pointer-events-auto rounded-full bg-[var(--color-ink-900)] px-5 py-3 text-sm font-medium text-[var(--color-stellar-yellow)] shadow-lg">
-            {toast}
-          </div>
-        </div>
-      )}
+      <Toast message={toast} />
     </div>
   );
 }

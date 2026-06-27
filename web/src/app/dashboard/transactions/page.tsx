@@ -2,8 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { AlertTriangle, ArrowLeft, ExternalLink, LogOut, ReceiptText, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ExternalLink, LogOut, ReceiptText, RefreshCw, X } from 'lucide-react';
 import {
   api,
   clearSession,
@@ -13,6 +12,7 @@ import {
   type CreatorUser,
   type TxRecord,
 } from '@/lib/api';
+import { DashboardHeader } from '@/components/DashboardHeader';
 
 function shortHash(h: string): string {
   return `${h.slice(0, 6)}…${h.slice(-4)}`;
@@ -94,17 +94,12 @@ export default function CreatorTransactionsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--color-cream-50)]">
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="btn-ghost text-sm">
-              <ArrowLeft size={14} /> Dashboard
-            </Link>
-            <span className="text-sm text-[var(--color-ink-500)]">/</span>
-            <p className="text-sm font-semibold tracking-tight">Transactions</p>
-          </div>
-          <div className="flex items-center gap-3">
+    <div className="app-shell">
+      <DashboardHeader
+        crumb="Transactions"
+        width="wide"
+        actions={
+          <>
             <button onClick={() => load(true)} disabled={refreshing} className="btn-ghost text-sm">
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
             </button>
@@ -118,19 +113,19 @@ export default function CreatorTransactionsPage() {
             >
               <LogOut size={14} /> Logout
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <main className="mx-auto max-w-7xl px-6 py-10">
+      <main className="app-main app-width-wide">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+          <p className="eyebrow">
             Domain · <span className="font-mono normal-case tracking-normal">{user.domain ?? ''}</span>
           </p>
-          <h1 className="mt-2 flex items-center gap-2 text-3xl font-semibold tracking-tight md:text-4xl">
+          <h1 className="page-title flex items-center gap-2">
             <ReceiptText size={28} /> Transactions
           </h1>
-          <p className="mt-3 max-w-2xl text-sm text-[var(--color-ink-500)]">
+          <p className="page-lead">
             Every settled AI payment, with on-chain proof. The transfer hash is the agent paying the
             paywall contract; the distribute hash is the contract splitting your share and the platform
             fee — both verifiable on Stellar.
@@ -138,10 +133,10 @@ export default function CreatorTransactionsPage() {
         </div>
 
         {error && (
-          <div className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
+          <div className="alert-error mt-6">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{error}</span>
-            <button onClick={() => setError(null)} className="hover:opacity-80">
+            <button onClick={() => setError(null)} className="hover:opacity-80" aria-label="Dismiss error">
               <X size={14} />
             </button>
           </div>
@@ -178,7 +173,7 @@ export default function CreatorTransactionsPage() {
                         {e.category && <span className="tag-chip mt-1 text-[11px]">{e.category}</span>}
                       </td>
                       <td className="py-4 text-right font-mono">${e.amountUsdc.toFixed(4)}</td>
-                      <td className="py-4 text-right font-mono text-emerald-600">
+                      <td className="py-4 text-right font-mono text-[var(--color-stellar-mint-700)]">
                         {e.creatorAmountUsdc != null ? `$${e.creatorAmountUsdc.toFixed(4)}` : '—'}
                       </td>
                       <td className="py-4 text-right font-mono text-[var(--color-ink-500)]">

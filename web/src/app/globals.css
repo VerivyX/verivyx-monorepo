@@ -5,19 +5,34 @@
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
+  /* Ink ramp — a complete neutral scale so every text/border tone is a token,
+     not an ad-hoc hex. 50/100 are surfaces, 300 is hint text, 500 is secondary
+     text, 700/800 are strong text, 900 is primary. */
   --color-ink-900: #0a0a0a;
+  --color-ink-800: #1a1a1a;
   --color-ink-700: #2a2a2a;
+  --color-ink-600: #3f3f3f;
   --color-ink-500: #525252;
+  --color-ink-400: #767676;
   --color-ink-300: #a3a3a3;
+  --color-ink-100: #ededeb;
+  --color-ink-50: #f6f6f4;
   --color-cream-50: #fdfdfb;
   --color-cream-100: #f7f6f1;
   --color-cream-200: #ecebe3;
+  --color-cream-300: #d6d4c8;
   --color-stellar-yellow: #fdda24;
   --color-stellar-yellow-soft: #fff4a6;
   --color-stellar-violet: #7e5afe;
   --color-stellar-violet-soft: #e8e2ff;
   --color-stellar-rose: #ff5a8a;
   --color-stellar-mint: #1de9b6;
+  --color-stellar-mint-700: #0a7a5a;
+
+  /* Radius scale — one source of truth for corner rounding. */
+  --radius-card: 1.25rem;
+  --radius-control: 0.75rem;
+  --radius-pill: 999px;
 }
 
 :root {
@@ -43,11 +58,153 @@ body {
   color: #0a0a0a;
 }
 
+/* ── Accessibility floor ─────────────────────────────────────────────────────
+   One visible, consistent keyboard-focus ring for every interactive element,
+   and full respect for reduced-motion preferences. */
+:where(a, button, input, select, textarea, [role="switch"], [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-cream-50), 0 0 0 4px var(--color-stellar-violet);
+  border-radius: var(--radius-control);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── App layout primitives ───────────────────────────────────────────────────
+   Shared scaffolding so every dashboard page aligns on the same shell, width,
+   header, heading rhythm, and section spacing instead of re-inventing them. */
+.app-shell {
+  min-height: 100vh;
+  background: var(--color-cream-50);
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  border-bottom: 1px solid var(--color-cream-200);
+  background: color-mix(in srgb, #ffffff 80%, transparent);
+  backdrop-filter: blur(8px);
+}
+.app-header__inner {
+  display: flex;
+  height: 4rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-inline: 1.5rem;
+  margin-inline: auto;
+}
+
+.app-main {
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+  padding-block: 2.5rem;
+}
+
+/* Container widths as named intents, not scattered max-w-* literals. */
+.app-width-wide { max-width: 80rem; }   /* data-dense: dashboard, transactions */
+.app-width-mid  { max-width: 64rem; }   /* flows: wallet */
+.app-width-read { max-width: 56rem; }   /* reading/steps: script, test */
+
+/* Page heading block — eyebrow + title + lead, one consistent rhythm. */
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-ink-500);
+}
+.page-title {
+  margin-top: 0.5rem;
+  font-size: clamp(1.75rem, 1.2rem + 1.6vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.page-lead {
+  margin-top: 0.75rem;
+  max-width: 42rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-ink-500);
+}
+
+/* Card heading — used inside surface-card for a consistent section title. */
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Consistent inline error banner (replaces ad-hoc rounded-md variants). */
+.alert-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-stellar-rose) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-stellar-rose) 22%, transparent);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  color: var(--color-stellar-rose);
+}
+
+/* Status pills shared across pages. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: var(--radius-pill);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-pill--ok {
+  background: color-mix(in srgb, var(--color-stellar-mint) 18%, transparent);
+  color: var(--color-stellar-mint-700);
+}
+.status-pill--warn {
+  background: var(--color-stellar-yellow-soft);
+  color: var(--color-ink-800);
+}
+.status-pill--danger {
+  background: color-mix(in srgb, var(--color-stellar-rose) 12%, transparent);
+  color: var(--color-stellar-rose);
+}
+
+/* Scrollable region used by the activity feed (was undefined before). */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-cream-300) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-cream-300);
+  border-radius: var(--radius-pill);
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* Soft surface */
 .surface-card {
   background: #ffffff;
-  border: 1px solid #ecebe3;
-  border-radius: 1.25rem;
+  border: 1px solid var(--color-cream-200);
+  border-radius: var(--radius-card);
   box-shadow: 0 1px 0 rgba(10, 10, 10, 0.02), 0 8px 24px -12px rgba(10, 10, 10, 0.08);
 }
 
@@ -129,14 +286,60 @@ body {
 }
 .btn-ghost:hover {
   background: #fdfdfb;
-  border-color: #d6d4c8;
+  border-color: var(--color-cream-300);
+}
+
+/* Soft neutral action — for secondary in-card actions (e.g. re-authorize). */
+.btn-soft {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: var(--color-ink-50);
+  color: var(--color-ink-700);
+  border: 1px solid var(--color-cream-200);
+  border-radius: var(--radius-control);
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.btn-soft:hover {
+  background: var(--color-ink-100);
+}
+.btn-soft:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Destructive action — for revoke and other irreversible operations. */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: color-mix(in srgb, var(--color-stellar-rose) 10%, transparent);
+  color: var(--color-stellar-rose);
+  border: 1px solid color-mix(in srgb, var(--color-stellar-rose) 30%, transparent);
+  border-radius: var(--radius-control);
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: background 150ms ease;
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--color-stellar-rose) 18%, transparent);
+}
+.btn-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .input-field {
   width: 100%;
   background: #ffffff;
-  border: 1px solid #ecebe3;
-  border-radius: 12px;
+  border: 1px solid var(--color-cream-200);
+  border-radius: var(--radius-control);
   padding: 0.85rem 1rem;
   font-size: 0.95rem;
   color: #0a0a0a;
