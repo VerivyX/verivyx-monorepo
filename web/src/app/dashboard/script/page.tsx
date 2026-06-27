@@ -2,10 +2,8 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   Code2,
   Copy,
@@ -17,6 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import { api, clearSession, getStoredUser, type CreatorUser } from '@/lib/api';
+import { DashboardHeader } from '@/components/DashboardHeader';
+import { Toast } from '@/components/Toast';
 
 function buildScriptTag(domain: string): string {
   const embedUrl = process.env.NEXT_PUBLIC_EMBED_URL ?? '';
@@ -98,19 +98,12 @@ export default function ScriptPage() {
   const scriptTag = buildScriptTag(user.domain ?? '');
 
   return (
-    <div className="min-h-screen bg-[var(--color-cream-50)]">
-      {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="btn-ghost text-sm">
-              <ArrowLeft size={14} /> Dashboard
-            </Link>
-            <span className="text-sm text-[var(--color-ink-500)]">/</span>
-            <p className="text-sm font-semibold tracking-tight">Get Script</p>
-          </div>
-
-          <div className="flex items-center gap-3">
+    <div className="app-shell">
+      <DashboardHeader
+        crumb="Get Script"
+        width="read"
+        actions={
+          <>
             <button onClick={load} disabled={refreshing} className="btn-ghost text-sm">
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
             </button>
@@ -124,33 +117,28 @@ export default function ScriptPage() {
             >
               <LogOut size={14} /> Logout
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <main className="mx-auto max-w-4xl px-6 py-10">
+      <main className="app-main app-width-read">
         {/* Page heading */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+          <p className="eyebrow">
             Domain · <span className="font-mono normal-case tracking-normal">{user.domain ?? ''}</span>
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight md:text-4xl">
-            Embed your paywall
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm text-[var(--color-ink-500)]">
+          <h1 className="page-title">Embed your paywall</h1>
+          <p className="page-lead">
             Drop this single script tag into your HTML — humans browse free, AI agents settle a
             USDC micropayment on Stellar before they see a single token.
           </p>
         </div>
 
         {error && (
-          <div className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
+          <div className="alert-error mt-6">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{error}</span>
-            <button
-              onClick={() => setError(null)}
-              className="text-[var(--color-stellar-rose)] hover:opacity-80"
-            >
+            <button onClick={() => setError(null)} className="hover:opacity-80" aria-label="Dismiss error">
               <X size={14} />
             </button>
           </div>
@@ -214,7 +202,7 @@ export default function ScriptPage() {
 
         {/* Visual preview — what bots see */}
         <section className="surface-card mt-8 p-6">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <h2 className="card-title">
             <Zap size={18} /> What AI agents see on your site
           </h2>
           <p className="mt-1 text-sm text-[var(--color-ink-500)]">
@@ -310,7 +298,7 @@ export default function ScriptPage() {
         <section className="surface-card mt-8 p-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="flex items-center gap-2 text-lg font-semibold">
+              <h2 className="card-title">
                 <Server size={18} /> WordPress? Block at the server too
               </h2>
               <p className="mt-1 max-w-xl text-sm text-[var(--color-ink-500)]">
@@ -357,14 +345,7 @@ export default function ScriptPage() {
         </section>
       </main>
 
-      {/* Toast */}
-      {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-8 z-50 flex justify-center">
-          <div className="pointer-events-auto rounded-full bg-[var(--color-ink-900)] px-5 py-3 text-sm font-medium text-[var(--color-stellar-yellow)] shadow-lg">
-            {toast}
-          </div>
-        </div>
-      )}
+      <Toast message={toast} />
     </div>
   );
 }

@@ -67,7 +67,8 @@ import {
   revoke,
 } from '@/lib/smartAccount';
 import { validateDelegation, toAtomicUsdc, expiryToLedger } from '@/lib/delegation';
-import { LogoMark } from '@/components/Logo';
+import { DashboardHeader } from '@/components/DashboardHeader';
+import { Toast } from '@/components/Toast';
 import { rpc as StellarRpc } from '@stellar/stellar-sdk';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
@@ -579,34 +580,26 @@ export default function WalletPage() {
   // ── Waitlist view: user does not have mcpEarlyAccess ───────────────────────
   if (earlyAccess === 'waitlist') {
     return (
-      <div className="min-h-screen bg-[var(--color-cream-50)]">
-        {/* Top bar (same as granted flow) */}
-        <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-          <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-            <div className="flex items-center gap-3">
-              <LogoMark size={32} />
-              <div>
-                <p className="text-sm font-semibold tracking-tight">Verivyx</p>
-                <p className="text-xs text-[var(--color-ink-500)]">MCP wallet</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
+      <div className="app-shell">
+        <DashboardHeader
+          subtitle="MCP wallet"
+          width="mid"
+          actions={
+            <>
               <Link href="/dashboard" className="btn-ghost text-sm">
                 <ArrowLeft size={14} /> Dashboard
               </Link>
               <button onClick={handleLogout} className="btn-primary text-sm">
                 <LogOut size={14} /> Logout
               </button>
-            </div>
-          </div>
-        </header>
+            </>
+          }
+        />
 
-        <main className="mx-auto max-w-5xl px-6 py-10">
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
-              Non-custodial · Soroban Testnet
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Agent Wallet</h1>
+        <main className="app-main app-width-mid">
+          <div className="flex flex-col">
+            <p className="eyebrow">Non-custodial · Soroban Testnet</p>
+            <h1 className="page-title">Agent wallet</h1>
           </div>
 
           <div className="mt-10 grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -695,38 +688,28 @@ export default function WalletPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--color-cream-50)]">
-      {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <LogoMark size={32} />
-            <div>
-              <p className="text-sm font-semibold tracking-tight">Verivyx</p>
-              <p className="text-xs text-[var(--color-ink-500)]">MCP wallet</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
+    <div className="app-shell">
+      <DashboardHeader
+        subtitle="MCP wallet"
+        width="mid"
+        actions={
+          <>
             <Link href="/dashboard" className="btn-ghost text-sm">
               <ArrowLeft size={14} /> Dashboard
             </Link>
             <button onClick={handleLogout} className="btn-primary text-sm">
               <LogOut size={14} /> Logout
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="app-main app-width-mid">
         {/* Page title */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
-            Non-custodial · Soroban Testnet
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-            Agent Wallet
-          </h1>
-          <p className="text-sm text-[var(--color-ink-500)]">
+        <div className="flex flex-col">
+          <p className="eyebrow">Non-custodial · Soroban Testnet</p>
+          <h1 className="page-title">Agent wallet</h1>
+          <p className="page-lead">
             Link your Stellar wallet so the Verivyx MCP can pay x402 resources on your behalf —
             capped by a budget you set, revocable any time.
           </p>
@@ -734,10 +717,10 @@ export default function WalletPage() {
 
         {/* Error banner */}
         {error && (
-          <div className="mt-6 flex items-start gap-2 rounded-md bg-[var(--color-stellar-rose)]/10 px-3 py-2 text-sm text-[var(--color-stellar-rose)]">
+          <div className="alert-error mt-6">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{error}</span>
-            <button onClick={() => setError(null)}>
+            <button onClick={() => setError(null)} aria-label="Dismiss error">
               <X size={14} />
             </button>
           </div>
@@ -751,7 +734,7 @@ export default function WalletPage() {
           <section className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
             {/* Connect card */}
             <div className="surface-card xl:col-span-2 p-6">
-              <h2 className="flex items-center gap-2 text-lg font-semibold">
+              <h2 className="card-title">
                 <Wallet size={18} /> Connect your wallet
               </h2>
               <p className="mt-2 text-sm text-[var(--color-ink-500)]">
@@ -868,7 +851,7 @@ export default function WalletPage() {
         {view === 'delegate' && (
           <section className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="surface-card xl:col-span-2 p-6">
-              <h2 className="flex items-center gap-2 text-lg font-semibold">
+              <h2 className="card-title">
                 <KeyRound size={18} /> Set delegation budget
               </h2>
               <p className="mt-2 text-sm text-[var(--color-ink-500)]">
@@ -1013,8 +996,8 @@ export default function WalletPage() {
           <section className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="surface-card xl:col-span-2 p-6">
               <div className="flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-lg font-semibold">
-                  <CheckCircle size={18} className="text-[var(--color-stellar-mint)]" />
+                <h2 className="card-title">
+                  <CheckCircle size={18} className="text-[var(--color-stellar-mint-700)]" />
                   Delegation active
                 </h2>
                 <span className="tag-chip">
@@ -1213,7 +1196,7 @@ export default function WalletPage() {
                 <button
                   onClick={handleDelegate}
                   disabled={delegating}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl border border-[var(--color-ink-300)] bg-[var(--color-ink-50)] px-4 py-2 text-sm font-semibold text-[var(--color-ink-700)] transition hover:bg-[var(--color-ink-100)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-soft mt-4"
                 >
                   {delegating ? (
                     <>
@@ -1246,7 +1229,7 @@ export default function WalletPage() {
                 <button
                   onClick={handleRevoke}
                   disabled={revoking}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl border border-[var(--color-stellar-rose)]/30 bg-[var(--color-stellar-rose)]/10 px-4 py-2 text-sm font-semibold text-[var(--color-stellar-rose)] transition hover:bg-[var(--color-stellar-rose)]/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-danger mt-4"
                 >
                   {revoking ? (
                     <>
@@ -1297,14 +1280,7 @@ export default function WalletPage() {
         )}
       </main>
 
-      {/* Toast */}
-      {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-8 z-50 flex justify-center">
-          <div className="pointer-events-auto rounded-full bg-[var(--color-ink-900)] px-5 py-3 text-sm font-medium text-[var(--color-stellar-yellow)] shadow-lg">
-            {toast}
-          </div>
-        </div>
-      )}
+      <Toast message={toast} />
     </div>
   );
 }
