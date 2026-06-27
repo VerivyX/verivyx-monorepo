@@ -119,8 +119,8 @@ GET https://your-domain.com/article
       </P>
 
       <Note>
-        Prefer code? The <A href="/docs/payment-api">Payment &amp; content API</A> documents every endpoint,
-        and the <A href="/docs/api">interactive Swagger reference</A> has full request/response schemas.
+        Prefer code? The <A href="/docs/payment-api">Payment &amp; content API</A> documents every endpoint
+        with full request/response schemas.
       </Note>
     </article>
   );

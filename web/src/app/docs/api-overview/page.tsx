@@ -11,9 +11,9 @@ export default function ApiOverview() {
       <h1 className="mt-2 text-4xl font-semibold tracking-tight">API overview</h1>
       <Lead>
         Every Verivyx surface is an HTTP API. This page covers the base URLs, authentication, and
-        conventions shared across them. For the full interactive reference with every endpoint,
-        schema, and a try-it-out console, see the{' '}
-        <A href="/docs/api">API reference (Swagger)</A>.
+        conventions shared across them. For endpoints and schemas by area, see the{' '}
+        <A href="/docs/payment-api">Payment &amp; content API</A> and the{' '}
+        <A href="/docs/creator-api">Creator &amp; auth API</A>.
       </Lead>
 
       <H2 id="hosts">Hosts</H2>
@@ -63,7 +63,6 @@ curl https://api.verivyx.com/api/v1/auth/me \\
         <Li><A href="/docs/payment-api">Payment &amp; content API</A> — discover requirements, settle x402 payments, hydrate content.</Li>
         <Li><A href="/docs/creator-api">Creator &amp; auth API</A> — accounts, content management, analytics, the Connect handshake.</Li>
         <Li><A href="/docs/mcp">x402 MCP server</A> — let agents pay any x402 resource through Verivyx.</Li>
-        <Li><A href="/docs/api">API reference (Swagger)</A> — the full interactive spec.</Li>
       </Ul>
     </article>
   );
