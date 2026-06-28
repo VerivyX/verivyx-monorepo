@@ -721,6 +721,28 @@ app.post('/api/v1/oauth/consent/reject', authGuard, async (req: Request, res: Re
 
 const PAYMENT_RELAYER_URL = process.env.PAYMENT_RELAYER_URL || 'http://payment-relayer:8084';
 
+// Best-effort: mirror the publisher's payout/price onto the paywall contract so
+// distribute() can pay them. Never throws into the request path; idempotent.
+async function syncCreatorOnChain(user: {
+  domain: string | null; domainVerified?: boolean | null;
+  stellar_address: string | null; pricePerRequest: unknown; platformFee?: unknown;
+}): Promise<void> {
+  if (!user.domain || !user.domainVerified || !user.stellar_address) return;
+  const price = Number(user.pricePerRequest);
+  const platformFee = Number(user.platformFee ?? 0.001);
+  if (!(price > 0)) return;
+  try {
+    const r = await fetch(`${PAYMENT_RELAYER_URL}/api/v1/payment/internal/register-creator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': INTERNAL_TOKEN },
+      body: JSON.stringify({ domain: user.domain, creator: user.stellar_address, price, platformFee }),
+    });
+    if (!r.ok) console.warn(`[register-creator] relayer ${r.status} for domain=${user.domain}`);
+  } catch (e) {
+    console.warn(`[register-creator] failed for domain=${user.domain}:`, (e as Error).message);
+  }
+}
+
 type TrustlineResp = {
   funded: boolean; hasTrustline: boolean; usdcBalance: string; xlmBalance: string;
   asset: { code: string; issuer: string }; network: string; networkPassphrase: string; horizonUrl: string;
@@ -785,6 +807,7 @@ app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response
 
   try {
     const user = await prisma.user.update({ where: { id: req.userId! }, data });
+    void syncCreatorOnChain(user);
     res.json({ user: shapeUser(user) });
   } catch (error: any) {
     if (error.code === 'P2002') {
@@ -1399,10 +1422,11 @@ app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, r
   if (conflict) return res.status(409).json({ error: 'domain_conflict' });
 
   const token = crypto.randomBytes(30).toString('base64url');
-  await prisma.user.update({
+  const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: { domain: site, wpInternalToken: token, domainVerified: true, domainVerifiedAt: new Date() },
   });
+  void syncCreatorOnChain(updatedUser);
   return res.json({ token });
 });
 
