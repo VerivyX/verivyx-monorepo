@@ -30,6 +30,7 @@ model User {
   domainVerified   Boolean   @default(false)
   domainVerifiedAt DateTime?
   mcpEarlyAccess  Boolean    @default(false)
+  siteId          String?    @unique
   role            Role       @default(CREATOR)
   createdAt       DateTime   @default(now())
   events          Event[]
@@ -74,6 +75,14 @@ model McpWaitlist {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// Admin-managed allowlist of emails pre-granted MCP early access before they sign up.
+model McpEarlyAccessGrant {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique
+  grantedByAdmin Int?
+  createdAt      DateTime @default(now())
 }
 
 model Content {
