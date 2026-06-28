@@ -21,6 +21,7 @@ import {
   type Tier,
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
+import { newSiteId } from './src/site.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
@@ -411,9 +412,25 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const normalizedEmail = email.trim().toLowerCase();
+    // Issue a stable siteId and a site token (the SDK's VERIVYX_TOKEN, stored in
+    // the same wpInternalToken column used by WP Connect / DNS provisioning) at
+    // signup so the account is SDK-ready with no DNS step required.
+    const siteToken = crypto.randomBytes(30).toString('base64url'); // 40-char url-safe secret
     const user = await prisma.user.create({
-      data: { email: email.trim().toLowerCase(), password: hashedPassword },
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        siteId: newSiteId(),
+        wpInternalToken: siteToken,
+      },
     });
+    // Apply any admin pre-grant for this email (case-insensitive) so a waitlisted
+    // creator gets MCP early access the moment they register.
+    const grant = await prisma.mcpEarlyAccessGrant.findUnique({ where: { email: normalizedEmail } });
+    if (grant) {
+      await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: true } });
+    }
     const rawToken = await createVerificationToken(user.id);
     try {
       await sendVerificationEmail(user.email, rawToken);
@@ -1413,6 +1430,19 @@ function pruneProvisionPending(): void {
     if (now - val.createdAt > PROVISION_TTL_MS) _provisionPending.delete(key);
   }
 }
+
+// GET /api/v1/sdk/site
+// Auth-guarded. Returns the caller's stable siteId and site token (the SDK's
+// VERIVYX_TOKEN). Both are issued at signup, so the dashboard/SDK wizard can
+// surface them without any DNS provisioning step.
+app.get('/api/v1/sdk/site', authGuard, async (req: AuthedRequest, res: Response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { siteId: true, wpInternalToken: true },
+  });
+  if (!user) return res.status(404).json({ error: 'user_not_found' });
+  return res.json({ siteId: user.siteId ?? null, token: user.wpInternalToken ?? null });
+});
 
 // POST /api/v1/sdk/provision/init
 // Auth-guarded. Issues a nonce the publisher must add as a DNS TXT record `verivyx-site-verification=<nonce>` to the domain apex.
