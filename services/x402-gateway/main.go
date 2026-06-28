@@ -36,6 +36,9 @@ const (
 	// Replay window for /settle Idempotency-Key. 24h is more than enough to ride
 	// out client retries; longer would let stale keys block legit settlements.
 	IdempotencyTTL = 24 * time.Hour
+	// ConsumedTTL is how long a payment proof is remembered as bound to a (domain,slug).
+	// Long enough to outlast any retry window; keeps the cross-slug replay gate active.
+	ConsumedTTL = 24 * time.Hour
 )
 
 var ctx = context.Background()
@@ -658,6 +661,22 @@ func idempotencyKey(key string) string {
 	return "idem:settle:" + key
 }
 
+// proofHash returns the SHA-256 hex digest of an XDR/transaction string.
+// Used as the Redis key for the consumed-proof binding that stops cross-slug replay.
+func proofHash(xdr string) string {
+	sum := sha256.Sum256([]byte(xdr))
+	return hex.EncodeToString(sum[:])
+}
+
+// bindingDecision reports whether a proof may be used for the requested resource.
+// Returns "reuse" when the proof was already consumed for a DIFFERENT resource, "ok" otherwise.
+func bindingDecision(consumedVal, want string) string {
+	if consumedVal != "" && consumedVal != want {
+		return "reuse"
+	}
+	return "ok"
+}
+
 // idemRecord is what we cache against an Idempotency-Key.
 // Storing the body digest lets us reject a key reuse with a different body
 // (RFC draft "Idempotency-Key" §2.4) instead of silently returning the wrong tx.
@@ -1034,6 +1053,34 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
+		// Resolve payer — prefer the verify response; fall back to the signed payload.
+		payer := verifyOut.Payer
+		if payer == "" {
+			payer = body.XPayment.Payload.Payer
+		}
+		if payer == "" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payer_required"})
+			return
+		}
+
+		want := body.Domain + ":" + body.Slug
+
+		// Session-first: if this (domain,slug,payer) already has an active paid session,
+		// return success immediately without calling Settle again.
+		if tx, err := rdb.Get(ctx, sessionKey(body.Domain, body.Slug, payer)).Result(); err == nil && tx != "" {
+			c.JSON(http.StatusOK, gin.H{"success": true, "transaction": tx, "payer": payer})
+			return
+		}
+
+		// Anti-replay binding: reject this proof if it was already consumed for a DIFFERENT resource.
+		ph := proofHash(body.XPayment.Payload.Transaction)
+		if consumed, err := rdb.Get(ctx, "consumed:"+ph).Result(); err == nil {
+			if bindingDecision(consumed, want) == "reuse" {
+				c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
+				return
+			}
+		}
+
 		settleOut, err := facilitator.Settle(payload, req)
 		if err != nil {
 			log.Printf("facilitator unreachable: %v", err)
@@ -1041,16 +1088,17 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 		if settleOut.Success {
-			payer := settleOut.Payer
-			if payer == "" {
-				payer = body.XPayment.Payload.Payer
+			// payer is guaranteed non-empty by the guard above; use settleOut.Payer if the
+			// relayer enriches it (e.g. resolves a federated address), else keep ours.
+			if settleOut.Payer != "" {
+				payer = settleOut.Payer
 			}
 			key := sessionKey(body.Domain, body.Slug, payer)
-			if payer != "" {
-				if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
-					log.Printf("redis set failed: %v", err)
-				}
+			if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
+				log.Printf("redis set failed: %v", err)
 			}
+			// Bind the proof to this (domain,slug) so it cannot be replayed for a different resource.
+			rdb.Set(ctx, "consumed:"+ph, want, ConsumedTTL)
 			agent, cat := body.Agent, body.Category
 			if agent == "" {
 				agent, cat = classifyAgent("")

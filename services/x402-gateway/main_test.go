@@ -118,3 +118,25 @@ func TestSessionKeyShape(t *testing.T) {
 		t.Fatal("payer must scope the session key")
 	}
 }
+
+func TestProofHash_StableAndDistinct(t *testing.T) {
+	a := proofHash("AAAAtx1")
+	if a != proofHash("AAAAtx1") {
+		t.Fatal("not stable")
+	}
+	if a == proofHash("AAAAtx2") {
+		t.Fatal("collision")
+	}
+}
+
+func TestBindingDecision(t *testing.T) {
+	if bindingDecision("", "d:s") != "ok" {
+		t.Fatal("fresh should be ok")
+	}
+	if bindingDecision("d:s", "d:s") != "ok" {
+		t.Fatal("same resource ok")
+	}
+	if bindingDecision("d:other", "d:s") != "reuse" {
+		t.Fatal("cross-slug must be reuse")
+	}
+}
