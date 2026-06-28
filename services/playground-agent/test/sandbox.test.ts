@@ -6,7 +6,7 @@ import { test, before } from "node:test";
 process.env.OPENROUTER_API_KEY = "test-openrouter-key";
 process.env.PLAYGROUND_FAUCET_SECRET = "test-faucet-secret";
 process.env.ALLOWED_PAYMENT_PREFIXES =
-  "http://playground-agent:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo,https://web-test.verivyx.com/";
+  "https://demo-sdk-next.verivyx.com/,https://web-test.verivyx.com/";
 
 let assertAllowedUrl: (url: string) => void;
 
@@ -14,12 +14,12 @@ before(async () => {
   ({ assertAllowedUrl } = await import("../src/sandbox.js"));
 });
 
-test("allows the configured demo prefixes", () => {
+test("allows the configured SDK demo prefixes", () => {
   assert.doesNotThrow(() =>
-    assertAllowedUrl("http://playground-agent:8087/api/v1/playground/demo/pg-abc"),
+    assertAllowedUrl("https://demo-sdk-next.verivyx.com/seven-wonders"),
   );
   assert.doesNotThrow(() =>
-    assertAllowedUrl("https://playground.verivyx.com/api/v1/playground/demo/article"),
+    assertAllowedUrl("https://demo-sdk-next.verivyx.com/another-article"),
   );
 });
 

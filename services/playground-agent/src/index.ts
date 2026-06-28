@@ -6,13 +6,12 @@ import { config } from "./config.js";
 import { startWalletPool, acquireWallet, retireWallet, walletBalances, type SessionWallet } from "./walletPool.js";
 import { McpSession } from "./mcpBridge.js";
 import { runAgentTurn, systemPrompt, type AgentEvent } from "./agentLoop.js";
-import { demoResource } from "./demoResource.js";
 import { faucetAddress, faucetUsdcBalance } from "./faucet.js";
 import type { ChatMessage } from "./llm.js";
 
 const log = pino({ name: "playground-agent" });
 
-type TargetKey = "demo" | "webtest";
+type TargetKey = "demosdk" | "webtest";
 type Target = { url: string; label: string };
 
 type Session = {
@@ -20,8 +19,6 @@ type Session = {
   wallet: SessionWallet;
   mcp: McpSession;
   messages: ChatMessage[];
-  demoUrl: string;
-  demoSlug: string;
   targets: Record<TargetKey, Target>;
   activeTarget: TargetKey;
   createdAt: number;
@@ -77,11 +74,6 @@ app.get("/api/v1/playground/health", (_req, res) => {
   res.json({ status: "ok", service: "playground-agent", sessions: sessions.size, model: config.openrouterModel });
 });
 
-// x402-protected demo resource the agent pays.
-app.get("/api/v1/playground/demo/:slug", (req, res) => {
-  demoResource(req, res).catch((e) => res.status(500).json({ error: e instanceof Error ? e.message : "demo error" }));
-});
-
 // Start a sandboxed session: verify Turnstile, hand out a funded testnet wallet,
 // spawn its MCP server.
 app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
@@ -97,15 +89,12 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
   try {
     const wallet = await acquireWallet();
     const id = randomUUID();
-    const demoSlug = `pg-${id.slice(0, 8)}`;
-    // Reachable from the external mcp-server container (docker service name).
-    const demoUrl = `${config.demoBaseUrl}/api/v1/playground/demo/${demoSlug}`;
 
     const mcp = new McpSession(wallet.secret);
     await mcp.connect();
 
     const targets: Record<TargetKey, Target> = {
-      demo: { url: demoUrl, label: "Verivyx demo resource (sandbox)" },
+      demosdk: { url: config.demoSdkUrl, label: "demo-sdk-next.verivyx.com — a real Verivyx SDK-protected site" },
       webtest: { url: config.webTestUrl, label: "web-test.verivyx.com — a real Verivyx-protected WordPress post" },
     };
 
@@ -113,11 +102,9 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
       id,
       wallet,
       mcp,
-      demoUrl,
-      demoSlug,
       targets,
-      activeTarget: "demo",
-      messages: [{ role: "system", content: systemPrompt(targets.demo.url, targets.demo.label) }],
+      activeTarget: "demosdk",
+      messages: [{ role: "system", content: systemPrompt(targets.demosdk.url, targets.demosdk.label) }],
       createdAt: Date.now(),
       lastUsed: Date.now(),
       busy: false,
@@ -130,8 +117,7 @@ app.post("/api/v1/playground/session", async (req: Request, res: Response) => {
       sessionId: id,
       walletAddress: wallet.publicKey,
       balances,
-      demoSlug,
-      targets: { demo: targets.demo.label, webtest: targets.webtest.label },
+      targets: { demosdk: targets.demosdk.label, webtest: targets.webtest.label },
       network: "stellar:testnet",
       model: config.openrouterModel,
     });
@@ -153,9 +139,9 @@ app.post("/api/v1/playground/chat", async (req: Request, res: Response) => {
   if (typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "empty_message" });
   if (session.busy) return res.status(409).json({ error: "session_busy" });
 
-  // Switch the target (demo ↔ web-test) when the UI selects a different one. The
+  // Switch the target (demo-sdk ↔ web-test) when the UI selects a different one. The
   // system prompt is rebuilt so the agent only ever knows the active target URL.
-  if ((target === "demo" || target === "webtest") && target !== session.activeTarget) {
+  if ((target === "demosdk" || target === "webtest") && target !== session.activeTarget) {
     session.activeTarget = target;
     const t = session.targets[target];
     session.messages[0] = { role: "system", content: systemPrompt(t.url, t.label) };
@@ -189,7 +175,7 @@ app.post("/api/v1/playground/chat", async (req: Request, res: Response) => {
 
 app.listen(config.port, async () => {
   log.info(
-    { port: config.port, model: config.openrouterModel, faucet: faucetAddress(), demoDomain: config.demoDomain },
+    { port: config.port, model: config.openrouterModel, faucet: faucetAddress(), demoSdk: config.demoSdkUrl },
     "playground-agent listening",
   );
   try {
