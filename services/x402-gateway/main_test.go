@@ -177,6 +177,35 @@ func TestSessionKeyShape(t *testing.T) {
 	}
 }
 
+func TestSiteKeyFor(t *testing.T) {
+	// Prefer siteId when present.
+	if got := siteKeyFor(&DomainConfig{Domain: "a.com", SiteId: "site_x"}, "a.com"); got != "site_x" {
+		t.Errorf("siteKeyFor with siteId = %q; want site_x", got)
+	}
+	// Fall back to the passed domain when siteId is empty (older data).
+	if got := siteKeyFor(&DomainConfig{Domain: "a.com"}, "a.com"); got != "a.com" {
+		t.Errorf("siteKeyFor empty siteId = %q; want a.com", got)
+	}
+	// Nil config falls back to the domain (never 500s).
+	if got := siteKeyFor(nil, "a.com"); got != "a.com" {
+		t.Errorf("siteKeyFor(nil) = %q; want a.com", got)
+	}
+}
+
+func TestOnchainKeyFor(t *testing.T) {
+	// Explicit onchainKey wins (new token-only site → siteId key).
+	if got := onchainKeyFor(&DomainConfig{Domain: "a.com", OnchainKey: "site_x"}); got != "site_x" {
+		t.Errorf("onchainKeyFor explicit = %q; want site_x", got)
+	}
+	// Legacy site: onchainKey empty → falls back to the domain (on-chain key unchanged).
+	if got := onchainKeyFor(&DomainConfig{Domain: "web-test.verivyx.com"}); got != "web-test.verivyx.com" {
+		t.Errorf("onchainKeyFor legacy = %q; want web-test.verivyx.com", got)
+	}
+	if got := onchainKeyFor(nil); got != "" {
+		t.Errorf("onchainKeyFor(nil) = %q; want empty", got)
+	}
+}
+
 func TestProofHash_StableAndDistinct(t *testing.T) {
 	a := proofHash("AAAAtx1")
 	if a != proofHash("AAAAtx1") {

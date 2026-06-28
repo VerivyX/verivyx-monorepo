@@ -123,6 +123,39 @@ type DomainConfig struct {
 	PlatformFee     float64 `json:"platformFee"`
 	PlatformAddress string  `json:"platform_address"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
+	// SiteId is the stable tenant identifier returned by the auth lookup. Sessions
+	// and the consumed-proof binding key on it (falling back to Domain for older
+	// data that predates the siteId backfill). Phase 1: re-key only; resolution
+	// stays by-domain.
+	SiteId string `json:"siteId"`
+	// OnchainKey is the stable key used for the relayer's distribute()/register —
+	// the domain for legacy sites (no contract re-registration) and the siteId for
+	// new token-only sites. Falls back to Domain when empty.
+	OnchainKey string `json:"onchainKey"`
+}
+
+// siteKeyFor returns the stable site identifier used to key Redis sessions and the
+// consumed-proof binding. Prefers cfg.SiteId; falls back to the domain for older
+// data (pre-backfill) so nothing 500s. The session/binding key SOURCE changes
+// (domain → siteId); the C1 binding LOGIC is unchanged.
+func siteKeyFor(cfg *DomainConfig, domain string) string {
+	if cfg != nil && cfg.SiteId != "" {
+		return cfg.SiteId
+	}
+	return domain
+}
+
+// onchainKeyFor returns the stable on-chain key for distribute()/register. Prefers
+// cfg.OnchainKey; falls back to cfg.Domain so legacy domain-registered sites keep
+// their existing on-chain key (no contract re-registration).
+func onchainKeyFor(cfg *DomainConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.OnchainKey != "" {
+		return cfg.OnchainKey
+	}
+	return cfg.Domain
 }
 
 // ----------------------- helpers -------------------------------------
@@ -492,8 +525,10 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 				// Informational only — the on-chain split the contract will perform.
 				// Not "splitPayments" so the relayer doesn't expect 2 classic ops here.
 				"distribution": split,
-				// Settlement hints for the relayer's distribute() call.
-				"domain":          cfg.Domain,
+				// Settlement hints for the relayer's distribute() call. Use the
+				// stable on-chain key (domain for legacy sites, siteId for new ones)
+				// so register_by_keeper/distribute stay keyed consistently.
+				"domain":          onchainKeyFor(cfg),
 				"paywallContract": paywallContract,
 			},
 		})
@@ -925,12 +960,20 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 		// Extract the submitted transaction XDR for anti-replay proof hashing.
 		txStr, _ := req.PaymentPayload.Payload["transaction"].(string)
 
+		// Resolve the site config so sessions + the consumed binding key on siteId
+		// (with a domain fallback for older data). Resolution stays by-domain here.
+		var cfg *DomainConfig
 		if domain != "" {
-			want := domain + ":" + slug
+			cfg, _ = lookupDomainFn(domain)
+		}
+		siteKey := siteKeyFor(cfg, domain)
 
-			// Session-first: if this (domain,slug,payer) already has an active paid session,
+		if domain != "" {
+			want := siteKey + ":" + slug
+
+			// Session-first: if this (siteId,slug,payer) already has an active paid session,
 			// return the cached settlement without re-settling.
-			if tx, serr := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result(); serr == nil && tx != "" {
+			if tx, serr := rdb.Get(ctx, sessionKey(siteKey, slug, payer)).Result(); serr == nil && tx != "" {
 				sessResp := &SettlementResponse{Success: true, Transaction: tx, Payer: payer}
 				sessRaw, _ := json.Marshal(sessResp)
 				c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(sessRaw))
@@ -962,7 +1005,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 		}
 
 		if out.Success && domain != "" {
-			key := sessionKey(domain, slug, out.Payer)
+			key := sessionKey(siteKey, slug, out.Payer)
 			// Only open a session when we know who paid; an identity-less session
 			// would be a shared key any caller could ride on.
 			if out.Payer != "" {
@@ -970,11 +1013,10 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 					log.Printf("redis set failed: %v", err)
 				}
 			}
-			// Bind the proof to this (domain,slug) so it cannot be replayed for a different resource.
+			// Bind the proof to this (siteId,slug) so it cannot be replayed for a different resource.
 			if txStr != "" {
-				rdb.Set(ctx, "consumed:"+proofHash(txStr), domain+":"+slug, ConsumedTTL)
+				rdb.Set(ctx, "consumed:"+proofHash(txStr), siteKey+":"+slug, ConsumedTTL)
 			}
-			cfg, _ := lookupDomain(domain)
 			amt := 0.0
 			if cfg != nil {
 				amt = cfg.PricePerRequest
@@ -1126,11 +1168,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
-		want := body.Domain + ":" + body.Slug
+		// Sessions + the consumed binding key on siteId (domain fallback for older data).
+		siteKey := siteKeyFor(cfg, body.Domain)
+		want := siteKey + ":" + body.Slug
 
-		// Session-first: if this (domain,slug,payer) already has an active paid session,
+		// Session-first: if this (siteId,slug,payer) already has an active paid session,
 		// return success immediately without calling Settle again.
-		if tx, err := rdb.Get(ctx, sessionKey(body.Domain, body.Slug, payer)).Result(); err == nil && tx != "" {
+		if tx, err := rdb.Get(ctx, sessionKey(siteKey, body.Slug, payer)).Result(); err == nil && tx != "" {
 			c.JSON(http.StatusOK, gin.H{"success": true, "transaction": tx, "payer": payer})
 			return
 		}
@@ -1160,11 +1204,11 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			if settleOut.Payer != "" {
 				payer = settleOut.Payer
 			}
-			key := sessionKey(body.Domain, body.Slug, payer)
+			key := sessionKey(siteKey, body.Slug, payer)
 			if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
 				log.Printf("redis set failed: %v", err)
 			}
-			// Bind the proof to this (domain,slug) so it cannot be replayed for a different resource.
+			// Bind the proof to this (siteId,slug) so it cannot be replayed for a different resource.
 			rdb.Set(ctx, "consumed:"+ph, want, ConsumedTTL)
 			agent, cat := body.Agent, body.Category
 			if agent == "" {
@@ -1209,7 +1253,11 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return
 		}
-		v, err := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result()
+		// Resolve the site config so the lookup key matches what settle wrote
+		// (siteId, with a domain fallback for older data).
+		cfg, _ := lookupDomainFn(domain)
+		siteKey := siteKeyFor(cfg, domain)
+		v, err := rdb.Get(ctx, sessionKey(siteKey, slug, payer)).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return

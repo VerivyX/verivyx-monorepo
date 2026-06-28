@@ -87,6 +87,8 @@ func setupBindingTest(t *testing.T) *miniredis.Miniredis {
 	t.Cleanup(func() { internalToken = "" })
 
 	// Stub the domain lookup so the internal handler doesn't hit auth-service.
+	// SiteId is populated (post-backfill shape) so sessions + the consumed binding
+	// key on siteId; OnchainKey stays the domain (legacy on-chain key unchanged).
 	origFn := lookupDomainFn
 	lookupDomainFn = func(domain string) (*DomainConfig, error) {
 		return &DomainConfig{
@@ -95,6 +97,8 @@ func setupBindingTest(t *testing.T) *miniredis.Miniredis {
 			PlatformAddress: "GPLATFORM1234",
 			PricePerRequest: 0.005,
 			PaywallEnabled:  true,
+			SiteId:          "site_bind_" + domain,
+			OnchainKey:      domain,
 		}, nil
 	}
 	t.Cleanup(func() { lookupDomainFn = origFn })
@@ -129,6 +133,20 @@ func TestInternalHandlerCrossSlugReplay(t *testing.T) {
 	}
 	if success, _ := resp1["success"].(bool); !success {
 		t.Fatalf("slugA response.success must be true; got %v", resp1)
+	}
+
+	// Sessions + the consumed binding must key on siteId, not the raw domain.
+	// (stub facilitator reports payer = STUB-PAYER, which scopes the session key.)
+	wantSession := "paid:site_bind_demo.com:slug-a:STUB-PAYER"
+	if !mr.Exists(wantSession) {
+		t.Errorf("session must be keyed by siteId; want key %q in redis, keys=%v", wantSession, mr.Keys())
+	}
+	if mr.Exists("paid:demo.com:slug-a:STUB-PAYER") {
+		t.Errorf("session must NOT be keyed by raw domain")
+	}
+	consumedVal, _ := mr.Get("consumed:" + proofHash(tx))
+	if consumedVal != "site_bind_demo.com:slug-a" {
+		t.Errorf("consumed binding must use siteId; got %q, want %q", consumedVal, "site_bind_demo.com:slug-a")
 	}
 
 	// 2. Same proof, different slug — must be rejected as cross-slug replay.
