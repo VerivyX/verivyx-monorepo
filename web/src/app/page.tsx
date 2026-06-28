@@ -438,7 +438,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* COMING SOON — developer surface */}
+      {/* Developer surface — MCP (agents) + Publisher SDK */}
       <section id="build" className="border-y border-[var(--color-cream-200)] bg-[var(--color-cream-50)] py-24">
         <div className="mx-auto max-w-7xl px-6">
           <div className="max-w-2xl">
@@ -470,12 +470,14 @@ export default function LandingPage() {
                 title: 'Verivyx MCP Server',
                 body: 'A first-party Model Context Protocol server so agents like Claude can discover Verivyx-protected resources and settle payments natively — no glue code.',
                 href: 'https://mcp.verivyx.com' as string | undefined,
+                tag: 'Early access',
               },
               {
                 icon: <Code2 className="h-5 w-5" />,
-                title: 'Developer SDK',
-                body: 'A drop-in TypeScript SDK to add x402 payments to your own agent in a few lines — handle the 402, sign the USDC transfer, retry, done.',
-                href: undefined as string | undefined,
+                title: 'Publisher SDK',
+                body: 'A drop-in TypeScript SDK to put any site, app, or API behind x402 — add one middleware: humans read free, search crawlers get a preview, and AI agents pay per request.',
+                href: '/docs/sdk' as string | undefined,
+                tag: 'Live',
               },
             ].map((c) => {
               const inner = (
@@ -485,7 +487,7 @@ export default function LandingPage() {
                       {c.icon}
                     </span>
                     <span className="tag-chip bg-[var(--color-stellar-violet-soft)] text-[var(--color-ink-900)]">
-                      Coming soon
+                      {c.tag}
                     </span>
                   </div>
                   <h3 className="mt-6 text-xl font-semibold">{c.title}</h3>
