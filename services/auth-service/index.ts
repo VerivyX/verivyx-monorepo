@@ -11,6 +11,7 @@ import {
   checkPow,
   fingerprintReason,
   clientIp as _clientIp,
+  requireProductionSecrets,
   type Fingerprint,
 } from './lib.js';
 import {
@@ -72,6 +73,25 @@ const RESEND_FROM = process.env.RESEND_FROM?.trim() || 'Verivyx <noreply@verivyx
 const APP_BASE_URL = requireEnv('APP_BASE_URL').replace(/\/$/, '');
 // Email verification token lifetime.
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60_000;
+
+// Production fail-fast: the empty-secret dev bypasses above silently disable the
+// captcha gate (Turnstile) and the email hard-gate (Resend). That is acceptable
+// for local dev but MUST never happen in production, so refuse to boot.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+try {
+  requireProductionSecrets({
+    isProduction: IS_PRODUCTION,
+    TURNSTILE_SECRET_KEY: TURNSTILE_SECRET,
+    RESEND_API_KEY: RESEND_API_KEY,
+  });
+} catch (e) {
+  console.error(`[FATAL] ${(e as Error).message}`);
+  process.exit(1);
+}
+if (!IS_PRODUCTION) {
+  if (!TURNSTILE_SECRET) console.warn('[dev] TURNSTILE_SECRET_KEY empty — captcha verification is BYPASSED (dev only).');
+  if (!RESEND_API_KEY) console.warn('[dev] RESEND_API_KEY empty — email verification is BYPASSED, links logged to stdout (dev only).');
+}
 
 // Public frontend URL (e.g. https://verivyx.com) — used to redirect browser to
 // the dashboard login page when a Hydra login challenge requires interaction.

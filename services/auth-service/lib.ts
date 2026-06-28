@@ -114,3 +114,23 @@ export function fingerprintReason(fp: Fingerprint): string | null {
   }
   return null;
 }
+
+// Production fail-fast for security-critical secrets. Empty Turnstile/Resend
+// secrets silently disable the captcha gate and the email verification hard-gate
+// (dev-only bypasses). In production both MUST be set, so throw at boot before
+// the service can serve. In non-production this is a no-op (dev bypass kept).
+export function requireProductionSecrets(env: {
+  isProduction: boolean;
+  TURNSTILE_SECRET_KEY?: string;
+  RESEND_API_KEY?: string;
+}): void {
+  if (!env.isProduction) return;
+  const missing: string[] = [];
+  if (!env.TURNSTILE_SECRET_KEY?.trim()) missing.push('TURNSTILE_SECRET_KEY');
+  if (!env.RESEND_API_KEY?.trim()) missing.push('RESEND_API_KEY');
+  if (missing.length > 0) {
+    throw new Error(
+      `${missing.join(', ')} required in production — empty would silently disable captcha/email verification`,
+    );
+  }
+}
