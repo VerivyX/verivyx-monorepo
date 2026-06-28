@@ -12,6 +12,7 @@ import {
 } from './validation';
 import { classifySettlePath, SettlePath } from './routing';
 import dotenv from 'dotenv';
+import { toRegisterArgs } from './register-args.js';
 
 dotenv.config();
 
@@ -456,6 +457,35 @@ async function callDistribute(
   });
 }
 
+async function registerCreatorOnChain(domain: string, creator: string, priceAtomic: bigint, feeAtomic: bigint): Promise<string> {
+  if (!facilitatorKeypair) throw new Error('FACILITATOR_STELLAR_SECRET required for register');
+  const paywall = process.env.SOROBAN_PAYWALL_CONTRACT_ID || '';
+  assertPaywallContractAllowed(paywall, ALLOWED_PAYWALL_CONTRACTS);
+  return facilitatorLock.run(async () => {
+    const contract = new Contract(paywall);
+    const account = await sorobanServer.getAccount(facilitatorKeypair!.publicKey());
+    const op = contract.call(
+      'register_by_keeper',
+      nativeToScVal(domain, { type: 'string' }),
+      new Address(creator).toScVal(),
+      nativeToScVal(priceAtomic, { type: 'i128' }),
+      nativeToScVal(feeAtomic, { type: 'i128' }),
+    );
+    const tx = new TransactionBuilder(account, { fee: '10000000', networkPassphrase: NETWORK_PASSPHRASE })
+      .addOperation(op).setTimeout(30).build();
+    const sim = await sorobanServer.simulateTransaction(tx);
+    if (!rpc.Api.isSimulationSuccess(sim)) {
+      throw new Error(`register simulation failed: ${(sim as rpc.Api.SimulateTransactionErrorResponse).error}`);
+    }
+    const assembled = rpc.assembleTransaction(tx, sim).build();
+    assembled.sign(facilitatorKeypair!);
+    logger.info({ paywall, domain, creator }, 'Registering creator on-chain (register_by_keeper)');
+    const sendRes = await sorobanServer.sendTransaction(assembled);
+    if (sendRes.status === 'ERROR') throw new Error(`register send error: ${JSON.stringify(sendRes.errorResult)}`);
+    return pollSorobanConfirmation(sendRes.hash);
+  });
+}
+
 async function submitClassic(txXdr: string): Promise<string> {
   const tx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
   logger.info(`Submitting Classic TX to ${horizonUrl}`);
@@ -652,6 +682,23 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       transaction: '',
       network: paymentRequirements.network,
     });
+  }
+});
+
+app.post('/register-creator', requireInternalToken, async (req, res) => {
+  try {
+    const { domain, creator, price, platformFee } = req.body ?? {};
+    if (typeof domain !== 'string' || !domain || typeof creator !== 'string' || !creator) {
+      return res.status(400).json({ error: 'domain_and_creator_required' });
+    }
+    try { Keypair.fromPublicKey(creator); } catch { return res.status(400).json({ error: 'invalid_creator_address' }); }
+    let args; try { args = toRegisterArgs({ price: Number(price), platformFee: Number(platformFee) }); }
+    catch { return res.status(400).json({ error: 'invalid_price' }); }
+    const txHash = await registerCreatorOnChain(domain, creator, args.priceAtomic, args.feeAtomic);
+    res.json({ txHash });
+  } catch (err: any) {
+    logger.error({ err }, 'register-creator failed');
+    res.status(502).json({ error: 'register_failed' });
   }
 });
 
