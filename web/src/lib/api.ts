@@ -202,6 +202,8 @@ export type McpWaitlistEntry = {
   source: string;
   invited: boolean;
   createdAt: string;
+  registered?: boolean;
+  mcpEarlyAccess?: boolean;
 };
 
 export type McpChain = {
@@ -259,6 +261,14 @@ export const api = {
     request<{ total: number; waitlist: McpWaitlistEntry[] }>(`/api/v1/admin/mcp-waitlist`),
 
   adminMcpOverview: () => request<McpOverview>(`/api/v1/admin/mcp-overview`),
+
+  // Grant (or revoke) MCP early-access by email. Works for unregistered emails too
+  // (pre-grant: auto-applied when that email registers).
+  adminMcpGrant: (email: string, granted: boolean) =>
+    request<{ ok: boolean; email: string; granted: boolean; applied: boolean; preGranted: boolean }>(
+      `/api/v1/admin/mcp/grant`,
+      { method: 'POST', body: JSON.stringify({ email, granted }) },
+    ),
 
   // Consume an email verification token → marks verified and returns a session.
   verifyEmail: (token: string) =>

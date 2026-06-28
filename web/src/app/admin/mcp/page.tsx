@@ -54,6 +54,28 @@ export default function AdminMcpPage() {
     URL.revokeObjectURL(url);
   }, [waitlist]);
 
+  const [grantEmail, setGrantEmail] = useState('');
+  const [grantMsg, setGrantMsg] = useState<string | null>(null);
+  const grant = useCallback(
+    async (email: string, granted: boolean) => {
+      setGrantMsg(null);
+      try {
+        const r = await api.adminMcpGrant(email, granted);
+        setGrantMsg(
+          granted
+            ? r.applied
+              ? `Granted MCP early-access to ${email}`
+              : `Pre-granted ${email} — applies automatically when they register`
+            : `Revoked MCP early-access for ${email}`,
+        );
+        await load();
+      } catch (e) {
+        setGrantMsg(e instanceof Error ? e.message : 'grant failed');
+      }
+    },
+    [load],
+  );
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -146,6 +168,24 @@ export default function AdminMcpPage() {
             <Download className="h-4 w-4" /> Export CSV
           </button>
         </div>
+        {/* Grant MCP early-access by email — works for unregistered emails too (pre-grant) */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            type="email"
+            value={grantEmail}
+            onChange={(e) => setGrantEmail(e.target.value)}
+            placeholder="email@example.com"
+            className="min-w-[16rem] flex-1 rounded-xl border border-[var(--color-ink-200)] px-3 py-2 text-sm"
+          />
+          <button
+            onClick={() => grantEmail.includes('@') && void grant(grantEmail.trim().toLowerCase(), true)}
+            disabled={!grantEmail.includes('@')}
+            className="rounded-xl bg-[var(--color-ink-900)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            Grant early-access
+          </button>
+        </div>
+        {grantMsg && <p className="mt-2 text-sm text-[var(--color-ink-500)]">{grantMsg}</p>}
         {waitlist.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--color-ink-500)]">No signups yet.</p>
         ) : (
@@ -156,6 +196,7 @@ export default function AdminMcpPage() {
                   <th className="py-2 pr-4">Email</th>
                   <th className="py-2 pr-4">Source</th>
                   <th className="py-2 pr-4">Joined</th>
+                  <th className="py-2 pr-4">Access</th>
                 </tr>
               </thead>
               <tbody>
@@ -164,6 +205,31 @@ export default function AdminMcpPage() {
                     <td className="py-2 pr-4 font-medium">{w.email}</td>
                     <td className="py-2 pr-4 text-[var(--color-ink-500)]">{w.source}</td>
                     <td className="py-2 pr-4 text-[var(--color-ink-500)]">{fmtDate(w.createdAt)}</td>
+                    <td className="py-2 pr-4">
+                      {!w.registered ? (
+                        <button
+                          onClick={() => void grant(w.email, true)}
+                          title="Not registered yet — pre-grant (auto-applies when they sign up)"
+                          className="rounded-lg border border-[var(--color-stellar-violet)] px-3 py-1 text-xs font-medium text-[var(--color-stellar-violet)] hover:bg-[var(--color-stellar-violet-soft)]"
+                        >
+                          Pre-grant
+                        </button>
+                      ) : w.mcpEarlyAccess ? (
+                        <button
+                          onClick={() => void grant(w.email, false)}
+                          className="rounded-lg border border-[var(--color-ink-200)] px-3 py-1 text-xs font-medium hover:bg-[var(--color-ink-50)]"
+                        >
+                          ✓ Granted · Revoke
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => void grant(w.email, true)}
+                          className="rounded-lg bg-[var(--color-ink-900)] px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
+                        >
+                          Grant
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
