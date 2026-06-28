@@ -33,7 +33,7 @@ export default function CreatorApi() {
       <H2 id="profile">Profile &amp; payouts</H2>
       <Ul>
         <Li><C>GET /api/v1/auth/me</C> — the current creator.</Li>
-        <Li><C>PATCH /api/v1/auth/settings</C> — update <C>pricePerRequest</C> (0.0001–1 USDC), <C>domain</C>, <C>stellar_address</C>, or <C>paywallEnabled</C>.</Li>
+        <Li><C>PATCH /api/v1/auth/settings</C> — update <C>pricePerRequest</C> (0.0001–1 USDC), <C>domain</C>, <C>stellar_address</C>, or <C>paywallEnabled</C>. The price must strictly exceed the platform fee (default <C>0.001</C> USDC) — a lower or equal price is rejected with <C>price_must_exceed_platform_fee</C>.</Li>
         <Li><C>GET /api/v1/auth/payout-status</C> — checks the creator&apos;s on-chain USDC trustline / payout readiness.</Li>
       </Ul>
 

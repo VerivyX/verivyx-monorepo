@@ -57,7 +57,8 @@ All options can be passed to `verivyxProxy(opts)` / `verivyxNext(opts)` or set v
 | `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers (+ unverified humans without `humanUnlock`), wrapped in anti-cloaking JSON-LD |
 | `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read the full content free |
 | `failMode` / `VERIVYX_FAIL_MODE` | no | When the backend is unreachable: `teaser` (default) \| `open` \| `closed` |
-| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). **Raise to ~`30000` if you accept agent payments** — on-chain settlement can take ~15s. |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Timeout in ms for the quick classify/requirements call (default `800`). |
+| `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits on-chain confirmation (default `60000`, ~15s settle). No need to raise `timeoutMs` for agent payments — the settle path uses this. |
 
 Also: `trustProxy` (default `true`), `advertise` (RSL/AIPREF discovery headers).
 

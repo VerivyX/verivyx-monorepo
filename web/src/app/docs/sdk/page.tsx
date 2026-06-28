@@ -161,13 +161,16 @@ export default function SdkDocs() {
           [<C>seoPreview</C>, '({ slug }) => { title, excerpt }', '—', 'Teaser served to crawlers (and to unverified humans without humanUnlock), wrapped in anti-cloaking JSON-LD.'],
           [<C>humanUnlock</C>, '{ authBase? }', '—', 'When set, unverified human browsers get an in-page PoW unlock to read the full content free.'],
           [<><C>failMode</C> / <C>VERIVYX_FAIL_MODE</C></>, <><C>teaser</C> | <C>open</C> | <C>closed</C></>, <C>teaser</C>, 'Behaviour when the Verivyx backend is unreachable (see below).'],
-          [<><C>timeoutMs</C> / <C>VERIVYX_TIMEOUT_MS</C></>, 'number', <C>800</C>, 'Backend request timeout (ms). See the note below if you accept agent payments.'],
+          [<><C>timeoutMs</C> / <C>VERIVYX_TIMEOUT_MS</C></>, 'number', <C>800</C>, 'Timeout (ms) for the quick classify/requirements call that decides how a caller is handled.'],
+          [<><C>settleTimeoutMs</C> / <C>VERIVYX_SETTLE_TIMEOUT_MS</C></>, 'number', <C>60000</C>, 'Timeout (ms) for the authorize/settle call that awaits the on-chain payment. Kept separate so a paying agent is never aborted mid-settle.'],
         ]}
       />
       <Note>
-        <strong>Accepting agent x402 payments?</strong> Raise <C>VERIVYX_TIMEOUT_MS</C> to ~<C>30000</C>.
-        On-chain settlement can take ~15s; the 800ms default is fine for classifying humans and crawlers but
-        too short to await a settle, so a paying agent would otherwise fall through to <C>failMode</C>.
+        <strong>Two timeouts, by design.</strong> <C>timeoutMs</C> (default <C>800</C>) bounds the fast
+        classify call for humans and crawlers, while <C>settleTimeoutMs</C> (default <C>60000</C>) covers the
+        x402 authorize/settle path that waits for on-chain confirmation (~15s). Because the settle path has its
+        own generous timeout, you do <strong>not</strong> need to raise <C>timeoutMs</C> when you accept agent
+        payments — a paying agent is no longer aborted mid-settle.
       </Note>
 
       <H2 id="fail-mode">failMode behaviour</H2>

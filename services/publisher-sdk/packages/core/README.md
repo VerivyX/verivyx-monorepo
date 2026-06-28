@@ -42,7 +42,8 @@ All options can be passed to `verivyx(opts)` or set via environment variables (c
 | `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
 | `match` / `VERIVYX_MATCH` | no | Glob patterns to gate. Empty = nothing gated. Env accepts a comma-separated list. |
 | `failMode` / `VERIVYX_FAIL_MODE` | no | Backend unreachable: `teaser` (default) \| `open` \| `closed` |
-| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). Raise to ~`30000` if you await agent settlements (~15s on-chain). |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Timeout in ms for the quick classify/requirements call (default `800`). |
+| `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits the on-chain payment (default `60000`). Kept separate so a paying agent is never aborted mid-settle. |
 
 ## Docs
 

@@ -28,7 +28,6 @@ verivyx/
 │   ├── mcp-server/          # Remote x402 payment MCP server, multi-chain (Node)
 │   ├── soroban-contracts/   # On-chain domain registry + trustless pay/split (Rust)
 │   ├── embed-script/        # gate.min.js browser embed (TypeScript)
-│   ├── agent-sdk/           # Agent integration library (@verivyx/agent-sdk)
 │   ├── publisher-sdk/       # @verivyx/paywall — publisher SDK (Next/Express/Hono middleware)
 │   ├── playground-agent/    # Sandboxed x402 playground backend (Node)
 │   └── wordpress-plugin/    # WordPress integration (PHP)
