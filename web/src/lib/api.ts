@@ -340,14 +340,10 @@ export const api = {
       body: JSON.stringify({ consent_challenge }),
     }),
 
-  sdkProvisionInit: () =>
-    request<{ nonce: string }>(`/api/v1/sdk/provision/init`, { method: "POST" }),
-
-  sdkProvisionVerify: (site: string, nonce: string) =>
-    request<{ token: string }>(`/api/v1/sdk/provision/verify`, {
-      method: "POST",
-      body: JSON.stringify({ site, nonce }),
-    }),
+  // Returns the caller's stable siteId + site token (the SDK's VERIVYX_TOKEN).
+  // Both are issued at signup — no domain or DNS verification required.
+  sdkSite: () =>
+    request<{ siteId: string | null; token: string | null }>(`/api/v1/sdk/site`),
 };
 
 // ── Wallet API (non-custodial MCP binding) ────────────────────────────────────

@@ -9,7 +9,6 @@ import {
   Bot,
   Coins,
   Fingerprint,
-  Globe,
   LogOut,
   Pencil,
   ReceiptText,
@@ -27,7 +26,6 @@ import {
   api,
   clearSession,
   getStoredUser,
-  normalizeDomain,
   STELLAR_PUBKEY_REGEX,
   type AnalyticsResponse,
   type CreatorUser,
@@ -47,10 +45,6 @@ export default function DashboardPage() {
   const [pendingPrice, setPendingPrice] = useState<number | null>(null);
   const [savingPrice, setSavingPrice] = useState(false);
   const [togglePending, setTogglePending] = useState(false);
-
-  const [editingDomain, setEditingDomain] = useState(false);
-  const [domainDraft, setDomainDraft] = useState('');
-  const [savingDomain, setSavingDomain] = useState(false);
 
   const [editingWallet, setEditingWallet] = useState(false);
   const [walletDraft, setWalletDraft] = useState('');
@@ -131,33 +125,6 @@ export default function DashboardPage() {
       setError(err instanceof Error ? err.message : 'Toggle failed');
     } finally {
       setTogglePending(false);
-    }
-  };
-
-  const handleStartEditDomain = () => {
-    if (!user) return;
-    setDomainDraft(user.domain ?? '');
-    setEditingDomain(true);
-  };
-
-  const handleSaveDomain = async () => {
-    if (!user) return;
-    const cleaned = normalizeDomain(domainDraft);
-    if (!cleaned) {
-      setError('Domain must look like example.com (lowercase, with a TLD).');
-      return;
-    }
-    setSavingDomain(true);
-    setError(null);
-    try {
-      const data = await api.updateSettings({ domain: cleaned });
-      setUser(data.user);
-      setEditingDomain(false);
-      showToast(`Domain updated to ${cleaned}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Domain update failed');
-    } finally {
-      setSavingDomain(false);
     }
   };
 
@@ -252,7 +219,7 @@ export default function DashboardPage() {
           </p>
           <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">{user.email}</h1>
           <p className="text-sm text-[var(--color-ink-500)]">
-            Domain · <span className="font-mono">{user.domain ?? '—'}</span> · Wallet{' '}
+            Wallet{' '}
             <span className="font-mono">
               {(user.stellar_address ?? '').slice(0, 6)}…{(user.stellar_address ?? '').slice(-4)}
             </span>
@@ -353,52 +320,8 @@ export default function DashboardPage() {
               </h2>
             </div>
 
-            {/* Domain */}
-            <div className="mt-6 flex flex-col gap-2">
-              <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
-                <Globe size={12} /> Domain
-              </label>
-              {editingDomain ? (
-                <div className="flex flex-col gap-2">
-                  <input
-                    autoFocus
-                    className="input-field font-mono"
-                    placeholder="my-blog.com"
-                    value={domainDraft}
-                    onChange={(e) => setDomainDraft(e.target.value)}
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleSaveDomain}
-                      disabled={savingDomain}
-                      className="btn-yellow text-xs disabled:opacity-60"
-                    >
-                      {savingDomain ? 'Saving…' : 'Save'}
-                    </button>
-                    <button
-                      onClick={() => setEditingDomain(false)}
-                      className="btn-ghost text-xs"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <input className="input-field font-mono" value={user.domain ?? ''} readOnly />
-                  <button
-                    onClick={handleStartEditDomain}
-                    className="btn-ghost px-3 py-2 text-xs"
-                    aria-label="Edit domain"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                </div>
-              )}
-            </div>
-
             {/* Wallet */}
-            <div className="mt-5 flex flex-col gap-2">
+            <div className="mt-6 flex flex-col gap-2">
               <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
                 <Wallet size={12} /> Stellar address
               </label>

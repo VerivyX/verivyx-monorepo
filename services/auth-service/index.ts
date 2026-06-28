@@ -369,8 +369,9 @@ function shapeUser(u: {
     domain: u.domain,
     stellar_address: u.stellar_address,
     emailVerified: u.emailVerified,
-    // Onboarding is incomplete until both wallet and domain are set.
-    needsOnboarding: !u.domain || !u.stellar_address,
+    // Onboarding is token-only now: complete once the payout wallet is set.
+    // Domain is no longer required (the SDK is configured by site token).
+    needsOnboarding: !u.stellar_address,
     pricePerRequest: Number(u.pricePerRequest),
     platformFee: u.platformFee != null ? Number(u.platformFee) : null,
     apiKey: u.apiKey,
