@@ -23,8 +23,10 @@
 
 import {
   verivyx,
+  resolveConfig,
   createSearchCrawlerVerifier,
   buildSeoPreviewResponse,
+  buildUnlockHtml,
   attachPaymentResponse,
   rslLinkHeader,
   contentUsageHeader,
@@ -74,6 +76,30 @@ export interface HonoAdapterOptions extends VerivyxOptions {
    * Default undefined = OFF (no headers added; existing behavior unchanged).
    */
   advertise?: DiscoveryOptions;
+
+  /**
+   * When set, search crawlers (reason: "crawler") always receive a 200 HTML
+   * teaser page. Unverified humans (reason: "human-unverified") also receive
+   * the teaser — but ONLY when the request is a real browser top-level
+   * navigation (Sec-Fetch-Mode: navigate OR Accept includes text/html).
+   * Machine clients and x402 payment agents that lack those browser headers
+   * receive the 402 x402 response so they can pay.
+   *
+   * Used by both `protect()` (when set on the factory opts) and `middleware()`.
+   * `protect()` also accepts `seoPreview` in its per-call options `o`; if both
+   * are set, the per-call value takes precedence.
+   */
+  seoPreview?: (ctx: { slug: string }) => { title: string; excerpt: string };
+
+  /**
+   * When set, human-unverified real-browser visitors receive an interactive
+   * PoW unlock page (from core's `buildUnlockHtml`) instead of the static
+   * teaser. Crawlers always get the static teaser. Machines still get 402.
+   *
+   * `authBase` overrides the API base used for the challenge/verify endpoints
+   * (defaults to `cfg.apiBase` / VERIVYX_API_BASE).
+   */
+  humanUnlock?: { authBase?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +116,59 @@ function firstHop(xff: string | null | undefined): string | undefined {
   }
   const first = xff.split(",")[0];
   return first !== undefined ? first.trim() || undefined : undefined;
+}
+
+/**
+ * Return true when `pathname` matches any of the `patterns`.
+ * Supports `*` (single-segment wildcard) and `**` (multi-segment wildcard).
+ * Performs an anchored full-path match.
+ */
+function pathMatchesAny(pathname: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    // Escape regex metacharacters except * which we handle specially.
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    // Replace ** before * so the two-step substitution is order-safe.
+    const regexStr = escaped
+      .replace(/\*\*/g, "") // placeholder for **
+      .replace(/\*/g, "[^/]*")   // single-segment wildcard
+      .replace(//g, ".*"); // multi-segment wildcard
+    return new RegExp("^" + regexStr + "$").test(pathname);
+  });
+}
+
+/**
+ * Rebuild the absolute request URL using `X-Forwarded-Host` / `X-Forwarded-Proto`
+ * when `trustProxy` is enabled, so the x402 resource URL reflects the public host
+ * rather than the internal address assigned by a reverse proxy.
+ *
+ * When `trustProxy` is false the raw request URL is returned unchanged.
+ */
+function publicUrl(req: Request, trustProxy: boolean): string {
+  if (!trustProxy) return req.url;
+  const u = new URL(req.url);
+  const fwdProto = req.headers.get("x-forwarded-proto");
+  if (fwdProto) {
+    const p = fwdProto.split(",")[0];
+    if (p !== undefined) u.protocol = p.trim() + ":";
+  }
+  const fwdHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (fwdHost) {
+    const h = fwdHost.split(",")[0];
+    if (h !== undefined) {
+      const trimmed = h.trim();
+      // If the forwarded host includes a port ("host:port"), split it.
+      // Otherwise clear any internal port so we only expose the public host.
+      const colonIdx = trimmed.lastIndexOf(":");
+      if (colonIdx !== -1) {
+        u.hostname = trimmed.slice(0, colonIdx);
+        u.port = trimmed.slice(colonIdx + 1);
+      } else {
+        u.hostname = trimmed;
+        u.port = "";
+      }
+    }
+  }
+  return u.toString();
 }
 
 /**
@@ -136,6 +215,23 @@ function resolveIp(c: Context, trustProxy: boolean): string | undefined {
 }
 
 /**
+ * Return true when the request looks like a real top-level browser navigation.
+ *
+ * Real browsers send `Sec-Fetch-Mode: navigate` on top-level page loads AND/OR
+ * an `Accept` header that includes `text/html`. Machine clients (undici, fetch,
+ * x402 payment agents) send neither — they must receive the 402 so they can pay.
+ *
+ * Crawlers (search bots) are handled separately: they always get the SEO teaser
+ * regardless of this check, so this function is only consulted for
+ * `reason === "human-unverified"`.
+ */
+function isBrowserNavigation(req: Request): boolean {
+  const secFetchMode = req.headers.get("sec-fetch-mode") ?? "";
+  const accept = req.headers.get("accept") ?? "";
+  return secFetchMode === "navigate" || accept.includes("text/html");
+}
+
+/**
  * Attach RSL + AIPREF discovery headers to a Web Response by cloning it.
  * Appends to any existing `Link` (preserves prior values); sets `Content-Usage`.
  * Returns the same Response unchanged when `advertise` is undefined.
@@ -157,12 +253,15 @@ function withAdvertiseHeaders(res: Response, advertise: DiscoveryOptions | undef
 /**
  * Create a Verivyx Hono adapter.
  *
- * Returns an object with a single `protect(handler)` method that wraps a
- * Hono route handler behind the Verivyx paywall gate.
+ * Returns an object with `protect(handler)` (per-route gate) and
+ * `middleware()` (whole-app settling gate).
  *
  * ```ts
  * const vx = verivyxHono({ domain: "example.com", token: "..." });
+ * // Per-route:
  * app.get("/articles/:slug", vx.protect(async (c) => c.json({ content: "..." })));
+ * // Whole-app:
+ * app.use("*", vx.middleware());
  * ```
  */
 export function verivyxHono(opts?: HonoAdapterOptions): {
@@ -170,6 +269,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
     handler: (c: Context) => Response | Promise<Response>,
     o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
   ): MiddlewareHandler;
+  middleware(): MiddlewareHandler;
 } {
   // Resolve the core: use the injected `_core` (tests) or build the real one.
   // Only pass `verifyWebBotAuth` to the core deps when the caller overrode it;
@@ -186,42 +286,47 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
 
   const trustProxy = opts?.trustProxy !== false; // default true
 
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const env: Record<string, string | undefined> = proc?.env ?? {};
+  const cfg = resolveConfig(opts, env);
+
+  /**
+   * Build a core-compatible `Request` from a Hono context.
+   * Resolves the trusted client IP (CF/proxy headers) and sets `x-real-ip`
+   * on the cloned request, or strips forwarding headers when trustProxy:false.
+   *
+   * Security invariant: a client can never inject a fake IP into the core
+   * classifier — either CF/proxy value wins, or no IP is seen at all.
+   */
+  function buildCoreRequest(c: Context): Request {
+    const raw = c.req.raw;
+    const ip = resolveIp(c, trustProxy);
+    const url = publicUrl(raw, trustProxy);
+    if (ip !== undefined) {
+      const headers = new Headers(raw.headers);
+      headers.set("x-real-ip", ip);
+      return new Request(url, { method: raw.method, headers });
+    } else {
+      // trustProxy === false: strip forwarding headers so the client cannot
+      // inject a spoofed IP into the core.
+      const headers = new Headers(raw.headers);
+      headers.delete("x-real-ip");
+      headers.delete("x-forwarded-for");
+      return new Request(url, { method: raw.method, headers });
+    }
+  }
+
   return {
     protect(
       handler: (c: Context) => Response | Promise<Response>,
       o?: { seoPreview?: (c: { slug: string }) => { title: string; excerpt: string } },
     ): MiddlewareHandler {
       return async function verivyxHonoGuard(c): Promise<Response> {
-        // 1. Get the raw Web Request from Hono context.
+        // 1. Build a core-compatible request (IP resolution + header hygiene).
+        const coreReq = buildCoreRequest(c);
         const raw = c.req.raw;
 
-        // 2. Resolve trusted client IP and inject into a cloned request so the
-        //    core classifier reads a reliable address regardless of edge hop.
-        //
-        //    Security invariant:
-        //      trustProxy !== false → resolve IP from CF/proxy headers and set
-        //        x-real-ip on the cloned request (overrides any client value).
-        //      trustProxy === false  → no socket IP is available in edge runtimes;
-        //        strip both x-real-ip and x-forwarded-for so a client cannot
-        //        spoof an IP into the core classifier (core sees no IP → safe).
-        const ip = resolveIp(c, trustProxy);
-        let coreReq: Request;
-        if (ip !== undefined) {
-          const headers = new Headers(raw.headers);
-          headers.set("x-real-ip", ip);
-          // Clone the Request with updated headers. For GET/HEAD this is safe;
-          // the core classify path reads headers only — body stays with raw.
-          coreReq = new Request(raw, { headers });
-        } else {
-          // trustProxy === false: strip forwarding headers so the client cannot
-          // inject a spoofed IP into the core.
-          const headers = new Headers(raw.headers);
-          headers.delete("x-real-ip");
-          headers.delete("x-forwarded-for");
-          coreReq = new Request(raw, { headers });
-        }
-
-        // 3. Resolve slug.
+        // 2. Resolve slug.
         //    Priority: Hono named param "slug" > last URL path segment.
         const paramSlug: string | undefined = c.req.param("slug");
         const slug: string =
@@ -229,27 +334,41 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
             ? paramSlug
             : lastPathSegment(new URL(raw.url).pathname);
 
-        // 4. Ask the core to evaluate the request (decision overload).
+        // 3. Ask the core to evaluate the request (decision overload).
         const decision = await vx.protect(coreReq, { slug });
 
-        // 5. Denied — check if this is a crawler/human-unverified that we can
-        //    serve an SEO preview to instead of a bare 402. Handler NOT called.
+        // 4. Denied — crawlers always get the SEO teaser (verified search bots
+        //    need the preview + JSON-LD). human-unverified gets the teaser ONLY
+        //    for real browser navigations (Sec-Fetch-Mode:navigate or Accept
+        //    includes text/html). Machine clients / x402 agents must get the 402.
+        //    Handler NOT called.
         if (!decision.allowed) {
-          const isPreviewCandidate =
-            decision.reason === "crawler" || decision.reason === "human-unverified";
-          if (isPreviewCandidate && o?.seoPreview !== undefined) {
+          const isHU = decision.reason === "human-unverified";
+          const previewable =
+            decision.reason === "crawler" ||
+            (isHU && isBrowserNavigation(c.req.raw));
+          if (previewable && o?.seoPreview !== undefined) {
+            const seo = o.seoPreview({ slug });
+            if (isHU && opts?.humanUnlock !== undefined) {
+              const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+              const html = buildUnlockHtml({ slug, url: publicUrl(raw, trustProxy), authBase, domain: cfg.domain, seo });
+              return withAdvertiseHeaders(
+                new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+                opts?.advertise,
+              );
+            }
             return withAdvertiseHeaders(
-              buildSeoPreviewResponse(slug, raw.url, o.seoPreview),
+              buildSeoPreviewResponse(slug, publicUrl(raw, trustProxy), o.seoPreview),
               opts?.advertise,
             );
           }
           return withAdvertiseHeaders(decision.response(), opts?.advertise);
         }
 
-        // 6. Allowed — call the original Hono handler.
+        // 5. Allowed — call the original Hono handler.
         const res = await handler(c);
 
-        // 7. Attach the settlement receipt header when a payment was processed,
+        // 6. Attach the settlement receipt header when a payment was processed,
         //    then attach discovery headers (single clone when both apply).
         return withAdvertiseHeaders(
           attachPaymentResponse(res, decision.paymentResponse),
@@ -257,5 +376,79 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
         );
       };
     },
+
+    middleware(): MiddlewareHandler {
+      return async (c, next) => {
+        // 1. Path-match filter: when match is set, skip non-matching paths.
+        const pathname = c.req.path;
+        if (opts?.match !== undefined && opts.match.length > 0 && !pathMatchesAny(pathname, opts.match)) {
+          return next();
+        }
+
+        // 2. Build a core-compatible request (IP resolution + header hygiene).
+        const coreReq = buildCoreRequest(c);
+
+        // 3. Slug = last path segment (middleware has no named :slug param).
+        const slug = pathname.split("/").filter(Boolean).pop() ?? "";
+
+        // 4. Gate decision.
+        const decision = await vx.protect(coreReq, { slug });
+
+        if (decision.allowed) {
+          // 5a. Allowed — run downstream handlers first.
+          await next();
+          // 5b. Attach settlement receipt on the outbound response.
+          //     After next(), c.res holds the downstream Response.
+          //     Reassign to a mutable clone so we can set the header.
+          if (decision.paymentResponse !== undefined) {
+            c.res = new Response(c.res.body, c.res);
+            c.res.headers.set("PAYMENT-RESPONSE", decision.paymentResponse);
+          }
+          return;
+        }
+
+        // 5c. Blocked — crawlers always get the SEO teaser; human-unverified
+        //     only gets the teaser for real browser navigations (Sec-Fetch-Mode
+        //     or Accept:text/html). Machine clients / x402 agents get the 402.
+        //     next() is NOT called.
+        const isHU = decision.reason === "human-unverified";
+        const previewable =
+          decision.reason === "crawler" ||
+          (isHU && isBrowserNavigation(c.req.raw));
+        if (previewable && opts?.seoPreview !== undefined) {
+          const seo = opts.seoPreview({ slug });
+          if (isHU && opts?.humanUnlock !== undefined) {
+            const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
+            const html = buildUnlockHtml({ slug, url: publicUrl(c.req.raw, trustProxy), authBase, domain: cfg.domain, seo });
+            return withAdvertiseHeaders(
+              new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+              opts?.advertise,
+            );
+          }
+          return withAdvertiseHeaders(
+            buildSeoPreviewResponse(slug, publicUrl(c.req.raw, trustProxy), opts.seoPreview),
+            opts.advertise,
+          );
+        }
+        return withAdvertiseHeaders(decision.response(), opts?.advertise);
+      };
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Top-level convenience export
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole-app Hono middleware that gates every matched route behind the
+ * Verivyx settling paywall.
+ *
+ * ```ts
+ * import { verivyxHonoMiddleware } from "@verivyx/paywall-hono";
+ * app.use("*", verivyxHonoMiddleware({ domain: "example.com", token: "..." }));
+ * ```
+ */
+export function verivyxHonoMiddleware(opts?: HonoAdapterOptions): MiddlewareHandler {
+  return verivyxHono(opts).middleware();
 }

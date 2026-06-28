@@ -130,13 +130,13 @@ describe("verivyxNext", () => {
   });
 
   /**
-   * proxy() tests use the REAL classifier (no mock injection — proxy() ignores
-   * _core entirely). proxy() is a coarse, network-free pre-filter; the route
-   * handler is the authoritative gate.
+   * proxy() is the authoritative settling gate — it runs the full core pipeline
+   * (classify → authorize → verify+settle → failMode). Tests inject `_core` to
+   * avoid any network access; the injected decision IS the gate decision.
    */
   describe("proxy()", () => {
-    it("returns 402 for a clear AI-bot UA with no payment header", async () => {
-      // GPTBot matches the "gptbot" needle in the real classifier → ai-bot → 402.
+    it("returns 402 for a clear AI-bot UA (core: not allowed)", async () => {
+      // GPTBot: real core classifies as ai-bot → !allowed → proxy returns 402.
       const vx = verivyxNext({ domain: "ex.com", token: "t" });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
@@ -148,9 +148,18 @@ describe("verivyxNext", () => {
       expect(result?.status).toBe(402);
     });
 
-    it("returns undefined (pass-through) for a normal browser UA", async () => {
-      // A Chrome UA has no matching needle → human → proxy lets it through.
-      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+    it("returns undefined (pass-through) for an allowed human (mocked core)", async () => {
+      // proxy() is the authoritative gate — uses full core pipeline.
+      // Inject a stub core returning allowed:true directly (no network needed).
+      const allowedCore: Verivyx = {
+        protect: async () => ({
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        }),
+      } as unknown as Verivyx;
+      const vx = verivyxNext({ domain: "ex.com", token: "t", _core: allowedCore });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
         new Request("https://ex.com/articles/x", {
@@ -163,10 +172,17 @@ describe("verivyxNext", () => {
       expect(result).toBeUndefined();
     });
 
-    it("returns undefined (pass-through) when a payment header is present", async () => {
-      // Even a GPTBot UA is passed through when PAYMENT-SIGNATURE is present;
-      // the route handler handles authorization.
-      const vx = verivyxNext({ domain: "ex.com", token: "t" });
+    it("returns undefined (pass-through) when payment is settled (mocked core)", async () => {
+      // proxy() now runs the full pipeline. When allowed + no paymentResponse → undefined.
+      const paidCore: Verivyx = {
+        protect: async () => ({
+          allowed: true,
+          reason: "paid" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        }),
+      } as unknown as Verivyx;
+      const vx = verivyxNext({ domain: "ex.com", token: "t", _core: paidCore });
       const proxyFn = vx.proxy();
       const result = await proxyFn(
         new Request("https://ex.com/articles/x", {
@@ -206,6 +222,93 @@ describe("verivyxNext", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Browser-navigation gate: teaser only for real browser navigations
+  // ---------------------------------------------------------------------------
+
+  it("protect/seoPreview: human-unverified + accept:text/html → 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,application/xhtml+xml,*/*" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Mozilla/5.0", "sec-fetch-mode": "navigate" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: human-unverified + machine headers (accept:*/*) → 402", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "undici/5.0", "accept": "*/*" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/seoPreview: crawler + no browser headers → still 200 teaser", async () => {
+    const handler = vi.fn(async () => new Response("SECRET BODY", { status: 200 }));
+    const vx = verivyxNext({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const GET = vx.protect(handler, {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://ex.com/articles/x", {
+        headers: { "user-agent": "Googlebot/2.1" },
+      }),
+      { params: Promise.resolve({ slug: "x" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
   // IP-trust security: verify what x-real-ip the CORE actually receives.
   // ---------------------------------------------------------------------------
 
@@ -224,6 +327,143 @@ describe("verivyxNext", () => {
     );
     // XFF first-hop (5.5.5.5) takes precedence; client x-real-ip is overridden.
     expect(capturedIp()).toBe("5.5.5.5");
+  });
+
+  it("honors x-forwarded-host/proto for the core request URL (trustProxy)", async () => {
+    let seenUrl = "";
+    const core: Verivyx = {
+      protect: async (r: Request) => {
+        seenUrl = r.url;
+        return {
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        };
+      },
+    } as unknown as Verivyx;
+    const vx = verivyxNext({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    const GET = vx.protect(vi.fn(async () => new Response("ok")));
+    await GET(
+      new Request("https://internal-host:3100/articles/a", {
+        headers: {
+          "x-forwarded-host": "demo.example.com",
+          "x-forwarded-proto": "https",
+          "user-agent": "Mozilla/5.0",
+        },
+      }),
+      { params: Promise.resolve({ slug: "a" }) },
+    );
+    expect(new URL(seenUrl).host).toBe("demo.example.com");
+    expect(new URL(seenUrl).protocol).toBe("https:");
+  });
+
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers (protect)
+  // ---------------------------------------------------------------------------
+
+  it("protect/humanUnlock: human-unverified + browser accept:text/html + humanUnlock → 200 unlock page", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no PoW script)", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: crawler + humanUnlock → static teaser (NO unlock script)", async () => {
+    const crawlerCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "crawler" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: crawlerCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "text/html" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+  });
+
+  it("protect/humanUnlock: machine (no browser headers) + humanUnlock → 402", async () => {
+    const huCore: Verivyx = {
+      protect: async () => ({
+        allowed: false,
+        reason: "human-unverified" as const,
+        response: () => new Response("x", { status: 402 }),
+        paymentResponse: undefined,
+      }),
+    } as unknown as Verivyx;
+    const vx = verivyxNext({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: huCore,
+      humanUnlock: {},
+    });
+    const GET = vx.protect(vi.fn(async () => new Response("SECRET BODY", { status: 200 })), {
+      seoPreview: () => ({ title: "T", excerpt: "E" }),
+    });
+    const res = await GET(
+      new Request("https://pub.com/seven-wonders", { headers: { "accept": "*/*" } }),
+      { params: Promise.resolve({ slug: "seven-wonders" }) },
+    );
+    expect(res.status).toBe(402);
   });
 
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {

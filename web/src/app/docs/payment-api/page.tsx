@@ -13,8 +13,7 @@ export default function PaymentApi() {
         The money path: the x402 payment gateway tells agents how to pay and settles payments on
         Stellar, and the hydration service returns the real content to anyone who has paid or proven
         they&apos;re human. Base URL <C>https://api.verivyx.com</C>. See the{' '}
-        <A href="/docs/x402">x402 flow guide</A> for the narrative, or the{' '}
-        <A href="/docs/api">interactive reference</A> for full schemas.
+        <A href="/docs/x402">x402 flow guide</A> for the narrative.
       </Lead>
 
       <H2 id="endpoints">Endpoints at a glance</H2>

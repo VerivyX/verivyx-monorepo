@@ -12,6 +12,8 @@ export interface VerivyxOptions {
   timeoutMs?: number;
   logger?: Logger;
   onDecision?: (d: GateDecision) => void;
+  /** Human-unlock options. Adapters use `buildUnlockHtml` with this config. */
+  humanUnlock?: { authBase?: string };
 }
 
 /** Fully-resolved config — no optional fields except price and onDecision. */

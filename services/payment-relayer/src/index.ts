@@ -3,6 +3,7 @@ import cors from 'cors';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom, extractInvokedOp } from './payer';
+import { Mutex } from './mutex.js';
 import { payloadHash, settleOnce, SettleValidationError } from './idempotency';
 import {
   parseAllowedPaywallContracts, assertPaywallContractAllowed,
@@ -79,6 +80,10 @@ if (FACILITATOR_SECRET) {
     console.error('FACILITATOR_STELLAR_SECRET is set but invalid — Soroban fee sponsoring disabled');
   }
 }
+
+// Single FIFO mutex shared by both facilitator-sourced Soroban functions.
+// Ensures concurrent settles don't collide on the facilitator account sequence number.
+const facilitatorLock = new Mutex();
 
 const X402Version = 2;
 
@@ -358,46 +363,47 @@ async function submitSorobanAsFeeSponsor(txXdr: string): Promise<string> {
   if (!facilitatorKeypair) {
     throw new Error('FACILITATOR_STELLAR_SECRET required for fee-sponsored Soroban submission');
   }
+  return facilitatorLock.run(async () => {
+    // Parse client TX to extract operations (with their signed auth entries)
+    const clientTx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
 
-  // Parse client TX to extract operations (with their signed auth entries)
-  const clientTx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
+    // Load facilitator's current sequence number from Soroban RPC
+    const facilitatorAccount = await sorobanServer.getAccount(facilitatorKeypair!.publicKey());
 
-  // Load facilitator's current sequence number from Soroban RPC
-  const facilitatorAccount = await sorobanServer.getAccount(facilitatorKeypair.publicKey());
+    // Rebuild TX with facilitator as source, preserving all ops and their auth entries
+    const txBuilder = new TransactionBuilder(facilitatorAccount, {
+      fee: '10000000', // 1 XLM max fee budget — actual fee determined by simulation
+      networkPassphrase: NETWORK_PASSPHRASE,
+    }).setTimeout(30);
 
-  // Rebuild TX with facilitator as source, preserving all ops and their auth entries
-  const txBuilder = new TransactionBuilder(facilitatorAccount, {
-    fee: '10000000', // 1 XLM max fee budget — actual fee determined by simulation
-    networkPassphrase: NETWORK_PASSPHRASE,
-  }).setTimeout(30);
+    // Copy XDR operations (preserves invokeHostFunction auth entries).
+    // clientTx.tx is xdr.Transaction — operations() returns xdr.Operation[].
+    for (const op of (clientTx as unknown as { tx: { operations(): unknown[] } }).tx.operations()) {
+      txBuilder.addOperation(op as Parameters<typeof txBuilder.addOperation>[0]);
+    }
 
-  // Copy XDR operations (preserves invokeHostFunction auth entries).
-  // clientTx.tx is xdr.Transaction — operations() returns xdr.Operation[].
-  for (const op of (clientTx as unknown as { tx: { operations(): unknown[] } }).tx.operations()) {
-    txBuilder.addOperation(op as Parameters<typeof txBuilder.addOperation>[0]);
-  }
+    const tx = txBuilder.build();
 
-  const tx = txBuilder.build();
+    // Simulate against current ledger state to get resource limits and footprint
+    const simResult = await sorobanServer.simulateTransaction(tx);
+    if (!rpc.Api.isSimulationSuccess(simResult)) {
+      const errResult = simResult as rpc.Api.SimulateTransactionErrorResponse;
+      throw new Error(`Soroban simulation failed: ${errResult.error}`);
+    }
 
-  // Simulate against current ledger state to get resource limits and footprint
-  const simResult = await sorobanServer.simulateTransaction(tx);
-  if (!rpc.Api.isSimulationSuccess(simResult)) {
-    const errResult = simResult as rpc.Api.SimulateTransactionErrorResponse;
-    throw new Error(`Soroban simulation failed: ${errResult.error}`);
-  }
+    // Assemble: merges simulation soroban data (footprint, resource limits) into TX
+    const assembled = rpc.assembleTransaction(tx, simResult).build();
 
-  // Assemble: merges simulation soroban data (footprint, resource limits) into TX
-  const assembled = rpc.assembleTransaction(tx, simResult).build();
+    // Sign with facilitator key (the TX source)
+    assembled.sign(facilitatorKeypair!);
 
-  // Sign with facilitator key (the TX source)
-  assembled.sign(facilitatorKeypair);
-
-  logger.info({ facilitator: facilitatorKeypair.publicKey(), sorobanUrl }, 'Submitting fee-sponsored Soroban TX');
-  const sendRes = await sorobanServer.sendTransaction(assembled);
-  if (sendRes.status === 'ERROR') {
-    throw new Error(`Soroban send error: ${JSON.stringify(sendRes.errorResult)}`);
-  }
-  return pollSorobanConfirmation(sendRes.hash);
+    logger.info({ facilitator: facilitatorKeypair!.publicKey(), sorobanUrl }, 'Submitting fee-sponsored Soroban TX');
+    const sendRes = await sorobanServer.sendTransaction(assembled);
+    if (sendRes.status === 'ERROR') {
+      throw new Error(`Soroban send error: ${JSON.stringify(sendRes.errorResult)}`);
+    }
+    return pollSorobanConfirmation(sendRes.hash);
+  });
 }
 
 // callDistribute invokes paywall_core.distribute(domain, usdc, amount) as the keeper.
@@ -413,39 +419,41 @@ async function callDistribute(
   if (!facilitatorKeypair) {
     throw new Error('FACILITATOR_STELLAR_SECRET required for distribute');
   }
-  const contract = new Contract(paywallContract);
-  const account = await sorobanServer.getAccount(facilitatorKeypair.publicKey());
+  return facilitatorLock.run(async () => {
+    const contract = new Contract(paywallContract);
+    const account = await sorobanServer.getAccount(facilitatorKeypair!.publicKey());
 
-  const op = contract.call(
-    'distribute',
-    nativeToScVal(domain, { type: 'string' }),
-    new Address(usdcToken).toScVal(),
-    nativeToScVal(BigInt(amount), { type: 'i128' }),
-  );
+    const op = contract.call(
+      'distribute',
+      nativeToScVal(domain, { type: 'string' }),
+      new Address(usdcToken).toScVal(),
+      nativeToScVal(BigInt(amount), { type: 'i128' }),
+    );
 
-  const tx = new TransactionBuilder(account, {
-    fee: '10000000', // 1 XLM budget — real fee from simulation
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(op)
-    .setTimeout(30)
-    .build();
+    const tx = new TransactionBuilder(account, {
+      fee: '10000000', // 1 XLM budget — real fee from simulation
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
 
-  const sim = await sorobanServer.simulateTransaction(tx);
-  if (!rpc.Api.isSimulationSuccess(sim)) {
-    const errSim = sim as rpc.Api.SimulateTransactionErrorResponse;
-    throw new Error(`distribute simulation failed: ${errSim.error}`);
-  }
+    const sim = await sorobanServer.simulateTransaction(tx);
+    if (!rpc.Api.isSimulationSuccess(sim)) {
+      const errSim = sim as rpc.Api.SimulateTransactionErrorResponse;
+      throw new Error(`distribute simulation failed: ${errSim.error}`);
+    }
 
-  const assembled = rpc.assembleTransaction(tx, sim).build();
-  assembled.sign(facilitatorKeypair);
+    const assembled = rpc.assembleTransaction(tx, sim).build();
+    assembled.sign(facilitatorKeypair!);
 
-  logger.info({ paywallContract, domain, amount }, 'Calling contract.distribute()');
-  const sendRes = await sorobanServer.sendTransaction(assembled);
-  if (sendRes.status === 'ERROR') {
-    throw new Error(`distribute send error: ${JSON.stringify(sendRes.errorResult)}`);
-  }
-  return pollSorobanConfirmation(sendRes.hash);
+    logger.info({ paywallContract, domain, amount }, 'Calling contract.distribute()');
+    const sendRes = await sorobanServer.sendTransaction(assembled);
+    if (sendRes.status === 'ERROR') {
+      throw new Error(`distribute send error: ${JSON.stringify(sendRes.errorResult)}`);
+    }
+    return pollSorobanConfirmation(sendRes.hash);
+  });
 }
 
 async function submitClassic(txXdr: string): Promise<string> {

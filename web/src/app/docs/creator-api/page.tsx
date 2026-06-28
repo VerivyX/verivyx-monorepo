@@ -12,8 +12,7 @@ export default function CreatorApi() {
       <Lead>
         Accounts, content management, analytics, humanity verification, and the zero-config Connect
         handshake. Base URL <C>https://api.verivyx.com</C>. Creator endpoints require
-        <C>Authorization: Bearer &lt;token&gt;</C>; see the <A href="/docs/api">interactive reference</A> for
-        full schemas.
+        <C>Authorization: Bearer &lt;token&gt;</C>.
       </Lead>
 
       <H2 id="accounts">Accounts</H2>

@@ -158,6 +158,33 @@ describe("verivyxHono", () => {
     expect(capturedIp()).toBe("1.2.3.4");
   });
 
+  it("honors x-forwarded-host/proto for the core request URL (trustProxy)", async () => {
+    let seenUrl = "";
+    const core: Verivyx = {
+      protect: async (r: Request) => {
+        seenUrl = r.url;
+        return {
+          allowed: true,
+          reason: "human-unverified" as const,
+          response: () => new Response(null),
+          paymentResponse: undefined,
+        };
+      },
+    } as unknown as Verivyx;
+    const vx = verivyxHono({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(async (c) => c.body("ok", 200)));
+    await a.request("https://internal-host:3100/articles/a", {
+      headers: {
+        "x-forwarded-host": "demo.example.com",
+        "x-forwarded-proto": "https",
+        "user-agent": "Mozilla/5.0",
+      },
+    });
+    expect(new URL(seenUrl).host).toBe("demo.example.com");
+    expect(new URL(seenUrl).protocol).toBe("https:");
+  });
+
   it("IP-trust: trustProxy:false strips x-real-ip so core sees null (no IP spoofing)", async () => {
     const { core, capturedIp } = makeCaptureCore();
     const vx = verivyxHono({ domain: "ex.com", token: "t", trustProxy: false, _core: core });
@@ -198,7 +225,7 @@ describe("verivyxHono", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("seoPreview: human-unverified request receives 200 HTML with JSON-LD, handler not called", async () => {
+  it("seoPreview: human-unverified + browser accept:text/html → 200 teaser, handler not called", async () => {
     const vx = verivyxHono({
       domain: "ex.com",
       token: "t",
@@ -212,12 +239,163 @@ describe("verivyxHono", () => {
       seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
     }));
     const res = await a.request("/articles/my-article", {
-      headers: { "user-agent": "Mozilla/5.0" },
+      headers: { "user-agent": "Mozilla/5.0", "accept": "text/html,application/xhtml+xml,*/*" },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/text\/html/);
     const body = await res.text();
     expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + sec-fetch-mode:navigate → 200 teaser, handler not called", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Mozilla/5.0", "sec-fetch-mode": "navigate" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: human-unverified + machine headers (accept:*/*) → 402 so x402 agent can pay", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "human" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: () => ({ title: "Title", excerpt: "Excerpt." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "undici/5.0", "accept": "*/*" },
+    });
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("seoPreview: crawler + no browser headers → still 200 teaser (crawlers always previewed)", async () => {
+    const vx = verivyxHono({
+      domain: "ex.com",
+      token: "t",
+      _core: verivyx.mock({ classification: "crawler" }),
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) =>
+      c.body("SECRET BODY", 200),
+    );
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, {
+      seoPreview: ({ slug }) => ({ title: `Article: ${slug}`, excerpt: "A teaser." }),
+    }));
+    const res = await a.request("/articles/my-article", {
+      headers: { "user-agent": "Googlebot/2.1" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    const body = await res.text();
+    expect(body).toMatch(/isAccessibleForFree|vx-paywalled/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // humanUnlock: PoW unlock page for human-unverified browsers (protect)
+  // ---------------------------------------------------------------------------
+
+  it("protect/humanUnlock: human-unverified + browser accept:text/html + humanUnlock → 200 unlock page with PoW script", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: human-unverified + browser + NO humanUnlock → static teaser (no PoW script)", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: crawler + humanUnlock → static teaser (NO unlock script)", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "crawler" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("crypto.subtle.digest");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock: machine (accept:*/*) + humanUnlock → 402", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "*/*" } });
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("protect/humanUnlock + advertise: unlock 200 response carries Link + Content-Usage headers", async () => {
+    const vx = verivyxHono({
+      domain: "web-test.verivyx.com",
+      token: "t",
+      _core: { protect: async () => ({ allowed: false, reason: "human-unverified" as const, response: () => new Response("x", { status: 402 }), paymentResponse: undefined }) } as any,
+      humanUnlock: {},
+      advertise: { licenseUrl: "https://ex.com/license.xml" },
+    });
+    const handler = vi.fn((c: Parameters<Parameters<typeof vx.protect>[0]>[0]) => c.body("SECRET", 200));
+    const a = new Hono();
+    a.get("/articles/:slug", vx.protect(handler, { seoPreview: () => ({ title: "T", excerpt: "E" }) }));
+    const res = await a.request("/articles/seven-wonders", { headers: { "accept": "text/html" } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("crypto.subtle.digest");
+    expect(res.headers.get("content-usage")).toBe("train-ai=n, search=y");
+    expect(res.headers.get("link")).toContain('rel="license"');
     expect(handler).not.toHaveBeenCalled();
   });
 

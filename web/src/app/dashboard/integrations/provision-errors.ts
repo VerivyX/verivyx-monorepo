@@ -1,5 +1,5 @@
 const MESSAGES: Record<string, string> = {
-  verify_failed: "We couldn't read the file, or its contents didn't match. Make sure it's live at the exact URL, then verify again.",
+  verify_failed: "We couldn't find the TXT record, or its value didn't match. DNS can take a few minutes — make sure it's live, then verify again.",
   expired: "That code expired. Restart to get a fresh one.",
   domain_conflict: "This domain is already verified on another account.",
   invalid_site: "Enter a valid, public domain (no localhost or private addresses).",

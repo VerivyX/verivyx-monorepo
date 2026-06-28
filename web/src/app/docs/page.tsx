@@ -43,7 +43,7 @@ export default function DocsIntro() {
         <Li><A href="/docs/embed">Embed script</A> — the one tag and its options.</Li>
         <Li><A href="/docs/wordpress">WordPress plugin</A> — one-click install, no code.</Li>
         <Li><A href="/docs/x402">How agents pay</A> — the x402 flow for agent developers.</Li>
-        <Li><A href="/docs/api-overview">API</A> — REST endpoints for payments, content, and creators, plus the full Swagger reference.</Li>
+        <Li><A href="/docs/api-overview">API</A> — REST endpoints for payments, content, and creators.</Li>
         <Li><A href="https://playground.verivyx.com">Playground</A> — watch an agent pay a paywall live.</Li>
       </Ul>
 

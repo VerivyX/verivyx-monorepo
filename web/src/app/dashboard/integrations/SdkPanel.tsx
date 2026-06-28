@@ -15,6 +15,7 @@ import {
 import { api, normalizeDomain, type CreatorUser } from '@/lib/api';
 import { type Framework, FRAMEWORKS, envBlock, snippetFor } from './snippets';
 import { provisionErrorMessage } from './provision-errors';
+import { dnsRecordName } from './dns-record-name';
 
 // ---------------------------------------------------------------------------
 // Framework selector
@@ -439,7 +440,10 @@ export function SdkPanel({
   };
 
   // ---- Verified return state (no wizard) ----
-  if (isVerified && !reissuing) {
+  // Skip this when we hold a freshly-issued `token` — that token is shown once,
+  // only in Step 3, so a just-completed verify (which flips isVerified via the
+  // api.me() refresh in onVerified) must still render Step 3 to reveal it.
+  if (isVerified && !reissuing && !token) {
     const verifiedDomain = user.domain!;
     return (
       <div className="space-y-6">
@@ -563,10 +567,10 @@ export function SdkPanel({
           <div className="space-y-5">
             <div>
               <p className="text-sm font-semibold text-[var(--color-ink-700)]">
-                Add your verification file
+                Add a DNS TXT record
               </p>
               <p className="mt-1 text-sm text-[var(--color-ink-500)]">
-                Create a file at the URL below containing exactly the code shown. Then click Verify.
+                Add the TXT record below at your DNS provider, then click Verify.
               </p>
             </div>
 
@@ -576,39 +580,36 @@ export function SdkPanel({
               </div>
             ) : nonce ? (
               <>
-                {/* File URL */}
-                <div className="rounded-xl border border-[var(--color-cream-200)] bg-[var(--color-cream-50)] p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-400,#94a3b8)]">
-                    File URL
+                {/* DNS TXT record */}
+                <div className="rounded-xl border border-[var(--color-cream-200)] bg-[var(--color-cream-50)] p-4 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-400,#94a3b8)]">
+                    Add this DNS TXT record at your DNS provider
                   </p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <code className="min-w-0 flex-1 break-all font-mono text-sm text-[var(--color-ink-800,#1e293b)]">
-                      {`https://${domain}/.well-known/verivyx.txt`}
-                    </code>
-                    <CopyButton
-                      text={`https://${domain}/.well-known/verivyx.txt`}
-                      label="Copy URL"
-                      small
-                    />
-                  </div>
+                  <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+                    <dt className="text-[var(--color-ink-400,#94a3b8)]">Type</dt>
+                    <dd className="font-mono text-[var(--color-ink-800,#1e293b)]">TXT</dd>
+                    <dt className="text-[var(--color-ink-400,#94a3b8)]">Name / Host</dt>
+                    <dd className="font-mono text-[var(--color-ink-800,#1e293b)]">
+                      {dnsRecordName(domain).name}
+                      <span className="block font-sans text-xs text-[var(--color-ink-400,#94a3b8)]">
+                        Creates the record at <span className="font-mono">{dnsRecordName(domain).host}</span>. Most panels: enter the name shown above (for a root domain, <span className="font-mono">@</span>); some want the full name.
+                      </span>
+                    </dd>
+                    <dt className="text-[var(--color-ink-400,#94a3b8)]">Value</dt>
+                    <dd className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <code className="min-w-0 flex-1 break-all font-mono text-[var(--color-ink-800,#1e293b)]">
+                          {`verivyx-site-verification=${nonce}`}
+                        </code>
+                        <CopyButton text={`verivyx-site-verification=${nonce}`} label="Copy value" small />
+                      </div>
+                    </dd>
+                  </dl>
                 </div>
 
-                {/* Nonce */}
-                <div className="rounded-xl border border-[var(--color-cream-200)] bg-[var(--color-cream-50)] p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-400,#94a3b8)]">
-                    File contents (paste exactly)
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <code className="min-w-0 flex-1 break-all font-mono text-sm text-[var(--color-ink-800,#1e293b)]">
-                      {nonce}
-                    </code>
-                    <CopyButton text={nonce} label="Copy code" small />
-                  </div>
-                </div>
-
-                {/* Expiry note */}
+                {/* Propagation + expiry note */}
                 <p className="text-xs text-[var(--color-ink-400,#94a3b8)]">
-                  This code expires in 10 minutes.{' '}
+                  DNS can take a few minutes to propagate — click Verify after adding it. This code expires in 60 minutes.{' '}
                   <button
                     type="button"
                     onClick={handleReInit}

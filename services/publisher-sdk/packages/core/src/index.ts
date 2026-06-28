@@ -44,6 +44,9 @@ export { attachPaymentResponse } from "./settle.js";
 export { contentUsageHeader, rslLinkHeader, rslLinkTag, rslRobotsBlock } from "./discovery.js";
 export type { DiscoveryOptions } from "./discovery.js";
 
+// Human-unlock (PoW in-page solver + cookie helper)
+export { buildUnlockHtml, getCookie } from "./unlock.js";
+
 // ===========================================================================
 // verivyx() / protect() orchestration — Task 13 capstone
 // ===========================================================================
@@ -62,6 +65,7 @@ import { buildPaywallJsonLd, buildPreviewHtml } from "./preview.js";
 import { attachPaymentResponse } from "./settle.js";
 import { buildPaymentRequired } from "./x402.js";
 import type { PaymentRequirement } from "./x402.js";
+import { getCookie } from "./unlock.js";
 
 // ---------------------------------------------------------------------------
 // Public surface types
@@ -335,9 +339,10 @@ async function evaluate(
 
       case "verified": {
         const authHeader = req.headers.get("authorization") ?? "";
-        const bearer = authHeader.toLowerCase().startsWith("bearer ")
+        const headerBearer = authHeader.toLowerCase().startsWith("bearer ")
           ? authHeader.slice(7).trim()
           : undefined;
+        const bearer = headerBearer ?? getCookie(req, "vx_session");
         const result = await client.authorize({
           slug,
           ...(bearer !== undefined ? { bearer } : {}),

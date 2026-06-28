@@ -4,7 +4,7 @@ import { provisionErrorMessage } from "./provision-errors.js";
 
 describe("provisionErrorMessage", () => {
   it("maps verify_failed to an actionable message", () => {
-    assert.match(provisionErrorMessage("verify_failed"), /file|match/i);
+    assert.match(provisionErrorMessage("verify_failed"), /record|match/i);
   });
   it("maps expired", () => assert.match(provisionErrorMessage("expired"), /expired|restart/i));
   it("maps domain_conflict", () => assert.match(provisionErrorMessage("domain_conflict"), /another account/i));

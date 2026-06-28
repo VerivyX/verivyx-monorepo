@@ -31,6 +31,9 @@ services/x402-gateway/gateway
 services/hydration-service/hydration-service
 services/hydration-service/hydration
 
+# plugin distribution builds — served from disk, not version-controlled
+web/public/*.zip
+
 # docker volumes
 postgres_data/
 clickhouse_data/
