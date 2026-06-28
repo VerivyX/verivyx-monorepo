@@ -25,3 +25,18 @@ test('a throwing fn releases the lock and propagates', async () => {
   await m.run(async () => { ran = true; });
   assert.equal(ran, true);
 });
+
+test('a throwing fn releases the lock for an ALREADY-QUEUED run', async () => {
+  const m = new Mutex();
+  const p1 = m.run(async () => { throw new Error('boom'); });
+  let ran = false;
+  const p2 = m.run(async () => { ran = true; });
+  await p1.catch(() => {});
+  await p2;
+  assert.equal(ran, true);
+});
+
+test('run() returns the resolved value of fn', async () => {
+  const m = new Mutex();
+  assert.equal(await m.run(async () => 42), 42);
+});
