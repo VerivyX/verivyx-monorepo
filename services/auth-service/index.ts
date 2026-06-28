@@ -1771,13 +1771,57 @@ app.post('/api/v1/admin/mcp/early-access', adminGuard, async (req: AuthedRequest
   }
 });
 
-// Admin: MCP early-access waitlist.
+// Admin: grant/revoke MCP early-access by email, with pre-grant for emails that
+// are not yet registered. When the email belongs to an existing user we flip the
+// `mcpEarlyAccess` flag directly; in all grant cases we record an
+// McpEarlyAccessGrant row so a future registration with that email is auto-granted
+// (see registration handler). Emails are normalised to lowercase on write across
+// the codebase, so an exact lowercase lookup is the case-insensitive match.
+app.post('/api/v1/admin/mcp/grant', adminGuard, async (req: AuthedRequest, res: Response) => {
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const granted = req.body?.granted !== false; // default true
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid_email_required' });
+  try {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (granted) {
+      if (user) await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: true } });
+      await prisma.mcpEarlyAccessGrant.upsert({
+        where: { email },
+        create: { email, grantedByAdmin: req.userId! },
+        update: { grantedByAdmin: req.userId! },
+      });
+    } else {
+      if (user) await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: false } });
+      await prisma.mcpEarlyAccessGrant.deleteMany({ where: { email } });
+    }
+    // Best-effort: keep the public waitlist's `invited` flag in sync.
+    await prisma.mcpWaitlist.updateMany({ where: { email }, data: { invited: granted } }).catch(() => {});
+    await logAdminAction(req.userId!, granted ? 'mcp_early_access_grant' : 'mcp_early_access_revoke', email, { granted, userExisted: !!user });
+    res.json({ ok: true, email, granted, applied: !!user, preGranted: !user && granted });
+  } catch (err) {
+    console.error('mcp/grant error:', err instanceof Error ? err.message : err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Admin: MCP early-access waitlist. Each row is enriched with whether the email
+// belongs to a registered user and that user's current early-access flag.
 app.get('/api/v1/admin/mcp-waitlist', adminGuard, async (_req: AuthedRequest, res: Response) => {
   const [rows, total] = await Promise.all([
     prisma.mcpWaitlist.findMany({ orderBy: { createdAt: 'desc' }, take: 500 }),
     prisma.mcpWaitlist.count(),
   ]);
-  res.json({ total, waitlist: rows });
+  const emails = rows.map((r) => r.email);
+  const users = emails.length
+    ? await prisma.user.findMany({ where: { email: { in: emails } }, select: { email: true, mcpEarlyAccess: true } })
+    : [];
+  const byEmail = new Map(users.map((u) => [u.email, u.mcpEarlyAccess]));
+  const waitlist = rows.map((r) => ({
+    ...r,
+    registered: byEmail.has(r.email),
+    mcpEarlyAccess: byEmail.get(r.email) ?? false,
+  }));
+  res.json({ total, waitlist });
 });
 
 // Admin: MCP server health/overview (proxied from mcp-server's internal endpoint).
