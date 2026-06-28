@@ -42,4 +42,54 @@ describe("resolveConfig", () => {
       resolveConfig({ domain: "a.com", token: "   " }, {}),
     ).toThrow(ConfigError);
   });
+
+  // --- settleTimeoutMs ---
+
+  it("settleTimeoutMs defaults to 60000", () => {
+    const c = resolveConfig({ domain: "a.com", token: "t" }, {});
+    expect(c.settleTimeoutMs).toBe(60_000);
+  });
+
+  it("settleTimeoutMs reads from VERIVYX_SETTLE_TIMEOUT_MS env", () => {
+    const c = resolveConfig(
+      { domain: "a.com", token: "t" },
+      { VERIVYX_SETTLE_TIMEOUT_MS: "90000" },
+    );
+    expect(c.settleTimeoutMs).toBe(90_000);
+  });
+
+  it("opts.settleTimeoutMs wins over env VERIVYX_SETTLE_TIMEOUT_MS", () => {
+    const c = resolveConfig(
+      { domain: "a.com", token: "t", settleTimeoutMs: 45_000 },
+      { VERIVYX_SETTLE_TIMEOUT_MS: "90000" },
+    );
+    expect(c.settleTimeoutMs).toBe(45_000);
+  });
+
+  it("throws ConfigError when VERIVYX_SETTLE_TIMEOUT_MS is non-numeric", () => {
+    expect(() =>
+      resolveConfig(
+        { domain: "a.com", token: "t" },
+        { VERIVYX_SETTLE_TIMEOUT_MS: "not-a-number" },
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError when VERIVYX_SETTLE_TIMEOUT_MS is zero", () => {
+    expect(() =>
+      resolveConfig(
+        { domain: "a.com", token: "t" },
+        { VERIVYX_SETTLE_TIMEOUT_MS: "0" },
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it("settleTimeoutMs is independent of timeoutMs", () => {
+    const c = resolveConfig(
+      { domain: "a.com", token: "t", timeoutMs: 500, settleTimeoutMs: 120_000 },
+      {},
+    );
+    expect(c.timeoutMs).toBe(500);
+    expect(c.settleTimeoutMs).toBe(120_000);
+  });
 });

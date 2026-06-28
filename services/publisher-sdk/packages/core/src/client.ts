@@ -96,10 +96,11 @@ export class VerivyxClient {
       headers["Authorization"] = `Bearer ${bearer}`;
     }
 
-    // AbortController timeout — AbortSignal.timeout() is Node 17.3+ / modern
-    // runtimes; use AbortController for broader ES2020 compat.
+    // AbortController timeout — use settleTimeoutMs (default 60 s) so an agent
+    // that has already paid on-chain is not aborted while the backend awaits
+    // transaction confirmation (settle takes 14–35 s in production).
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), this.cfg.timeoutMs);
+    const timer = setTimeout(() => ac.abort(), this.cfg.settleTimeoutMs);
 
     let response: Response;
     try {

@@ -9,7 +9,14 @@ export interface VerivyxOptions {
   match?: string[];
   failMode?: "teaser" | "open" | "closed";
   price?: Price;
+  /** Timeout for the quick requirements/classify path (default 800 ms). */
   timeoutMs?: number;
+  /**
+   * Timeout for the authorize/settle path, which awaits an on-chain
+   * transaction (default 60 000 ms). Kept separate so a paying agent is
+   * not aborted mid-settle.
+   */
+  settleTimeoutMs?: number;
   logger?: Logger;
   onDecision?: (d: GateDecision) => void;
   /** Human-unlock options. Adapters use `buildUnlockHtml` with this config. */
@@ -24,7 +31,10 @@ export interface ResolvedConfig {
   match: string[];
   failMode: "teaser" | "open" | "closed";
   price?: Price;
+  /** Timeout for the quick requirements/classify path (ms). */
   timeoutMs: number;
+  /** Timeout for the authorize/settle path that awaits on-chain confirmation (ms). */
+  settleTimeoutMs: number;
   logger: Logger;
   onDecision?: (d: GateDecision) => void;
 }
@@ -119,6 +129,24 @@ export function resolveConfig(
     timeoutMs = 800;
   }
 
+  // --- settleTimeoutMs ---
+  // Separate, longer timeout for the authorize/settle path (awaits on-chain tx).
+  // Default 60 000 ms; keeps a paying agent from being aborted mid-settle.
+  let settleTimeoutMs: number;
+  if (opts?.settleTimeoutMs !== undefined) {
+    settleTimeoutMs = opts.settleTimeoutMs;
+  } else if (env["VERIVYX_SETTLE_TIMEOUT_MS"] !== undefined) {
+    const parsed = parseInt(env["VERIVYX_SETTLE_TIMEOUT_MS"], 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new ConfigError(
+        `VERIVYX_SETTLE_TIMEOUT_MS must be a positive integer, got "${env["VERIVYX_SETTLE_TIMEOUT_MS"]}"`,
+      );
+    }
+    settleTimeoutMs = parsed;
+  } else {
+    settleTimeoutMs = 60_000;
+  }
+
   // --- logger ---
   const logger: Logger = opts?.logger ?? consoleLogger;
 
@@ -133,6 +161,7 @@ export function resolveConfig(
     match,
     failMode,
     timeoutMs,
+    settleTimeoutMs,
     logger,
   };
   return {
