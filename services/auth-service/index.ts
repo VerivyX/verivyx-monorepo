@@ -21,7 +21,7 @@ import {
   type Tier,
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
-import { newSiteId } from './src/site.js';
+import { newSiteId, onchainKey } from './src/site.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
@@ -761,22 +761,25 @@ const PAYMENT_RELAYER_URL = process.env.PAYMENT_RELAYER_URL || 'http://payment-r
 // Best-effort: mirror the publisher's payout/price onto the paywall contract so
 // distribute() can pay them. Never throws into the request path; idempotent.
 async function syncCreatorOnChain(user: {
-  domain: string | null; domainVerified?: boolean | null;
+  domain: string | null; siteId?: string | null; domainVerified?: boolean | null;
   stellar_address: string | null; pricePerRequest: unknown; platformFee?: unknown;
 }): Promise<void> {
   if (!user.domain || !user.domainVerified || !user.stellar_address) return;
   const price = Number(user.pricePerRequest);
   const platformFee = Number(user.platformFee ?? 0.001);
   if (!(price > 0)) return;
+  // Register against the stable tenant key (domain → siteId fallback) so the
+  // on-chain creator record survives domain changes / re-keying.
+  const key = onchainKey({ domain: user.domain, siteId: user.siteId });
   try {
     const r = await fetch(`${PAYMENT_RELAYER_URL}/register-creator`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': INTERNAL_TOKEN },
-      body: JSON.stringify({ domain: user.domain, creator: user.stellar_address, price, platformFee }),
+      body: JSON.stringify({ domain: key, creator: user.stellar_address, price, platformFee }),
     });
-    if (!r.ok) console.warn(`[register-creator] relayer ${r.status} for domain=${user.domain}`);
+    if (!r.ok) console.warn(`[register-creator] relayer ${r.status} for key=${key}`);
   } catch (e) {
-    console.warn(`[register-creator] failed for domain=${user.domain}:`, (e as Error).message);
+    console.warn(`[register-creator] failed for key=${key}:`, (e as Error).message);
   }
 }
 
@@ -1070,23 +1073,30 @@ app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Respons
 const PLATFORM_STELLAR_ADDRESS = requireEnv('PLATFORM_STELLAR_ADDRESS');
 
 app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response) => {
+  // Resolve a tenant by site token (primary, Task 55) or by domain (legacy).
+  const token = req.query.token as string | undefined;
   const domain = req.query.domain as string | undefined;
-  if (!domain) return res.status(400).json({ error: 'domain required' });
-  const user = await prisma.user.findFirst({
-    where: { domain },
-    select: {
-      domain: true,
-      stellar_address: true,
-      pricePerRequest: true,
-      platformFee: true,
-      paywallEnabled: true,
-      wpInternalToken: true,
-      contentUrl: true,
-    },
-  });
+  if (!token && !domain) return res.status(400).json({ error: 'token or domain required' });
+  const select = {
+    domain: true,
+    siteId: true,
+    stellar_address: true,
+    pricePerRequest: true,
+    platformFee: true,
+    paywallEnabled: true,
+    wpInternalToken: true,
+    contentUrl: true,
+  } as const;
+  const user = token
+    ? await prisma.user.findFirst({ where: { wpInternalToken: token }, select })
+    : await prisma.user.findFirst({ where: { domain }, select });
   if (!user) return res.status(404).json({ error: 'Not found' });
+  // Stable tenant key (domain → siteId fallback). Guard against the impossible
+  // both-empty case so a malformed row degrades to onchainKey:null, not a 500.
+  const hasKey = !!(user.domain ?? '').trim() || !!(user.siteId ?? '').trim();
   res.json({
     domain: user.domain,
+    siteId: user.siteId ?? null,
     stellar_address: user.stellar_address,
     pricePerRequest: Number(user.pricePerRequest),
     platformFee: Number(user.platformFee || 0),
@@ -1094,6 +1104,7 @@ app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response
     paywallEnabled: user.paywallEnabled,
     wpInternalToken: user.wpInternalToken ?? null,
     contentUrl: user.contentUrl ?? null,
+    onchainKey: hasKey ? onchainKey({ domain: user.domain, siteId: user.siteId }) : null,
   });
 });
 
