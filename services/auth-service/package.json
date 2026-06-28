@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch index.ts",
-    "test": "tsc --noEmit && tsx --test test/*.test.ts src/*.test.ts"
+    "test": "tsc --noEmit && tsx --test test/*.test.ts site.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",

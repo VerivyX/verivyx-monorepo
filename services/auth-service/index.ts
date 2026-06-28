@@ -21,7 +21,7 @@ import {
   type Tier,
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
-import { newSiteId, onchainKey } from './src/site.js';
+import { newSiteId, onchainKey } from './site.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
