@@ -9,6 +9,8 @@ import {
   parseAllowedPaywallContracts, assertPaywallContractAllowed,
   parseAllowedPayAdapters, assertAdapterAllowed,
   toStableError,
+  atomicToStellar,
+  resolveNetworkName,
 } from './validation';
 import { classifySettlePath, SettlePath } from './routing';
 import dotenv from 'dotenv';
@@ -46,7 +48,8 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 8084;
-const STELLAR_NETWORK = process.env.STELLAR_NETWORK || 'testnet';
+// Fail-fast: rejects typos/empty values — prevents accidental mainnet operation.
+const STELLAR_NETWORK = resolveNetworkName(process.env.STELLAR_NETWORK);
 const NETWORK_PASSPHRASE = STELLAR_NETWORK === 'testnet' ? Networks.TESTNET : Networks.PUBLIC;
 
 // Allow override via env variables, fallback to SDF public nodes
@@ -88,9 +91,7 @@ const facilitatorLock = new Mutex();
 
 const X402Version = 2;
 
-function atomicToStellar(atomic: string): string {
-  return (Number(atomic) / 1e7).toFixed(7);
-}
+// atomicToStellar is imported from ./validation (pure integer/string math, no float).
 
 function requireInternalToken(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (req.headers['x-internal-token'] !== INTERNAL_TOKEN) {
