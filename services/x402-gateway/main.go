@@ -895,6 +895,50 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
+		// Resolve payer — prefer the verify response; fall back to the signed payload.
+		payer := verifyOut.Payer
+		if payer == "" {
+			if p, ok := req.PaymentPayload.Payload["payer"].(string); ok {
+				payer = strings.TrimSpace(p)
+			}
+		}
+		if payer == "" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payer_required"})
+			return
+		}
+
+		// Extract the submitted transaction XDR for anti-replay proof hashing.
+		txStr, _ := req.PaymentPayload.Payload["transaction"].(string)
+
+		if domain != "" {
+			want := domain + ":" + slug
+
+			// Session-first: if this (domain,slug,payer) already has an active paid session,
+			// return the cached settlement without re-settling.
+			if tx, serr := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result(); serr == nil && tx != "" {
+				sessResp := &SettlementResponse{Success: true, Transaction: tx, Payer: payer}
+				sessRaw, _ := json.Marshal(sessResp)
+				c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(sessRaw))
+				c.JSON(http.StatusOK, sessResp)
+				return
+			}
+
+			// Anti-replay binding: reject this proof if it was already consumed for a DIFFERENT resource.
+			if txStr != "" {
+				ph := proofHash(txStr)
+				consumed, cerr := rdb.Get(ctx, "consumed:"+ph).Result()
+				if cerr == redis.Nil {
+					// fresh — no prior binding, proceed
+				} else if cerr != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replay_check_unavailable"})
+					return
+				} else if bindingDecision(consumed, want) == "reuse" {
+					c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
+					return
+				}
+			}
+		}
+
 		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
 			log.Printf("facilitator unreachable: %v", err)
@@ -910,6 +954,10 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 				if err := rdb.Set(ctx, key, out.Transaction, SessionTTL).Err(); err != nil {
 					log.Printf("redis set failed: %v", err)
 				}
+			}
+			// Bind the proof to this (domain,slug) so it cannot be replayed for a different resource.
+			if txStr != "" {
+				rdb.Set(ctx, "consumed:"+proofHash(txStr), domain+":"+slug, ConsumedTTL)
 			}
 			cfg, _ := lookupDomain(domain)
 			amt := 0.0
@@ -1006,7 +1054,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
-		cfg, err := lookupDomain(body.Domain)
+		cfg, err := lookupDomainFn(body.Domain)
 		if err != nil || cfg == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 			return
@@ -1074,11 +1122,15 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 
 		// Anti-replay binding: reject this proof if it was already consumed for a DIFFERENT resource.
 		ph := proofHash(body.XPayment.Payload.Transaction)
-		if consumed, err := rdb.Get(ctx, "consumed:"+ph).Result(); err == nil {
-			if bindingDecision(consumed, want) == "reuse" {
-				c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
-				return
-			}
+		consumed, cerr := rdb.Get(ctx, "consumed:"+ph).Result()
+		if cerr == redis.Nil {
+			// fresh — no prior binding, proceed
+		} else if cerr != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replay_check_unavailable"})
+			return
+		} else if bindingDecision(consumed, want) == "reuse" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
+			return
 		}
 
 		settleOut, err := facilitator.Settle(payload, req)
