@@ -49,6 +49,15 @@ export const config = {
 
   openrouterApiKey: requireEnv("OPENROUTER_API_KEY"),
   openrouterModel: env("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
+  // Free fallbacks tried (in order) when the primary is rate-limited/busy (429) or errors.
+  // All free + tool-calling capable. Override via OPENROUTER_FALLBACK_MODELS (comma-separated).
+  openrouterFallbackModels: env(
+    "OPENROUTER_FALLBACK_MODELS",
+    "meta-llama/llama-3.3-70b-instruct:free,qwen/qwen-2.5-72b-instruct:free",
+  )
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   openrouterBaseUrl: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 
   // Empty secret → dev bypass (local only). In production this MUST be set.
