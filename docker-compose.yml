@@ -244,13 +244,12 @@ services:
       - PLAYGROUND_FAUCET_SECRET=${PLAYGROUND_FAUCET_SECRET:?PLAYGROUND_FAUCET_SECRET is required}
       - PLAYGROUND_FAUCET_USDC_PER_WALLET=${PLAYGROUND_FAUCET_USDC_PER_WALLET:-0.5}
       - PLAYGROUND_FAUCET_DAILY_CAP=${PLAYGROUND_FAUCET_DAILY_CAP:-50}
-      - PLAYGROUND_DEMO_DOMAIN=${PLAYGROUND_DEMO_DOMAIN:-playground.verivyx.com}
-      - PLAYGROUND_DEMO_SLUG=${PLAYGROUND_DEMO_SLUG:-article}
+      - PLAYGROUND_DEMO_SDK_URL=${PLAYGROUND_DEMO_SDK_URL:-https://demo-sdk-next.verivyx.com/seven-wonders}
       - PLAYGROUND_WEBTEST_URL=${PLAYGROUND_WEBTEST_URL:-https://web-test.verivyx.com/2026/05/31/hello-world/}
       - PLAYGROUND_POOL_SIZE=${PLAYGROUND_POOL_SIZE:-6}
       - PLAYGROUND_MAX_SESSIONS=${PLAYGROUND_MAX_SESSIONS:-10}
       - PLAYGROUND_SESSION_TTL_MIN=${PLAYGROUND_SESSION_TTL_MIN:-15}
-      - ALLOWED_PAYMENT_PREFIXES=${ALLOWED_PAYMENT_PREFIXES:-http://playground-agent:8087/api/v1/playground/demo,http://127.0.0.1:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo,https://web-test.verivyx.com/}
+      - ALLOWED_PAYMENT_PREFIXES=${ALLOWED_PAYMENT_PREFIXES:-https://demo-sdk-next.verivyx.com/,https://web-test.verivyx.com/}
     ports:
       - "127.0.0.1:8087:8087"
     depends_on:
