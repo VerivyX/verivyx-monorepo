@@ -123,7 +123,9 @@ export type TxRecord = {
   ja4: string | null;
 };
 
-export type AdminTxRecord = TxRecord & { domain: string; creatorEmail: string };
+// `domain` is a human-readable tenant label (domain, else siteId, else email);
+// `siteId` is the stable tenant key for token-only sites (Task 64).
+export type AdminTxRecord = TxRecord & { domain: string; siteId: string | null; creatorEmail: string };
 
 // Payout readiness — whether the creator's wallet can receive USDC yet.
 // Includes the asset + network config the frontend uses to build the changeTrust.
@@ -296,7 +298,7 @@ export const api = {
   creatorTransactions: (opts?: { limit?: number; cursor?: number }) =>
     request<TxPage<TxRecord>>(`/api/v1/auth/transactions${qs(opts)}`),
 
-  adminTransactions: (opts?: { limit?: number; cursor?: number; domain?: string; since?: string }) =>
+  adminTransactions: (opts?: { limit?: number; cursor?: number; domain?: string; siteId?: string; since?: string }) =>
     request<TxPage<AdminTxRecord>>(`/api/v1/admin/transactions${qs(opts)}`),
 
   adminStats: () => request<AdminStats>(`/api/v1/admin/stats`),

@@ -187,6 +187,7 @@ type HydrateRequest struct {
 
 type DomainConfig struct {
 	Domain          string  `json:"domain"`
+	SiteId          string  `json:"siteId"`
 	StellarAddress  string  `json:"stellar_address"`
 	PricePerRequest float64 `json:"pricePerRequest"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
@@ -196,6 +197,7 @@ type DomainConfig struct {
 
 type EventPayload struct {
 	Domain     string  `json:"domain"`
+	SiteId     string  `json:"siteId,omitempty"`
 	Type       string  `json:"type"`
 	Agent      string  `json:"agent,omitempty"`
 	Category   string  `json:"category,omitempty"`
@@ -562,6 +564,7 @@ func hydrateHandler(c *gin.Context) {
 		agent, cat := classifyAgent(ua)
 		go logEvent(EventPayload{
 			Domain:    req.Domain,
+			SiteId:    cfg.SiteId,
 			Type:      "bot_passthrough",
 			Agent:     agent,
 			Category:  cat,
@@ -590,6 +593,7 @@ func hydrateHandler(c *gin.Context) {
 		if err == nil && result.Success {
 			go logEvent(EventPayload{
 				Domain:    req.Domain,
+				SiteId:    cfg.SiteId,
 				Type:      "agent_served",
 				Agent:     agentName,
 				Category:  agentCat,
@@ -649,6 +653,7 @@ func hydrateHandler(c *gin.Context) {
 		if err == nil && claims.Domain == req.Domain {
 			go logEvent(EventPayload{
 				Domain:    req.Domain,
+				SiteId:    cfg.SiteId,
 				Type:      "human_served",
 				SessionID: req.Slug,
 				IP:        ip,
@@ -684,6 +689,7 @@ func hydrateHandler(c *gin.Context) {
 	agent, cat := classifyAgent(ua)
 	go logEvent(EventPayload{
 		Domain:    req.Domain,
+		SiteId:    cfg.SiteId,
 		Type:      "bot_blocked",
 		Agent:     agent,
 		Category:  cat,

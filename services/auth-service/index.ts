@@ -21,7 +21,7 @@ import {
   type Tier,
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
-import { newSiteId, onchainKey } from './site.js';
+import { newSiteId, onchainKey, siteLabel } from './site.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
@@ -1033,13 +1033,21 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
 
 app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Response) => {
   const {
-    domain, type, agent, category, amountUsdc, sessionId, txHash, ip, powDurationMs, ja4,
+    siteId, domain, type, agent, category, amountUsdc, sessionId, txHash, ip, powDurationMs, ja4,
     distributeTransaction, creatorAmountUsdc, platformAmountUsdc, network, asset, payer, status,
   } = req.body ?? {};
-  if (!domain || !type) return res.status(400).json({ error: 'domain and type required' });
+  const reqSiteId = typeof siteId === 'string' && siteId.length > 0 ? siteId : undefined;
+  const reqDomain = typeof domain === 'string' && domain.length > 0 ? domain : undefined;
+  // Task 64: resolve the tenant by siteId (primary — token-only sites may have no
+  // domain) and fall back to domain for legacy sites. Either key must be present.
+  if ((!reqSiteId && !reqDomain) || !type) {
+    return res.status(400).json({ error: 'siteId or domain, and type, required' });
+  }
 
-  const user = await prisma.user.findFirst({ where: { domain } });
-  if (!user) return res.status(404).json({ error: 'No creator registered for this domain' });
+  const user = reqSiteId
+    ? await prisma.user.findFirst({ where: { siteId: reqSiteId } })
+    : await prisma.user.findFirst({ where: { domain: reqDomain } });
+  if (!user) return res.status(404).json({ error: 'No creator registered for this site' });
 
   const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v.slice(0, 256) : null);
   const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -1047,6 +1055,9 @@ app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Respons
   const event = await prisma.event.create({
     data: {
       userId: user.id,
+      // Persist the stable tenant key: the payload's siteId, else the resolved
+      // user's siteId (so legacy domain-only emitters still tag the row).
+      siteId: reqSiteId ?? user.siteId ?? null,
       type,
       agent: agent ?? null,
       category: category ?? null,
@@ -1715,12 +1726,17 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const cursor = Number(req.query.cursor) || undefined;
   const domain = typeof req.query.domain === 'string' && req.query.domain.length > 0 ? req.query.domain : undefined;
+  // Task 64: allow scoping a token-only tenant by its stable siteId. Matches the
+  // event's own siteId column (set on ingest) so it works even for rows whose
+  // creator has no domain.
+  const siteId = typeof req.query.siteId === 'string' && req.query.siteId.length > 0 ? req.query.siteId : undefined;
   const sinceRaw = typeof req.query.since === 'string' ? new Date(req.query.since) : undefined;
   const since = sinceRaw && !Number.isNaN(sinceRaw.getTime()) ? sinceRaw : undefined;
 
   const where: Prisma.EventWhereInput = {
     type: 'payment_verified',
     ...(since ? { createdAt: { gte: since } } : {}),
+    ...(siteId ? { siteId } : {}),
     ...(domain ? { user: { domain } } : {}),
   };
 
@@ -1729,14 +1745,16 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
     orderBy: { createdAt: 'desc' },
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    include: { user: { select: { domain: true, email: true } } },
+    include: { user: { select: { domain: true, siteId: true, email: true } } },
   });
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   res.json({
     transactions: page.map(e => ({
       ...shapeTxEvent(e),
-      domain: e.user.domain,
+      siteId: e.siteId ?? e.user.siteId ?? null,
+      // Legacy label: domain if present, else the siteId, else the creator email.
+      domain: siteLabel({ domain: e.user.domain, siteId: e.siteId ?? e.user.siteId, fallback: e.user.email }),
       creatorEmail: e.user.email,
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,

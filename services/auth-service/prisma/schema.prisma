@@ -105,6 +105,10 @@ model Event {
   id            Int      @id @default(autoincrement())
   userId        Int
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Stable tenant key (Task 64). Token-only sites may have no domain, so events
+  // are keyed by siteId; the User's domain stays as a legacy label/fallback.
+  // Nullable for backward compatibility with rows written before this column.
+  siteId        String?
   type          String
   agent         String?
   category      String?
@@ -128,6 +132,7 @@ model Event {
 
   @@index([userId, createdAt])
   @@index([userId, agent])
+  @@index([siteId, createdAt])
 }
 
 model AdminLog {

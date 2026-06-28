@@ -159,6 +159,16 @@ func onchainKeyFor(cfg *DomainConfig) string {
 	return cfg.Domain
 }
 
+// siteIdOf returns the stable tenant siteId from a config, or "" if unavailable.
+// Used to tag analytics events so token-only sites (which may have no domain)
+// are still attributed (Task 64).
+func siteIdOf(cfg *DomainConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.SiteId
+}
+
 // ----------------------- helpers -------------------------------------
 
 func env(key, fallback string) string {
@@ -290,6 +300,7 @@ func lookupSiteByToken(token string) (*DomainConfig, error) {
 
 type EventPayload struct {
 	Domain                string  `json:"domain"`
+	SiteId                string  `json:"siteId,omitempty"`
 	Type                  string  `json:"type"`
 	Agent                 string  `json:"agent,omitempty"`
 	Category              string  `json:"category,omitempty"`
@@ -1088,6 +1099,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			agentName, category := classifyAgent(c.GetHeader("User-Agent"))
 			go logEvent(EventPayload{
 				Domain:                domain,
+				SiteId:                siteIdOf(cfg),
 				Type:                  "payment_verified",
 				Agent:                 agentName,
 				Category:              category,
@@ -1281,6 +1293,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			creatorAmt, platformAmt := paymentSplit(cfg)
 			go logEvent(EventPayload{
 				Domain:                body.Domain,
+				SiteId:                siteIdOf(cfg),
 				Type:                  "payment_verified",
 				Agent:                 agent,
 				Category:              cat,
