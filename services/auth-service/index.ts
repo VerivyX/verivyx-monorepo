@@ -732,7 +732,7 @@ async function syncCreatorOnChain(user: {
   const platformFee = Number(user.platformFee ?? 0.001);
   if (!(price > 0)) return;
   try {
-    const r = await fetch(`${PAYMENT_RELAYER_URL}/api/v1/payment/internal/register-creator`, {
+    const r = await fetch(`${PAYMENT_RELAYER_URL}/register-creator`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Internal-Token': INTERNAL_TOKEN },
       body: JSON.stringify({ domain: user.domain, creator: user.stellar_address, price, platformFee }),
@@ -772,7 +772,10 @@ app.get('/api/v1/auth/payout-status', authGuard, async (req: Request, res: Respo
 
 app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response) => {
   const { pricePerRequest, domain, stellar_address, paywallEnabled } = req.body ?? {};
-  const data: { pricePerRequest?: number; domain?: string; stellar_address?: string; paywallEnabled?: boolean } = {};
+  const data: {
+    pricePerRequest?: number; domain?: string; stellar_address?: string; paywallEnabled?: boolean;
+    domainVerified?: boolean; wpInternalToken?: null;
+  } = {};
 
   if (pricePerRequest !== undefined) {
     const n = Number(pricePerRequest);
@@ -803,6 +806,25 @@ app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response
   }
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ error: 'No valid fields to update' });
+  }
+
+  // Fetch current user for cross-field guards (Fix 2 + Fix 3).
+  const currentUser = await prisma.user.findUnique({ where: { id: req.userId! } });
+  if (!currentUser) return res.status(404).json({ error: 'User not found' });
+
+  // Fix 3: price must strictly exceed the effective platform fee to prevent InvalidPrice on-chain.
+  if (data.pricePerRequest !== undefined) {
+    const effectiveFee = Number(currentUser.platformFee ?? 0.001);
+    if (data.pricePerRequest <= effectiveFee) {
+      return res.status(400).json({ error: 'price_must_exceed_platform_fee' });
+    }
+  }
+
+  // Fix 2: changing domain invalidates the existing verification so the provisioning wizard
+  // re-runs for the new domain — prevents squatting with a stale domainVerified=true.
+  if (data.domain !== undefined && data.domain !== currentUser.domain) {
+    data.domainVerified = false;
+    data.wpInternalToken = null;
   }
 
   try {
