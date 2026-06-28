@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,6 +165,18 @@ func networkAsset() (string, string) {
 	return NetworkTestnet, "USDC:" + env("USDC_ISSUER", defaultTestnetUSDCIssuer)
 }
 
+// requireSorobanUSDC returns the SEP-41 Soroban USDC contract ID from the
+// USDC_CONTRACT_ID env var.  On mainnet the value must be set explicitly —
+// a missing/blank ID is a fatal config error (real funds are at stake).  On
+// testnet the variable is optional; returning "" causes buildRequirements to
+// skip the Soroban entry, keeping local dev zero-config.
+func requireSorobanUSDC() string {
+	if env("STELLAR_NETWORK", "testnet") == "mainnet" {
+		return mustEnv("USDC_CONTRACT_ID")
+	}
+	return env("USDC_CONTRACT_ID", "")
+}
+
 func classifyAgent(ua string) (string, string) {
 	low := strings.ToLower(ua)
 	switch {
@@ -184,15 +197,17 @@ func classifyAgent(ua string) (string, string) {
 	}
 }
 
-// usdcToAtomic converts a float USDC amount to atomic-units string with 7 decimals.
-// Uses big.Int for precision (no float rounding past 7 decimals).
+// usdcToAtomic converts a float USDC amount to an atomic-units string (7 decimal
+// places = stroops). Uses math.Round so that binary-float imprecision is snapped
+// to the nearest stroop rather than being truncated (e.g. 0.07*1e7 = 699999.9999…
+// truncates to 699999 without Round). Output is always a plain integer string with
+// no decimal point — the shape the x402 spec and the relayer expect for `amount`
+// and `maxAmountRequired`.
 func usdcToAtomic(usdc float64) string {
 	if usdc <= 0 {
 		return "0"
 	}
-	scaled := new(big.Float).Mul(big.NewFloat(usdc), big.NewFloat(1e7))
-	z, _ := scaled.Int(nil)
-	return z.String()
+	return strconv.FormatInt(int64(math.Round(usdc*1e7)), 10)
 }
 
 func lookupDomain(domain string) (*DomainConfig, error) {
@@ -461,7 +476,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 	// on-chain into creator + platform. No `splitPayments` here — a spec client does
 	// ONE transfer; the split happens in the contract, not in the client TX.
 	// Requires USDC_CONTRACT_ID (SEP-41 Soroban USDC) and SOROBAN_PAYWALL_CONTRACT_ID.
-	sorobanUSDC := env("USDC_CONTRACT_ID", "")
+	sorobanUSDC := requireSorobanUSDC()
 	paywallContract := env("SOROBAN_PAYWALL_CONTRACT_ID", "")
 	if sorobanUSDC != "" && paywallContract != "" {
 		reqs = append(reqs, PaymentRequirement{
@@ -1212,6 +1227,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 func main() {
 	internalToken = mustEnv("INTERNAL_TOKEN")
 	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
+	// Mainnet guard — USDC_CONTRACT_ID must be set explicitly when running on
+	// mainnet. The testnet convenience default must never silently be used where
+	// real funds are at stake. requireSorobanUSDC calls mustEnv on mainnet, which
+	// calls log.Fatalf if the var is missing/blank.
+	if env("STELLAR_NETWORK", "testnet") == "mainnet" {
+		mustEnv("USDC_CONTRACT_ID")
+	}
 
 	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
 	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {

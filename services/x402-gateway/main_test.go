@@ -29,6 +29,64 @@ func TestUsdcToAtomic(t *testing.T) {
 	}
 }
 
+// TestUsdcToAtomicRounding verifies correct rounding (nearest stroop) for values
+// that expose binary-float truncation bugs in a naive implementation.
+func TestUsdcToAtomicRounding(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{0.001, "10000"},      // 0.001 USDC = 10 000 stroops
+		{0.005, "50000"},      // regression: existing case
+		{1.0, "10000000"},     // whole USDC
+		{0.0, "0"},            // zero
+		{0.07, "700000"},      // binary-float: 0.07*1e7 = 699999.999… → must round to 700000
+		{0.029, "290000"},     // 0.029*1e7 = 289999.999… → must round to 290000
+		{0.1, "1000000"},      // 0.1 is not exact in IEEE-754
+		{0.003, "30000"},      // 0.003*1e7 = 30000.000…4 → rounds to 30000
+	}
+	for _, tc := range cases {
+		got := usdcToAtomic(tc.in)
+		if got != tc.want {
+			t.Errorf("usdcToAtomic(%v) = %q; want %q", tc.in, got, tc.want)
+		}
+	}
+	// Output must never contain a decimal point — it is always a plain integer.
+	for _, tc := range cases {
+		got := usdcToAtomic(tc.in)
+		if strings.Contains(got, ".") {
+			t.Errorf("usdcToAtomic(%v) = %q contains a decimal point", tc.in, got)
+		}
+	}
+}
+
+// TestRequireSorobanUSDC verifies the mainnet guard helper.
+// The mainnet+empty path calls log.Fatalf and is not unit-testable; only the
+// non-fatal paths are covered here.
+func TestRequireSorobanUSDC(t *testing.T) {
+	// testnet with no USDC_CONTRACT_ID → empty string (optional on testnet)
+	t.Setenv("STELLAR_NETWORK", "testnet")
+	t.Setenv("USDC_CONTRACT_ID", "")
+	if got := requireSorobanUSDC(); got != "" {
+		t.Errorf("testnet+no USDC_CONTRACT_ID: got %q, want empty", got)
+	}
+
+	// testnet with explicit USDC_CONTRACT_ID → value returned as-is
+	const testnetID = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+	t.Setenv("USDC_CONTRACT_ID", testnetID)
+	if got := requireSorobanUSDC(); got != testnetID {
+		t.Errorf("testnet+USDC_CONTRACT_ID: got %q, want %q", got, testnetID)
+	}
+
+	// mainnet with explicit USDC_CONTRACT_ID → value returned (no fatal)
+	const mainnetID = "CMAINNETUSDC1234567890ABCDEF"
+	t.Setenv("STELLAR_NETWORK", "mainnet")
+	t.Setenv("USDC_CONTRACT_ID", mainnetID)
+	if got := requireSorobanUSDC(); got != mainnetID {
+		t.Errorf("mainnet+USDC_CONTRACT_ID: got %q, want %q", got, mainnetID)
+	}
+}
+
 func TestBuildRequirementsRespectsToggle(t *testing.T) {
 	cfg := &DomainConfig{
 		Domain:          "demo.com",
