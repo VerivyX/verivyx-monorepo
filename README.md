@@ -2,9 +2,11 @@
 
 **The gate between creator content and the AI world.**
 
-Creators embed one `<script>` tag. Humans read free — verified silently via Proof-of-Work. Bots and
-AI agents pay USDC over the [x402](https://x402.org) protocol on Stellar. Content stays on the
-creator's own server; Verivyx only controls who is allowed to see it.
+Creators add Verivyx to their site — a WordPress plugin, a one-line embed script, or the
+[`@verivyx/paywall`](https://www.npmjs.com/package/@verivyx/paywall) SDK (one middleware file for
+Next.js / Express / Hono). Humans read free (verified via Proof-of-Work), verified search crawlers get
+an SEO preview, and AI agents pay USDC over the [x402](https://x402.org) protocol on Stellar. Content
+stays on the creator's own server; Verivyx only controls who is allowed to see it.
 
 > Security model: **economic, not cryptographic.** Anyone can read the HTML source — but an AI agent
 > that wants legitimate, reliable access pays for it. The monetization target is the sophisticated
@@ -27,6 +29,7 @@ verivyx/
 │   ├── soroban-contracts/   # On-chain domain registry + trustless pay/split (Rust)
 │   ├── embed-script/        # gate.min.js browser embed (TypeScript)
 │   ├── agent-sdk/           # Agent integration library (@verivyx/agent-sdk)
+│   ├── publisher-sdk/       # @verivyx/paywall — publisher SDK (Next/Express/Hono middleware)
 │   ├── playground-agent/    # Sandboxed x402 playground backend (Node)
 │   └── wordpress-plugin/    # WordPress integration (PHP)
 ├── web/               # Frontend — dashboard, admin, docs, MCP page, playground (Next.js)
@@ -37,6 +40,23 @@ verivyx/
 
 Services talk to each other over HTTP with an `X-Internal-Token` header. No service reads another
 service's database directly.
+
+---
+
+## Integrations (how publishers gate content)
+
+| Path | Best for | Docs |
+|---|---|---|
+| **`@verivyx/paywall` SDK** | Any Node app — one middleware file gates the whole app (Next.js `verivyxProxy`, Express `verivyxMiddleware`, Hono `verivyxHonoMiddleware`) | [/docs/sdk](https://docs.verivyx.com/docs/sdk) |
+| **WordPress plugin** | WordPress sites — one-click install | [/docs/wordpress](https://docs.verivyx.com/docs/wordpress) |
+| **Embed script** | Any site — one `<script>` tag (soft paywall) | [/docs/embed](https://docs.verivyx.com/docs/embed) |
+
+All three: humans read free (in-page proof-of-work unlock), verified search crawlers get an SEO
+preview, AI agents pay per-request via x402, and protected content is withheld at the server. The SDK
+is on npm — `@verivyx/paywall` (core) + `-express` / `-next` / `-hono` — and lives in
+[`services/publisher-sdk/`](services/publisher-sdk/). Live demos:
+[demo-sdk-next](https://demo-sdk-next.verivyx.com/seven-wonders) ·
+[demo-sdk-express](https://demo-sdk-express.verivyx.com/seven-wonders).
 
 ---
 

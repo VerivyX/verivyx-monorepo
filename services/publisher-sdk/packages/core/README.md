@@ -1,6 +1,11 @@
 # @verivyx/paywall
 
-Zero-dependency x402 paywall SDK for publishers — gate content from AI bots and charge agents on-chain via the Stellar/x402 protocol.
+Zero-dependency x402 paywall SDK core for publishers — gate content from AI bots, charge agents on-chain via the Stellar/x402 protocol, let humans read free, and serve search crawlers an SEO preview.
+
+**Most apps should use a framework adapter** (one middleware file), not the core directly:
+[`@verivyx/paywall-next`](https://www.npmjs.com/package/@verivyx/paywall-next) ·
+[`@verivyx/paywall-express`](https://www.npmjs.com/package/@verivyx/paywall-express) ·
+[`@verivyx/paywall-hono`](https://www.npmjs.com/package/@verivyx/paywall-hono). The core is installed automatically as their dependency.
 
 ## Install
 
@@ -8,35 +13,36 @@ Zero-dependency x402 paywall SDK for publishers — gate content from AI bots an
 npm i @verivyx/paywall
 ```
 
-## Quickstart
+## Quickstart (low-level, Fetch API)
 
 ```ts
 import { verivyx } from "@verivyx/paywall";
 
-// Create a paywall instance (reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env)
-const vx = verivyx();
+const vx = verivyx();   // reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env
 
-// Wrap any Fetch-API handler
-export const GET = vx.protect(async (req) => {
-  return new Response(JSON.stringify({ content: "..." }), {
-    headers: { "content-type": "application/json" },
-  });
-});
+// Wrap any Fetch-API handler — verified/paid requests pass through; bots get a 402.
+export const GET = vx.protect(async (req) =>
+  Response.json({ content: "..." }),
+);
+
+// Or get a decision and act on it yourself:
+const decision = await vx.protect(req, { slug: "my-article" });
+if (!decision.allowed) return decision.response();
 ```
 
-For framework adapters (Express, Next.js, Hono) use the dedicated packages below. The core package is installed automatically as a dependency of each adapter.
+Also exported: `buildUnlockHtml` / `buildSeoPreviewResponse` (preview + in-page PoW unlock pages used by the adapters), `getCookie`, `classify`, `createSearchCrawlerVerifier`.
 
 ## Config
 
-All options can be passed to `verivyx(opts)` or set via environment variables. Code-arg options always take precedence.
+All options can be passed to `verivyx(opts)` or set via environment variables (code args win).
 
-| Env var | Required | Description |
+| Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain provisioning token from the Verivyx dashboard |
+| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
 | `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
-| `VERIVYX_MATCH` | no | Comma-separated glob patterns to gate (e.g. `/articles/**`). Empty = gate all routes. Also accepts `string[]` in code. |
-| `VERIVYX_FAIL_MODE` | no | Behaviour when the Verivyx backend is unreachable: `teaser` (default) \| `open` \| `closed` |
-| `VERIVYX_TIMEOUT_MS` | no | Backend request timeout in milliseconds (default `800`) |
+| `match` / `VERIVYX_MATCH` | no | Glob patterns to gate. Empty = nothing gated. Env accepts a comma-separated list. |
+| `failMode` / `VERIVYX_FAIL_MODE` | no | Backend unreachable: `teaser` (default) \| `open` \| `closed` |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). Raise to ~`30000` if you await agent settlements (~15s on-chain). |
 
 ## Docs
 

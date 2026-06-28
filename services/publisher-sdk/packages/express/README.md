@@ -1,8 +1,8 @@
 # @verivyx/paywall-express
 
-Express adapter for the Verivyx paywall SDK — gate content from AI bots and charge agents on-chain via x402, with zero-config reverse-DNS crawler verification for SEO safety.
+Express adapter for the Verivyx paywall SDK — gate content from AI bots, charge agents on-chain via x402, let humans read free, and serve search crawlers an SEO preview (verified against published Googlebot/Bingbot IP ranges).
 
-Requires `@verivyx/paywall` (installed automatically as a dependency) and `express` (peer dependency).
+Requires `@verivyx/paywall` (installed automatically) and `express` (peer dependency).
 
 ## Install
 
@@ -10,49 +10,52 @@ Requires `@verivyx/paywall` (installed automatically as a dependency) and `expre
 npm i @verivyx/paywall-express
 ```
 
-## Quickstart
+## Quickstart — one middleware (recommended)
+
+`app.use(verivyxMiddleware(...))` gates every matched route: AI bots/agents get a `402` (and can pay via x402), verified humans read for free, crawlers get an SEO preview.
 
 ```ts
 import express from "express";
-import { verivyxExpress } from "@verivyx/paywall-express";
+import { verivyxMiddleware } from "@verivyx/paywall-express";
 
 const app = express();
+app.set("trust proxy", true);
 
-// Create an adapter (reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env)
-const vx = verivyxExpress();
-
-// Gate a route — verified/paid requests pass through; bots get a 402
-app.get("/articles/:slug", vx.protect(async (req, res) => {
-  res.json({ content: "..." });
+app.use(verivyxMiddleware({
+  match: ["/articles/*"],
+  seoPreview: ({ slug }) => ({ title: titleFor(slug), excerpt: excerptFor(slug) }),
+  humanUnlock: {},   // humans solve an in-page PoW → read full content free
 }));
 
+app.get("/articles/:slug", (req, res) => res.send(renderArticle(req.params.slug)));
 app.listen(3000);
 ```
 
-### With SEO preview
+Reads `VERIVYX_TOKEN` + `VERIVYX_DOMAIN` from env.
+
+## Per-route alternative
 
 ```ts
-app.get("/articles/:slug", vx.protect(myHandler, {
-  seoPreview: ({ slug }) => ({
-    title: "Article title",
-    excerpt: "A short teaser visible to search crawlers.",
-  }),
-}));
+import { verivyxExpress } from "@verivyx/paywall-express";
+const vx = verivyxExpress();
+app.get("/articles/:slug", vx.protect(async (req, res) => res.json({ content: "..." })));
 ```
 
 ## Config
 
-All options can be passed to `verivyxExpress(opts)` or set via environment variables.
+All options can be passed to `verivyxMiddleware(opts)` / `verivyxExpress(opts)` or set via env.
 
-| Env var | Required | Description |
+| Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain provisioning token from the Verivyx dashboard |
+| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
 | `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
-| `VERIVYX_MATCH` | no | Comma-separated glob patterns to gate (e.g. `/articles/**`). Empty = gate all routes. Also accepts `string[]` in code. |
-| `VERIVYX_FAIL_MODE` | no | Behaviour when the Verivyx backend is unreachable: `teaser` (default) \| `open` \| `closed` |
-| `VERIVYX_TIMEOUT_MS` | no | Backend request timeout in milliseconds (default `800`) |
+| `match` / `VERIVYX_MATCH` | no | Glob patterns to gate. Empty = nothing gated. Env accepts a comma-separated list. |
+| `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers, with anti-cloaking JSON-LD |
+| `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read full content free |
+| `failMode` / `VERIVYX_FAIL_MODE` | no | Backend unreachable: `teaser` (default) \| `open` \| `closed` |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). **Raise to ~`30000` if you accept agent payments** (settle takes ~15s). |
 
-Additional code-only options: `trustProxy` (default `true`), `clientIp`, `advertise` (RSL/AIPREF discovery headers).
+Also: `trustProxy` (default `true`), `clientIp`, `advertise` (RSL/AIPREF discovery headers).
 
 ## Docs
 

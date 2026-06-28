@@ -1,8 +1,8 @@
 # @verivyx/paywall-next
 
-Next.js (App Router) adapter for the Verivyx paywall SDK — gate content from AI bots and charge agents on-chain via x402, with Vercel-aware IP resolution and async `ctx.params` support (Next 15+).
+Next.js (App Router) adapter for the Verivyx paywall SDK — gate content from AI bots, charge agents on-chain via x402, let humans read free, and serve search crawlers an SEO preview. Vercel-aware IP resolution and `X-Forwarded-Host`/`-Proto` handling; async `ctx.params` (Next 15+).
 
-Requires `@verivyx/paywall` (installed automatically as a dependency) and `next` + `react` (peer dependencies).
+Requires `@verivyx/paywall` (installed automatically) and `next` + `react` (peer dependencies).
 
 ## Install
 
@@ -10,67 +10,56 @@ Requires `@verivyx/paywall` (installed automatically as a dependency) and `next`
 npm i @verivyx/paywall-next
 ```
 
-## Quickstart
+## Quickstart — one middleware file (recommended)
+
+Add a `proxy.ts` at your project root. This single file gates every matched route: AI bots/agents get a `402` (and can pay via x402), verified humans read for free, and search crawlers get an SEO preview. Protected content is never reached by unauthorised callers.
 
 ```ts
-// app/articles/[slug]/route.ts
-import { verivyxNext } from "@verivyx/paywall-next";
+// proxy.ts
+import { verivyxProxy } from "@verivyx/paywall-next";
 
-// Create an adapter (reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env)
-const vx = verivyxNext();
+export const proxy = verivyxProxy({
+  match: ["/articles/:path*"],                       // paths to gate
+  seoPreview: ({ slug }) => ({                        // teaser for crawlers (+ humans without humanUnlock)
+    title: titleFor(slug),
+    excerpt: excerptFor(slug),
+  }),
+  humanUnlock: {},                                    // humans solve an in-page PoW → read full content free
+});
 
-async function handler(req: Request, ctx: { params?: Promise<Record<string, string>> }) {
-  return Response.json({ content: "..." });
-}
-
-// Export as a Next.js route handler — verified/paid requests pass through; bots get a 402
-export const GET = vx.protect(handler);
+export const config = { matcher: ["/((?!_next/|favicon.ico).*)"] };
 ```
 
-### With SEO preview
+The middleware is the authoritative gate — reads `VERIVYX_TOKEN` + `VERIVYX_DOMAIN` from env.
+
+## Per-route alternative
+
+Gate a single route handler instead of the whole app:
 
 ```ts
+import { verivyxNext } from "@verivyx/paywall-next";
+
+const vx = verivyxNext();
 export const GET = vx.protect(handler, {
-  seoPreview: ({ slug }) => ({
-    title: "Article title",
-    excerpt: "A short teaser visible to search crawlers.",
-  }),
+  seoPreview: ({ slug }) => ({ title: "Article title", excerpt: "Teaser for crawlers." }),
 });
 ```
 
-### Proxy pre-filter (optional, defense-in-depth)
-
-```ts
-// proxy.ts (Next 16; middleware.ts on Next <=15)
-import { verivyxNext } from "@verivyx/paywall-next";
-import type { NextRequest } from "next/server";
-
-// reads VERIVYX_TOKEN + VERIVYX_DOMAIN from env (throws at startup if unset)
-const vx = verivyxNext();
-const preFilter = vx.proxy(); // coarse, network-free pre-filter — the route handler is the real gate
-
-export async function proxy(req: NextRequest) {
-  return (await preFilter(req)) ?? undefined; // 402 for clear unpaid bots, else continue
-}
-
-export const config = { matcher: ["/articles/:path*", "/api/:path*"] };
-```
-
-The proxy is defense-in-depth only — it sheds obviously-unpaid bot traffic early (no network call). The route handler (`vx.protect(handler)`) remains the authoritative gate and must always be present.
-
 ## Config
 
-All options can be passed to `verivyxNext(opts)` or set via environment variables.
+All options can be passed to `verivyxProxy(opts)` / `verivyxNext(opts)` or set via environment variables.
 
-| Env var | Required | Description |
+| Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain provisioning token from the Verivyx dashboard |
+| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
 | `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
-| `VERIVYX_MATCH` | no | Comma-separated glob patterns to gate (e.g. `/articles/**`). Empty = gate all routes. Also accepts `string[]` in code. |
-| `VERIVYX_FAIL_MODE` | no | Behaviour when the Verivyx backend is unreachable: `teaser` (default) \| `open` \| `closed` |
-| `VERIVYX_TIMEOUT_MS` | no | Backend request timeout in milliseconds (default `800`) |
+| `match` / `VERIVYX_MATCH` | no | Glob patterns to gate (e.g. `/articles/**`). Empty = nothing gated. Env accepts a comma-separated list. |
+| `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers (+ unverified humans without `humanUnlock`), wrapped in anti-cloaking JSON-LD |
+| `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read the full content free |
+| `failMode` / `VERIVYX_FAIL_MODE` | no | When the backend is unreachable: `teaser` (default) \| `open` \| `closed` |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). **Raise to ~`30000` if you accept agent payments** — on-chain settlement can take ~15s. |
 
-Additional code-only options: `trustProxy` (default `true`), `advertise` (RSL/AIPREF discovery headers).
+Also: `trustProxy` (default `true`), `advertise` (RSL/AIPREF discovery headers).
 
 ## Docs
 
