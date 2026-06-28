@@ -261,7 +261,7 @@ describe("VerivyxClient.authorize — header forwarding", () => {
     expect(headers["X-Verivyx-Mode"]).toBe("authorize");
   });
 
-  it("POSTs domain+slug in body", async () => {
+  it("POSTs token+domain+slug in body", async () => {
     const mockFetch = vi.fn().mockResolvedValueOnce(
       mockResponse(200, { authorized: true }),
     );
@@ -273,8 +273,25 @@ describe("VerivyxClient.authorize — header forwarding", () => {
     expect(url).toContain("/api/v1/content/hydrate");
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as Record<string, string>;
+    expect(body.token).toBe("test-token");
     expect(body.domain).toBe("example.com");
     expect(body.slug).toBe("test-slug");
+  });
+
+  it("POSTs token+slug and omits domain when domain is unset (token-only)", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      mockResponse(200, { authorized: true }),
+    );
+
+    const tokenOnlyCfg = resolveConfig({ token: "tok-only", timeoutMs: 500 }, {});
+    const client = new VerivyxClient(tokenOnlyCfg, { fetch: mockFetch });
+    await client.authorize({ slug: "test-slug" });
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, string>;
+    expect(body.token).toBe("tok-only");
+    expect(body.slug).toBe("test-slug");
+    expect("domain" in body).toBe(false);
   });
 
   it("does NOT forward cfg.token to any outbound header", async () => {

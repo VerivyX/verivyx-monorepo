@@ -14,6 +14,18 @@ describe("resolveConfig", () => {
     expect(() => resolveConfig({ domain: "a.com" }, {})).toThrow(ConfigError);
   });
 
+  it("resolves token-only config (no domain) without throwing", () => {
+    const c = resolveConfig({ token: "t" }, {});
+    expect(c.token).toBe("t");
+    expect(c.domain).toBe("");
+  });
+
+  it("resolves token-only config from env (no VERIVYX_DOMAIN)", () => {
+    const c = resolveConfig(undefined, { VERIVYX_TOKEN: "t" });
+    expect(c.token).toBe("t");
+    expect(c.domain).toBe("");
+  });
+
   it("reads env when no arg", () => {
     const c = resolveConfig(undefined, { VERIVYX_DOMAIN: "b.com", VERIVYX_TOKEN: "t", VERIVYX_MATCH: "/a/*,/b/*" });
     expect(c.domain).toBe("b.com");

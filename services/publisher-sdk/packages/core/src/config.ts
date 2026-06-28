@@ -25,6 +25,10 @@ export interface VerivyxOptions {
 
 /** Fully-resolved config — no optional fields except price and onDecision. */
 export interface ResolvedConfig {
+  /**
+   * Optional legacy/analytics label. Empty string when not provided.
+   * The SDK is now token-only; `token` alone identifies the tenant.
+   */
   domain: string;
   token: string;
   apiBase: string;
@@ -39,7 +43,7 @@ export interface ResolvedConfig {
   onDecision?: (d: GateDecision) => void;
 }
 
-/** Thrown when required config values (domain, token) cannot be resolved. */
+/** Thrown when required config values (token) cannot be resolved. */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -73,15 +77,11 @@ export function resolveConfig(
   opts?: VerivyxOptions,
   env: Record<string, string | undefined> = {},
 ): ResolvedConfig {
-  // --- domain ---
+  // --- domain (optional: legacy/analytics label; token alone identifies the
+  //     tenant). Resolved when provided, defaults to "" when absent. ---
   const domain = (opts?.domain ?? env["VERIVYX_DOMAIN"] ?? "").trim();
-  if (!domain) {
-    throw new ConfigError(
-      "VERIVYX_DOMAIN is required (set via opts.domain or VERIVYX_DOMAIN env var)",
-    );
-  }
 
-  // --- token ---
+  // --- token (required) ---
   const token = (opts?.token ?? env["VERIVYX_TOKEN"] ?? "").trim();
   if (!token) {
     throw new ConfigError(
