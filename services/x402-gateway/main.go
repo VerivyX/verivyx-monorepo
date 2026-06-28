@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -246,6 +247,30 @@ func usdcToAtomic(usdc float64) string {
 func lookupDomain(domain string) (*DomainConfig, error) {
 	authURL := env("AUTH_SERVICE_URL", "http://auth-service:8083")
 	req, _ := http.NewRequest("GET", authURL+"/api/v1/auth/lookup?domain="+domain, nil)
+	req.Header.Set("X-Internal-Token", internalToken)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, nil
+	}
+	var out DomainConfig
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// lookupSiteByToken resolves a site config by its tenant token (Phase 2). Same
+// HTTP shape as lookupDomain but hits the auth lookup with ?token=<token>. The
+// auth service returns the full DomainConfig (incl. SiteId/OnchainKey). Returns
+// nil,nil on 404 (token not found) so callers can fall back to domain.
+func lookupSiteByToken(token string) (*DomainConfig, error) {
+	authURL := env("AUTH_SERVICE_URL", "http://auth-service:8083")
+	req, _ := http.NewRequest("GET", authURL+"/api/v1/auth/lookup?token="+url.QueryEscape(token), nil)
 	req.Header.Set("X-Internal-Token", internalToken)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
@@ -657,6 +682,31 @@ var (
 // tests can inject a stub without a live auth-service.
 var lookupDomainFn = lookupDomain
 
+// lookupTokenFn is the token-config lookup, indirected through a package var so
+// tests can inject a stub without a live auth-service. Mirrors lookupDomainFn.
+var lookupTokenFn = lookupSiteByToken
+
+// resolveSite resolves a site config by token (primary) with domain as the legacy
+// fallback. If token is non-empty and yields a config, that config is used. When
+// the token lookup yields nil (not found) — or no token was supplied — it falls
+// back to the domain lookup. Returns nil,nil when neither source resolves a site.
+// Backward-compatible: domain-only callers behave exactly as before.
+func resolveSite(token, domain string) (*DomainConfig, error) {
+	if token != "" {
+		cfg, err := lookupTokenFn(token)
+		if err != nil {
+			return nil, err
+		}
+		if cfg != nil {
+			return cfg, nil
+		}
+	}
+	if domain != "" {
+		return lookupDomainFn(domain)
+	}
+	return nil, nil
+}
+
 // resolveRequirement returns the canonical PaymentRequirement to forward to the
 // facilitator, plus the derived domain/slug. Trusted callers (requirements carrying
 // Verivyx settlement extras) pass through unchanged. Generic x402 v2 callers are
@@ -776,11 +826,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	r.GET("/api/v1/payment/requirements", func(c *gin.Context) {
 		domain := strings.TrimSpace(c.Query("domain"))
 		slug := strings.TrimSpace(c.Query("slug"))
-		if domain == "" {
+		token := strings.TrimSpace(c.Query("token"))
+		// Token (primary) or domain (legacy) must identify the site.
+		if token == "" && domain == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain required"})
 			return
 		}
-		cfg, err := lookupDomain(domain)
+		cfg, err := resolveSite(token, domain)
 		if err != nil || cfg == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 			return
@@ -888,6 +940,14 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "detail": err.Error()})
 			return
 		}
+		// Optional tenant token (Phase 2): identifies the site directly, so the
+		// caller need not embed a domain in the resource URL. Domain stays as the
+		// legacy fallback.
+		var tok struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal(bodyBytes, &tok)
+		token := strings.TrimSpace(tok.Token)
 		if req.X402Version != X402Version || req.PaymentPayload.X402Version != X402Version {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":  "unsupported_version",
@@ -961,14 +1021,16 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 		txStr, _ := req.PaymentPayload.Payload["transaction"].(string)
 
 		// Resolve the site config so sessions + the consumed binding key on siteId
-		// (with a domain fallback for older data). Resolution stays by-domain here.
+		// (with a domain fallback for older data). Token is primary; domain is the
+		// legacy fallback. When a token resolves a site, domain may be empty — the
+		// siteKey comes from cfg.SiteId, so the session/binding logic still runs.
 		var cfg *DomainConfig
-		if domain != "" {
-			cfg, _ = lookupDomainFn(domain)
+		if token != "" || domain != "" {
+			cfg, _ = resolveSite(token, domain)
 		}
 		siteKey := siteKeyFor(cfg, domain)
 
-		if domain != "" {
+		if siteKey != "" {
 			want := siteKey + ":" + slug
 
 			// Session-first: if this (siteId,slug,payer) already has an active paid session,
@@ -1004,7 +1066,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
-		if out.Success && domain != "" {
+		if out.Success && siteKey != "" {
 			key := sessionKey(siteKey, slug, out.Payer)
 			// Only open a session when we know who paid; an identity-less session
 			// would be a shared key any caller could ride on.
@@ -1078,6 +1140,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 		var body struct {
+			Token    string `json:"token"`
 			Domain   string `json:"domain"`
 			Slug     string `json:"slug"`
 			Agent    string `json:"agent,omitempty"`
@@ -1106,12 +1169,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_x402_version"})
 			return
 		}
-		if body.Domain == "" || body.XPayment.Payload.Transaction == "" {
+		// Token (primary) or domain (legacy) must identify the site.
+		if (body.Token == "" && body.Domain == "") || body.XPayment.Payload.Transaction == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_transaction_required"})
 			return
 		}
 
-		cfg, err := lookupDomainFn(body.Domain)
+		cfg, err := resolveSite(body.Token, body.Domain)
 		if err != nil || cfg == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 			return

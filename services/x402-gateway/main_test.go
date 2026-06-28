@@ -206,6 +206,87 @@ func TestOnchainKeyFor(t *testing.T) {
 	}
 }
 
+// TestResolveSite covers token-primary resolution with domain as legacy fallback.
+func TestResolveSite(t *testing.T) {
+	origToken, origDomain := lookupTokenFn, lookupDomainFn
+	defer func() { lookupTokenFn, lookupDomainFn = origToken, origDomain }()
+
+	tokenCfg := &DomainConfig{Domain: "", SiteId: "site_tok", OnchainKey: "site_tok"}
+	domainCfg := &DomainConfig{Domain: "a.com", SiteId: "site_dom"}
+
+	// 1) Token present + resolves → token config wins, domain lookup not consulted.
+	t.Run("token primary", func(t *testing.T) {
+		lookupTokenFn = func(tok string) (*DomainConfig, error) {
+			if tok != "tok_123" {
+				t.Errorf("unexpected token %q", tok)
+			}
+			return tokenCfg, nil
+		}
+		lookupDomainFn = func(d string) (*DomainConfig, error) {
+			t.Errorf("domain lookup must not run when token resolves; got %q", d)
+			return nil, nil
+		}
+		got, err := resolveSite("tok_123", "a.com")
+		if err != nil || got != tokenCfg {
+			t.Fatalf("resolveSite token = %v, %v; want tokenCfg", got, err)
+		}
+	})
+
+	// 2) Token empty → falls back to domain lookup.
+	t.Run("domain fallback (no token)", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) {
+			t.Error("token lookup must not run when token is empty")
+			return nil, nil
+		}
+		lookupDomainFn = func(d string) (*DomainConfig, error) {
+			if d != "a.com" {
+				t.Errorf("unexpected domain %q", d)
+			}
+			return domainCfg, nil
+		}
+		got, err := resolveSite("", "a.com")
+		if err != nil || got != domainCfg {
+			t.Fatalf("resolveSite domain = %v, %v; want domainCfg", got, err)
+		}
+	})
+
+	// 3) Token present but not found (nil) → falls back to domain.
+	t.Run("token miss falls back to domain", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) { return nil, nil }
+		lookupDomainFn = func(string) (*DomainConfig, error) { return domainCfg, nil }
+		got, err := resolveSite("tok_unknown", "a.com")
+		if err != nil || got != domainCfg {
+			t.Fatalf("resolveSite token-miss = %v, %v; want domainCfg", got, err)
+		}
+	})
+
+	// 4) Both yield nil → not found (nil, nil).
+	t.Run("both nil", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) { return nil, nil }
+		lookupDomainFn = func(string) (*DomainConfig, error) { return nil, nil }
+		got, err := resolveSite("tok_x", "a.com")
+		if err != nil || got != nil {
+			t.Fatalf("resolveSite both-nil = %v, %v; want nil,nil", got, err)
+		}
+	})
+
+	// 5) No token + no domain → nil,nil (neither lookup invoked).
+	t.Run("empty token and domain", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) {
+			t.Error("token lookup must not run")
+			return nil, nil
+		}
+		lookupDomainFn = func(string) (*DomainConfig, error) {
+			t.Error("domain lookup must not run")
+			return nil, nil
+		}
+		got, err := resolveSite("", "")
+		if err != nil || got != nil {
+			t.Fatalf("resolveSite empty = %v, %v; want nil,nil", got, err)
+		}
+	})
+}
+
 func TestProofHash_StableAndDistinct(t *testing.T) {
 	a := proofHash("AAAAtx1")
 	if a != proofHash("AAAAtx1") {
