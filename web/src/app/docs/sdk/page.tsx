@@ -10,6 +10,7 @@ const nextMiddleware = `// proxy.ts — one file gates your whole Next.js app.
 import { verivyxProxy } from "@verivyx/paywall-next";
 
 export const proxy = verivyxProxy({
+  token: process.env.VERIVYX_TOKEN,      // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/:path*"],           // which paths to gate
   seoPreview: ({ slug }) => {            // teaser for crawlers + humans
     const a = getArticleSync(slug);
@@ -27,6 +28,7 @@ const app = express();
 app.set("trust proxy", true);
 
 app.use(verivyxMiddleware({
+  token: process.env.VERIVYX_TOKEN,   // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/*"],
   seoPreview: ({ slug }) => ({ title: titleFor(slug), excerpt: excerptFor(slug) }),
   humanUnlock: {},
@@ -41,6 +43,7 @@ import { verivyxHonoMiddleware } from "@verivyx/paywall-hono";
 const app = new Hono();
 
 app.use("*", verivyxHonoMiddleware({
+  token: process.env.VERIVYX_TOKEN,   // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/*"],
   seoPreview: ({ slug }) => ({ title: titleFor(slug), excerpt: excerptFor(slug) }),
   humanUnlock: {},
@@ -51,7 +54,7 @@ export default app;`;
 
 const routeSnippet = `import { verivyxNext } from "@verivyx/paywall-next";
 
-const vx = verivyxNext();   // reads VERIVYX_TOKEN / VERIVYX_DOMAIN
+const vx = verivyxNext();   // reads VERIVYX_TOKEN from env
 
 // Per-route alternative: wrap a single handler instead of using middleware.
 export const GET = vx.protect(
@@ -60,8 +63,8 @@ export const GET = vx.protect(
 );`;
 
 const envSnippet = `VERIVYX_TOKEN=…              # required — server-only secret, never ship to the browser
-VERIVYX_DOMAIN=example.com   # required — must match the domain registered in the dashboard
-VERIVYX_API_BASE=https://api.verivyx.com   # optional (this is the default)`;
+VERIVYX_API_BASE=https://api.verivyx.com   # optional (this is the default)
+VERIVYX_DOMAIN=example.com   # optional — legacy/analytics label only; the token identifies your site`;
 
 export default function SdkDocs() {
   return (
@@ -80,15 +83,16 @@ export default function SdkDocs() {
         The SDK does not proxy or cache your content. It inspects every incoming request, checks the
         caller&apos;s identity and payment proof with the Verivyx API, and either lets the request reach your
         app or answers it itself (a 402 for unpaid agents, a teaser for crawlers, an unlock page for humans).
-        Verivyx only ever sees the domain, the route slug, and the proof-of-payment or verification token —
+        Verivyx only ever sees your site token, the route slug, and the proof-of-payment or verification token —
         the full resource body stays on your server. Unauthorised callers never reach the route that renders
         it, so scrapers and bots never receive the content.
       </P>
 
-      <H2 id="setup">Set up your domain first</H2>
+      <H2 id="setup">Get your site token first</H2>
       <P>
-        Before adding the SDK, register your domain and get a <C>VERIVYX_TOKEN</C> from the dashboard. The
-        token is scoped to your domain and authorises the SDK to call the Verivyx API on your behalf.
+        Before adding the SDK, grab a <C>VERIVYX_TOKEN</C> from the dashboard. The token alone identifies your
+        site and authorises the SDK to call the Verivyx API on your behalf — there is no domain entry and no
+        DNS verification step.
       </P>
       <div className="mt-4">
         <Link href="/dashboard/integrations?tab=sdk" className="btn-yellow text-sm inline-flex items-center gap-2">
@@ -96,9 +100,8 @@ export default function SdkDocs() {
         </Link>
       </div>
       <P>
-        The wizard: add your domain, prove ownership with a DNS TXT record
-        (<C>verivyx-site-verification=&lt;code&gt;</C> on your domain), then copy your token. You can re-issue
-        the token any time.
+        The flow: sign up, set your payout wallet and price, then copy your site token and add the middleware.
+        You can re-issue the token any time.
       </P>
 
       <H2 id="middleware">Recommended: one middleware file</H2>
@@ -122,8 +125,8 @@ export default function SdkDocs() {
       <CodeBlock lang="sh" code="npm i @verivyx/paywall-hono" />
       <CodeBlock lang="ts" code={honoMiddleware} />
       <P>
-        For Workers, set secrets with <C>wrangler secret put VERIVYX_TOKEN</C> /{' '}
-        <C>wrangler secret put VERIVYX_DOMAIN</C>, then <C>wrangler deploy</C>.
+        For Workers, set the secret with <C>wrangler secret put VERIVYX_TOKEN</C>, then{' '}
+        <C>wrangler deploy</C>.
       </P>
 
       <H2 id="route-handler">Alternative: per-route handler</H2>
@@ -155,8 +158,8 @@ export default function SdkDocs() {
       <Table
         head={['Option', 'Type', 'Default', 'Description']}
         rows={[
-          [<><C>token</C> / <C>VERIVYX_TOKEN</C></>, 'string', '—', 'Required. Your domain token from the dashboard. Server-only — never expose to the browser.'],
-          [<><C>domain</C> / <C>VERIVYX_DOMAIN</C></>, 'string', '—', 'Required. The domain you registered in Verivyx (e.g. example.com).'],
+          [<><C>token</C> / <C>VERIVYX_TOKEN</C></>, 'string', '—', 'Required. Your site token from the dashboard — it alone identifies your site. Server-only — never expose to the browser.'],
+          [<><C>domain</C> / <C>VERIVYX_DOMAIN</C></>, 'string', <C>&quot;&quot;</C>, 'Optional. Legacy/analytics label only (e.g. example.com); not required and not part of onboarding — the token identifies your site.'],
           [<C>match</C>, 'string[]', <C>[]</C>, 'Glob patterns for paths to gate. When empty, nothing is gated — set at least one. Env VERIVYX_MATCH accepts a comma-separated list.'],
           [<C>seoPreview</C>, '({ slug }) => { title, excerpt }', '—', 'Teaser served to crawlers (and to unverified humans without humanUnlock), wrapped in anti-cloaking JSON-LD.'],
           [<C>humanUnlock</C>, '{ authBase? }', '—', 'When set, unverified human browsers get an in-page PoW unlock to read the full content free.'],
@@ -209,13 +212,13 @@ export default function SdkDocs() {
       <H2 id="security">Security note</H2>
       <Note>
         <strong>Keep <C>VERIVYX_TOKEN</C> server-only.</strong> Never include it in client bundles, expose it
-        via <C>NEXT_PUBLIC_</C>, or log it. It is a bearer credential scoped to your domain. If it leaks,
+        via <C>NEXT_PUBLIC_</C>, or log it. It is a bearer credential that identifies your site. If it leaks,
         re-issue it from the dashboard — old tokens are invalidated the moment a new one is issued.
       </Note>
 
       <div className="mt-12 border-t border-[var(--color-cream-200)] pt-6 flex gap-3 flex-wrap">
         <Link href="/dashboard/integrations?tab=sdk" className="btn-yellow text-sm inline-flex items-center gap-2">
-          Get your domain token <ArrowRight size={16} />
+          Get your site token <ArrowRight size={16} />
         </Link>
         <Link href="/docs/x402" className="btn-outline text-sm inline-flex items-center gap-2">
           How agents pay (x402) <ArrowRight size={16} />

@@ -21,6 +21,7 @@ import { verivyxHonoMiddleware } from "@verivyx/paywall-hono";
 const app = new Hono();
 
 app.use("*", verivyxHonoMiddleware({
+  token: process.env.VERIVYX_TOKEN,   // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/*"],
   seoPreview: ({ slug }) => ({ title: titleFor(slug), excerpt: excerptFor(slug) }),
   humanUnlock: {},   // humans solve an in-page PoW → read full content free
@@ -30,7 +31,7 @@ app.get("/articles/:slug", (c) => c.html(renderArticle(c.req.param("slug"))));
 export default app;
 ```
 
-Reads `VERIVYX_TOKEN` + `VERIVYX_DOMAIN` from env (on Workers, set them with `wrangler secret put`).
+Reads `VERIVYX_TOKEN` from env when not passed inline (on Workers, set it with `wrangler secret put VERIVYX_TOKEN`).
 
 ## Per-route alternative
 
@@ -46,8 +47,8 @@ All options can be passed to `verivyxHonoMiddleware(opts)` / `verivyxHono(opts)`
 
 | Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
-| `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
+| `VERIVYX_TOKEN` | yes (server-only) | Your site token from the Verivyx dashboard — it alone identifies your site |
+| `VERIVYX_DOMAIN` | no | Optional legacy/analytics label, e.g. `example.com`. Not required and not part of onboarding — the token identifies your site. |
 | `match` / `VERIVYX_MATCH` | no | Glob patterns to gate. Empty = nothing gated. Env accepts a comma-separated list. |
 | `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers, with anti-cloaking JSON-LD |
 | `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read full content free |
@@ -56,6 +57,8 @@ All options can be passed to `verivyxHonoMiddleware(opts)` / `verivyxHono(opts)`
 | `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits on-chain confirmation (default `60000`, ~15s settle). No need to raise `timeoutMs` for agent payments — the settle path uses this. |
 
 Also: `trustProxy` (default `true`, prefers `CF-Connecting-IP`), `advertise` (RSL/AIPREF discovery headers).
+
+This adapter is **0.7.0** and depends on `@verivyx/paywall` **0.3.0** (token-only).
 
 ## Docs
 
