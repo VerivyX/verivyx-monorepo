@@ -361,11 +361,15 @@ async function submitSoroban(txXdr: string): Promise<string> {
 //   2. Simulates to get soroban resource data
 //   3. Signs and submits
 // Cost per TX ≈ 0.00001 XLM — covered by the platform fee (0.001 USDC).
-async function submitSorobanAsFeeSponsor(txXdr: string): Promise<string> {
+// submitFeeSponsorUnlocked contains the body of submitSorobanAsFeeSponsor WITHOUT
+// acquiring facilitatorLock. It MUST only be called while the caller already holds
+// facilitatorLock (the Mutex is NOT reentrant — acquiring it twice deadlocks).
+// Used by the legacy paywall settle path so submit + distribute run under ONE lock.
+async function submitFeeSponsorUnlocked(txXdr: string): Promise<string> {
   if (!facilitatorKeypair) {
     throw new Error('FACILITATOR_STELLAR_SECRET required for fee-sponsored Soroban submission');
   }
-  return facilitatorLock.run(async () => {
+  {
     // Parse client TX to extract operations (with their signed auth entries)
     const clientTx = TransactionBuilder.fromXDR(txXdr, NETWORK_PASSPHRASE) as Transaction;
 
@@ -405,14 +409,25 @@ async function submitSorobanAsFeeSponsor(txXdr: string): Promise<string> {
       throw new Error(`Soroban send error: ${JSON.stringify(sendRes.errorResult)}`);
     }
     return pollSorobanConfirmation(sendRes.hash);
-  });
+  }
+}
+
+// Public wrapper: acquires facilitatorLock for the single-lock callers
+// (adapter sponsor-only path). Other callers that need to chain multiple
+// facilitator ops under one lock should use submitFeeSponsorUnlocked instead.
+async function submitSorobanAsFeeSponsor(txXdr: string): Promise<string> {
+  return facilitatorLock.run(() => submitFeeSponsorUnlocked(txXdr));
 }
 
 // callDistribute invokes paywall_core.distribute(domain, usdc, amount) as the keeper.
 // Runs AFTER the agent's single x402 transfer has landed USDC in the paywall contract.
 // The contract splits its own balance: (amount − platform_fee) → creator, fee → platform.
 // Signed + fee-paid by the facilitator (which is the registered keeper). Cost ≈ 0.00001 XLM.
-async function callDistribute(
+// callDistributeUnlocked contains the body of callDistribute WITHOUT acquiring
+// facilitatorLock. It MUST only be called while the caller already holds
+// facilitatorLock (the Mutex is NOT reentrant). Used by the legacy paywall settle
+// path so submit + distribute run under ONE lock (prevents sequence interleaving).
+async function callDistributeUnlocked(
   paywallContract: string,
   domain: string,
   usdcToken: string,
@@ -421,7 +436,7 @@ async function callDistribute(
   if (!facilitatorKeypair) {
     throw new Error('FACILITATOR_STELLAR_SECRET required for distribute');
   }
-  return facilitatorLock.run(async () => {
+  {
     const contract = new Contract(paywallContract);
     const account = await sorobanServer.getAccount(facilitatorKeypair!.publicKey());
 
@@ -455,7 +470,17 @@ async function callDistribute(
       throw new Error(`distribute send error: ${JSON.stringify(sendRes.errorResult)}`);
     }
     return pollSorobanConfirmation(sendRes.hash);
-  });
+  }
+}
+
+// Public wrapper: acquires facilitatorLock for single-lock callers.
+async function callDistribute(
+  paywallContract: string,
+  domain: string,
+  usdcToken: string,
+  amount: string,
+): Promise<string> {
+  return facilitatorLock.run(() => callDistributeUnlocked(paywallContract, domain, usdcToken, amount));
 }
 
 async function registerCreatorOnChain(domain: string, creator: string, priceAtomic: bigint, feeAtomic: bigint): Promise<string> {
@@ -611,23 +636,31 @@ app.post('/settle', requireInternalToken, async (req, res) => {
           throw new SettleValidationError(tErr);
         }
 
-        const txHash = await withTimeout(submitSorobanAsFeeSponsor(txXdr), 30000, 'soroban_sponsor_submit');
-
-        // x402 spec Soroban path: the agent's single transfer just landed the full amount
-        // in the paywall contract. Now run the on-chain split via distribute().
-        // Gateway passes domain + paywallContract in paymentRequirements.extra.
-        let distributeTx: string | undefined;
-        const extra = paymentRequirements?.extra;
-        const paywallContract: string | undefined = extra?.paywallContract;
-        const distributeDomain: string | undefined = extra?.domain;
-        if (paywallContract && distributeDomain) {
-          distributeTx = await withTimeout(
-            callDistribute(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
-            30000,
-            'soroban_distribute',
-          );
-          logger.info({ distributeTx }, 'On-chain split completed via distribute()');
-        }
+        // x402 spec Soroban path: the agent's single transfer lands the full amount in
+        // the paywall contract, then distribute() splits it. BOTH facilitator-account
+        // transactions (fee-sponsored submit + distribute) MUST run under ONE
+        // facilitatorLock acquisition. If the lock were released between them, another
+        // facilitator op (a concurrent settle's submit, or registerCreatorOnChain) could
+        // advance the on-chain sequence, so distribute would build on a stale sequence →
+        // txBadSeq. We call the UNLOCKED variants here because the Mutex is NOT reentrant
+        // (nesting facilitatorLock.run would deadlock). Gateway passes domain +
+        // paywallContract in paymentRequirements.extra.
+        const { txHash, distributeTx } = await facilitatorLock.run(async () => {
+          const txHash = await withTimeout(submitFeeSponsorUnlocked(txXdr), 30000, 'soroban_sponsor_submit');
+          let distributeTx: string | undefined;
+          const extra = paymentRequirements?.extra;
+          const paywallContract: string | undefined = extra?.paywallContract;
+          const distributeDomain: string | undefined = extra?.domain;
+          if (paywallContract && distributeDomain) {
+            distributeTx = await withTimeout(
+              callDistributeUnlocked(paywallContract, distributeDomain, paymentRequirements.asset, paymentRequirements.amount),
+              30000,
+              'soroban_distribute',
+            );
+            logger.info({ distributeTx }, 'On-chain split completed via distribute()');
+          }
+          return { txHash, distributeTx };
+        });
 
         const payer = resolvePayer(paymentPayload?.payload?.payer, extractSorobanFrom(tx), tx.source);
         logger.info({ txHash, distributeTx }, 'Payment settled successfully');

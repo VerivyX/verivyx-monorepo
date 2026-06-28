@@ -40,3 +40,29 @@ test('run() returns the resolved value of fn', async () => {
   const m = new Mutex();
   assert.equal(await m.run(async () => 42), 42);
 });
+
+// Regression for txBadSeq: the legacy settle path holds facilitatorLock across BOTH
+// the fee-sponsored submit AND distribute. Model that as a single run() doing two
+// sequential facilitator ops, and prove a concurrent facilitator op (e.g. another
+// settle's submit, or registerCreatorOnChain) cannot interleave between them and
+// advance the shared on-chain sequence.
+test('settle holds the lock across submit+distribute (no interleave by a concurrent op)', async () => {
+  const m = new Mutex();
+  const log: string[] = [];
+  const settle = m.run(async () => {
+    log.push('submit-start');
+    await new Promise(r => setTimeout(r, 30)); // submit landing
+    log.push('submit-end');
+    log.push('distribute-start');
+    await new Promise(r => setTimeout(r, 30)); // distribute landing
+    log.push('distribute-end');
+  });
+  // A concurrent facilitator op queued while the settle is in flight.
+  const concurrent = m.run(async () => { log.push('concurrent-op'); });
+  await Promise.all([settle, concurrent]);
+  // The concurrent op must run strictly AFTER the whole submit+distribute pair,
+  // never between submit-end and distribute-start.
+  assert.deepEqual(log, [
+    'submit-start', 'submit-end', 'distribute-start', 'distribute-end', 'concurrent-op',
+  ]);
+});
