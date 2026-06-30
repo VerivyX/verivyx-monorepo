@@ -43,7 +43,21 @@ const app = express();
 const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? '1');
 app.set('trust proxy', TRUSTED_PROXY_HOPS);
 app.use(express.json({ limit: '256kb' }));
-app.use(cors());
+// CORS is configurable via CORS_ALLOWED_ORIGINS (comma-separated). If unset/empty,
+// keep the current permissive behavior (reflect any origin) so nothing breaks;
+// if set, restrict to the allowlist while still permitting no-origin requests.
+function corsFromEnv() {
+  const raw = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (raw.length === 0) return cors({ origin: true });
+  const allow = new Set(raw);
+  return cors({
+    origin(origin, cb) {
+      if (!origin || allow.has(origin)) return cb(null, true);
+      cb(null, false);
+    },
+  });
+}
+app.use(corsFromEnv());
 
 function requireEnv(key: string): string {
   const v = process.env[key];
@@ -172,8 +186,19 @@ function authGuard(req: Request, res: Response, next: NextFunction): void {
   }
 }
 
+// Constant-time string compare to avoid leaking secret length/content via timing.
+// Guards undefined and unequal lengths (returns false) before the timing-safe compare.
+function safeEqual(a?: string, b?: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function internalGuard(req: Request, res: Response, next: NextFunction): void {
-  if (req.headers['x-internal-token'] !== INTERNAL_TOKEN) {
+  const presented = req.headers['x-internal-token'];
+  if (typeof presented !== 'string' || !safeEqual(presented, INTERNAL_TOKEN)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }

@@ -740,6 +740,8 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 	// CORS: /hydrate dipanggil dari browser creator (embed script di domain manapun).
+	// INTENTIONAL `*`: this is the PUBLIC x402 content surface — agents and creator
+	// sites on any domain call /hydrate cross-origin, so the wildcard must stay open.
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")

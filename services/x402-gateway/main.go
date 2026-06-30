@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -802,6 +803,12 @@ func bodyDigest(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// constantTimeEq compares two strings in constant time to avoid leaking secret
+// length/content via timing. ConstantTimeCompare returns 0 when lengths differ.
+func constantTimeEq(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
 // ----------------------- gin handlers --------------------------------
 
 // setupRouter wires all HTTP routes onto a new gin.Engine and returns it.
@@ -814,6 +821,8 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	r.Use(gin.Logger(), gin.Recovery())
 	// CORS: gateway endpoints dipanggil langsung dari browser creator (embed script).
 	// Semua origin diizinkan karena creator bisa pasang script di domain apapun.
+	// INTENTIONAL `*`: this is the PUBLIC x402 surface — agents and creator sites on
+	// any domain call these endpoints cross-origin, so the wildcard must stay open.
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -906,7 +915,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	})
 
 	r.POST("/api/v1/payment/verify", func(c *gin.Context) {
-		if c.GetHeader("X-Internal-Token") != internalToken {
+		if !constantTimeEq(c.GetHeader("X-Internal-Token"), internalToken) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -937,7 +946,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	})
 
 	r.POST("/api/v1/payment/settle", func(c *gin.Context) {
-		if c.GetHeader("X-Internal-Token") != internalToken {
+		if !constantTimeEq(c.GetHeader("X-Internal-Token"), internalToken) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -1147,7 +1156,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	// Called by hydration when an agent retries with X-PAYMENT header (standard X402 flow).
 	// Verifies + settles the payment and sets the Redis paid session in one call.
 	r.POST("/api/v1/payment/internal/x-payment-settle", func(c *gin.Context) {
-		if c.GetHeader("X-Internal-Token") != internalToken {
+		if !constantTimeEq(c.GetHeader("X-Internal-Token"), internalToken) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -1313,7 +1322,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	})
 
 	r.GET("/api/v1/payment/internal/check", func(c *gin.Context) {
-		if c.GetHeader("X-Internal-Token") != internalToken {
+		if !constantTimeEq(c.GetHeader("X-Internal-Token"), internalToken) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}

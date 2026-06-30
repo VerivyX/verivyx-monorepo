@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { timingSafeEqual } from 'node:crypto';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom, extractInvokedOp } from './payer';
@@ -44,7 +45,21 @@ const logger = pino({
 });
 
 const app = express();
-app.use(cors());
+// CORS is configurable via CORS_ALLOWED_ORIGINS (comma-separated). If unset/empty,
+// keep the current permissive behavior (reflect any origin) so nothing breaks;
+// if set, restrict to the allowlist while still permitting no-origin requests.
+function corsFromEnv() {
+  const raw = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (raw.length === 0) return cors({ origin: true });
+  const allow = new Set(raw);
+  return cors({
+    origin(origin, cb) {
+      if (!origin || allow.has(origin)) return cb(null, true);
+      cb(null, false);
+    },
+  });
+}
+app.use(corsFromEnv());
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 8084;
@@ -93,8 +108,19 @@ const X402Version = 2;
 
 // atomicToStellar is imported from ./validation (pure integer/string math, no float).
 
+// Constant-time string compare to avoid leaking secret length/content via timing.
+// Guards undefined and unequal lengths (returns false) before the timing-safe compare.
+function safeEqual(a?: string, b?: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
 function requireInternalToken(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (req.headers['x-internal-token'] !== INTERNAL_TOKEN) {
+  const presented = req.headers['x-internal-token'];
+  if (typeof presented !== 'string' || !safeEqual(presented, INTERNAL_TOKEN)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
