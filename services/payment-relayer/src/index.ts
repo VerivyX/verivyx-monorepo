@@ -4,8 +4,8 @@ import { timingSafeEqual } from 'node:crypto';
 import pino from 'pino';
 import { Horizon, rpc, TransactionBuilder, Networks, Transaction, Keypair, Contract, Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { resolvePayer, extractSorobanFrom, extractInvokedOp } from './payer';
-import { Mutex } from './mutex.js';
-import { payloadHash, settleOnce, SettleValidationError } from './idempotency';
+import { payloadHash, SettleValidationError } from './idempotency';
+import { createProviders } from './providers.js';
 import {
   parseAllowedPaywallContracts, assertPaywallContractAllowed,
   parseAllowedPayAdapters, assertAdapterAllowed,
@@ -100,9 +100,14 @@ if (FACILITATOR_SECRET) {
   }
 }
 
-// Single FIFO mutex shared by both facilitator-sourced Soroban functions.
-// Ensures concurrent settles don't collide on the facilitator account sequence number.
-const facilitatorLock = new Mutex();
+// Lock + idempotency providers. In-memory by default (single-instance, the
+// proven behavior); Redis-backed when RELAYER_REDIS_URL/REDIS_URL is set
+// (multi-instance horizontal-scale safe). The facilitatorLock serializes ALL
+// facilitator-account Soroban txs on one resource so submit+distribute stay
+// atomic; settleOnce dedupes/coalesces identical settles.
+const { lock: facilitatorLock, idempotency, mode: scalingMode } = createProviders();
+const settleOnce = idempotency.settleOnce.bind(idempotency);
+logger.info({ scalingMode }, `Relayer concurrency mode: ${scalingMode === 'redis' ? 'Redis-backed (multi-instance)' : 'in-memory (single-instance)'}`);
 
 const X402Version = 2;
 
