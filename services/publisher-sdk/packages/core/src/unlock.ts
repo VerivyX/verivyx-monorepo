@@ -43,7 +43,7 @@ if(!r.ok)throw 0;var c=await r.json();var t0=Date.now();var nonce=await solve(c.
 var fp={userAgent:navigator.userAgent,languages:(navigator.languages&&navigator.languages.length)?Array.prototype.slice.call(navigator.languages):[navigator.language],hardwareConcurrency:navigator.hardwareConcurrency||1,screenWidth:screen.width,screenHeight:screen.height};
 var v=await fetch(C.verifyUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({challenge:c.challenge,nonce:nonce,fingerprint:fp,powDurationMs:dur})});
 if(!v.ok)throw 0;var j=await v.json();var tok=j.token||j.sessionToken||j.session;if(!tok)throw 0;
-document.cookie='vx_session='+tok+'; path=/; max-age=1800; SameSite=Lax';location.reload();
+document.cookie='vx_session='+tok+'; path=/; max-age=1800; SameSite=Lax; Secure';location.reload();
 }catch(e){var s=document.getElementById('vx-status');if(s)s.textContent='Verification failed — please refresh to try again.';}}
 if(window.crypto&&crypto.subtle){var s=document.getElementById('vx-status');if(s)s.textContent='Verifying you are human…';go();}})();</script>`;
   // Inject a status line + the script before </body>.
