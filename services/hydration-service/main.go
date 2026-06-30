@@ -37,7 +37,7 @@ type xPaymentSettleResult struct {
 // and calls the gateway internal endpoint to verify + settle inline.
 // Accepts both x402 v2 standard format (accepted.scheme/network) and our legacy
 // format (scheme/network at top level) for backward compatibility.
-func processXPaymentHeader(domain, slug, headerValue, agent, category string) (*xPaymentSettleResult, error) {
+func processXPaymentHeader(token, domain, slug, headerValue, agent, category string) (*xPaymentSettleResult, error) {
 	// Decode base64 — try standard, then URL-safe, then raw URL-safe.
 	var raw []byte
 	var err error
@@ -88,6 +88,7 @@ func processXPaymentHeader(domain, slug, headerValue, agent, category string) (*
 	}
 
 	body, _ := json.Marshal(map[string]interface{}{
+		"token":    token,
 		"domain":   domain,
 		"slug":     slug,
 		"agent":    agent,
@@ -176,12 +177,17 @@ var (
 // ----------------- types -----------------
 
 type HydrateRequest struct {
+	// Token is the tenant site token (Phase 2). When present it identifies the
+	// site directly, so Domain may be empty (authorize-only SDK callers). Domain
+	// remains the legacy fallback.
+	Token  string `json:"token"`
 	Domain string `json:"domain"`
 	Slug   string `json:"slug"`
 }
 
 type DomainConfig struct {
 	Domain          string  `json:"domain"`
+	SiteId          string  `json:"siteId"`
 	StellarAddress  string  `json:"stellar_address"`
 	PricePerRequest float64 `json:"pricePerRequest"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
@@ -191,6 +197,7 @@ type DomainConfig struct {
 
 type EventPayload struct {
 	Domain     string  `json:"domain"`
+	SiteId     string  `json:"siteId,omitempty"`
 	Type       string  `json:"type"`
 	Agent      string  `json:"agent,omitempty"`
 	Category   string  `json:"category,omitempty"`
@@ -378,6 +385,84 @@ func lookupDomain(domain string) (*DomainConfig, error) {
 	return &out, nil
 }
 
+// lookupByToken resolves a site config by its tenant token (Phase 2). Same HTTP
+// shape as lookupDomain but hits the auth lookup with ?token=<token>. Results are
+// cached under a "token:" prefixed key so they never collide with domain entries.
+// Returns nil,nil on 404 (token not found) so callers can fall back to domain.
+func lookupByToken(token string) (*DomainConfig, error) {
+	cacheKey := "token:" + token
+
+	// Check cache first (read lock)
+	domainCacheMu.RLock()
+	if entry, ok := domainCacheMap[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+		domainCacheMu.RUnlock()
+		return entry.cfg, nil
+	}
+	domainCacheMu.RUnlock()
+
+	// Cache miss — fetch from auth-service
+	req, _ := http.NewRequest("GET", authURL()+"/api/v1/auth/lookup?token="+url.QueryEscape(token), nil)
+	req.Header.Set("X-Internal-Token", string(internalTok))
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, nil
+	}
+	var out DomainConfig
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+
+	// Store in cache (write lock)
+	domainCacheMu.Lock()
+	domainCacheMap[cacheKey] = domainCacheEntry{cfg: &out, expiresAt: time.Now().Add(domainCacheTTL)}
+	domainCacheMu.Unlock()
+
+	return &out, nil
+}
+
+// lookupDomainFn / lookupTokenFn indirect the config lookups through package vars
+// so tests can inject stubs without a live auth-service.
+var (
+	lookupDomainFn = lookupDomain
+	lookupTokenFn  = lookupByToken
+)
+
+// resolveSite resolves a site config by token (primary) with domain as the legacy
+// fallback. If token is non-empty and yields a config, that config is used. When
+// the token lookup yields nil (not found) — or no token was supplied — it falls
+// back to the domain lookup. Returns nil,nil when neither source resolves a site.
+// Backward-compatible: domain-only callers behave exactly as before.
+func resolveSite(token, domain string) (*DomainConfig, error) {
+	if token != "" {
+		cfg, err := lookupTokenFn(token)
+		if err != nil {
+			return nil, err
+		}
+		if cfg != nil {
+			return cfg, nil
+		}
+	}
+	if domain != "" {
+		return lookupDomainFn(domain)
+	}
+	return nil, nil
+}
+
+// requirementsURL builds the gateway requirements URL, forwarding the tenant token
+// (Phase 2) as ?token= when present so the gateway can resolveSite(token, domain).
+func requirementsURL(token, domain, slug string) string {
+	u := gwURL() + "/api/v1/payment/requirements?domain=" + url.QueryEscape(domain) + "&slug=" + url.QueryEscape(slug)
+	if token != "" {
+		u += "&token=" + url.QueryEscape(token)
+	}
+	return u
+}
+
 func logEvent(p EventPayload) {
 	body, _ := json.Marshal(p)
 	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -443,13 +528,17 @@ func hydrateHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
 		return
 	}
+	req.Token = strings.TrimSpace(req.Token)
 	req.Domain = strings.TrimSpace(req.Domain)
 	req.Slug = strings.TrimSpace(req.Slug)
-	if req.Domain == "" || req.Slug == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_slug_required"})
+	// Phase 2: a token OR a domain must identify the site; slug is always required.
+	// Token-only callers (authorize-only SDK sites) may send an empty domain.
+	if req.Slug == "" || (req.Token == "" && req.Domain == "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token_or_domain_and_slug_required"})
 		return
 	}
-	if !isValidHostname(req.Domain) {
+	// Only validate the domain when one was supplied (token-only requests skip this).
+	if req.Domain != "" && !isValidHostname(req.Domain) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_domain"})
 		return
 	}
@@ -464,7 +553,7 @@ func hydrateHandler(c *gin.Context) {
 	// X-Verivyx-Mode: authorize → skip body fetch, return authorization decision only.
 	authorizeOnly := c.GetHeader("X-Verivyx-Mode") == "authorize"
 
-	cfg, _ := lookupDomain(req.Domain)
+	cfg, _ := resolveSite(req.Token, req.Domain)
 	if cfg == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 		return
@@ -475,6 +564,7 @@ func hydrateHandler(c *gin.Context) {
 		agent, cat := classifyAgent(ua)
 		go logEvent(EventPayload{
 			Domain:    req.Domain,
+			SiteId:    cfg.SiteId,
 			Type:      "bot_passthrough",
 			Agent:     agent,
 			Category:  cat,
@@ -499,10 +589,11 @@ func hydrateHandler(c *gin.Context) {
 	}
 	if xPayment != "" {
 		agentName, agentCat := classifyAgent(ua)
-		result, err := processXPaymentHeader(req.Domain, req.Slug, xPayment, agentName, agentCat)
+		result, err := processXPaymentHeader(req.Token, req.Domain, req.Slug, xPayment, agentName, agentCat)
 		if err == nil && result.Success {
 			go logEvent(EventPayload{
 				Domain:    req.Domain,
+				SiteId:    cfg.SiteId,
 				Type:      "agent_served",
 				Agent:     agentName,
 				Category:  agentCat,
@@ -538,7 +629,7 @@ func hydrateHandler(c *gin.Context) {
 			return
 		}
 		// Payment invalid — return 402 with requirements + reason.
-		reqURL := gwURL() + "/api/v1/payment/requirements?domain=" + req.Domain + "&slug=" + req.Slug
+		reqURL := requirementsURL(req.Token, req.Domain, req.Slug)
 		c.Header("X-Paywall-Quote", reqURL)
 		paymentBody := fetchPaymentRequirements(reqURL)
 		errMsg := "invalid_payment"
@@ -562,6 +653,7 @@ func hydrateHandler(c *gin.Context) {
 		if err == nil && claims.Domain == req.Domain {
 			go logEvent(EventPayload{
 				Domain:    req.Domain,
+				SiteId:    cfg.SiteId,
 				Type:      "human_served",
 				SessionID: req.Slug,
 				IP:        ip,
@@ -597,6 +689,7 @@ func hydrateHandler(c *gin.Context) {
 	agent, cat := classifyAgent(ua)
 	go logEvent(EventPayload{
 		Domain:    req.Domain,
+		SiteId:    cfg.SiteId,
 		Type:      "bot_blocked",
 		Agent:     agent,
 		Category:  cat,

@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
+	"math"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +38,9 @@ const (
 	// Replay window for /settle Idempotency-Key. 24h is more than enough to ride
 	// out client retries; longer would let stale keys block legit settlements.
 	IdempotencyTTL = 24 * time.Hour
+	// ConsumedTTL is how long a payment proof is remembered as bound to a (domain,slug).
+	// Long enough to outlast any retry window; keeps the cross-slug replay gate active.
+	ConsumedTTL = 24 * time.Hour
 )
 
 var ctx = context.Background()
@@ -119,6 +124,49 @@ type DomainConfig struct {
 	PlatformFee     float64 `json:"platformFee"`
 	PlatformAddress string  `json:"platform_address"`
 	PaywallEnabled  bool    `json:"paywallEnabled"`
+	// SiteId is the stable tenant identifier returned by the auth lookup. Sessions
+	// and the consumed-proof binding key on it (falling back to Domain for older
+	// data that predates the siteId backfill). Phase 1: re-key only; resolution
+	// stays by-domain.
+	SiteId string `json:"siteId"`
+	// OnchainKey is the stable key used for the relayer's distribute()/register —
+	// the domain for legacy sites (no contract re-registration) and the siteId for
+	// new token-only sites. Falls back to Domain when empty.
+	OnchainKey string `json:"onchainKey"`
+}
+
+// siteKeyFor returns the stable site identifier used to key Redis sessions and the
+// consumed-proof binding. Prefers cfg.SiteId; falls back to the domain for older
+// data (pre-backfill) so nothing 500s. The session/binding key SOURCE changes
+// (domain → siteId); the C1 binding LOGIC is unchanged.
+func siteKeyFor(cfg *DomainConfig, domain string) string {
+	if cfg != nil && cfg.SiteId != "" {
+		return cfg.SiteId
+	}
+	return domain
+}
+
+// onchainKeyFor returns the stable on-chain key for distribute()/register. Prefers
+// cfg.OnchainKey; falls back to cfg.Domain so legacy domain-registered sites keep
+// their existing on-chain key (no contract re-registration).
+func onchainKeyFor(cfg *DomainConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.OnchainKey != "" {
+		return cfg.OnchainKey
+	}
+	return cfg.Domain
+}
+
+// siteIdOf returns the stable tenant siteId from a config, or "" if unavailable.
+// Used to tag analytics events so token-only sites (which may have no domain)
+// are still attributed (Task 64).
+func siteIdOf(cfg *DomainConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.SiteId
 }
 
 // ----------------------- helpers -------------------------------------
@@ -161,6 +209,18 @@ func networkAsset() (string, string) {
 	return NetworkTestnet, "USDC:" + env("USDC_ISSUER", defaultTestnetUSDCIssuer)
 }
 
+// requireSorobanUSDC returns the SEP-41 Soroban USDC contract ID from the
+// USDC_CONTRACT_ID env var.  On mainnet the value must be set explicitly —
+// a missing/blank ID is a fatal config error (real funds are at stake).  On
+// testnet the variable is optional; returning "" causes buildRequirements to
+// skip the Soroban entry, keeping local dev zero-config.
+func requireSorobanUSDC() string {
+	if env("STELLAR_NETWORK", "testnet") == "mainnet" {
+		return mustEnv("USDC_CONTRACT_ID")
+	}
+	return env("USDC_CONTRACT_ID", "")
+}
+
 func classifyAgent(ua string) (string, string) {
 	low := strings.ToLower(ua)
 	switch {
@@ -181,15 +241,17 @@ func classifyAgent(ua string) (string, string) {
 	}
 }
 
-// usdcToAtomic converts a float USDC amount to atomic-units string with 7 decimals.
-// Uses big.Int for precision (no float rounding past 7 decimals).
+// usdcToAtomic converts a float USDC amount to an atomic-units string (7 decimal
+// places = stroops). Uses math.Round so that binary-float imprecision is snapped
+// to the nearest stroop rather than being truncated (e.g. 0.07*1e7 = 699999.9999…
+// truncates to 699999 without Round). Output is always a plain integer string with
+// no decimal point — the shape the x402 spec and the relayer expect for `amount`
+// and `maxAmountRequired`.
 func usdcToAtomic(usdc float64) string {
 	if usdc <= 0 {
 		return "0"
 	}
-	scaled := new(big.Float).Mul(big.NewFloat(usdc), big.NewFloat(1e7))
-	z, _ := scaled.Int(nil)
-	return z.String()
+	return strconv.FormatInt(int64(math.Round(usdc*1e7)), 10)
 }
 
 func lookupDomain(domain string) (*DomainConfig, error) {
@@ -212,8 +274,33 @@ func lookupDomain(domain string) (*DomainConfig, error) {
 	return &out, nil
 }
 
+// lookupSiteByToken resolves a site config by its tenant token (Phase 2). Same
+// HTTP shape as lookupDomain but hits the auth lookup with ?token=<token>. The
+// auth service returns the full DomainConfig (incl. SiteId/OnchainKey). Returns
+// nil,nil on 404 (token not found) so callers can fall back to domain.
+func lookupSiteByToken(token string) (*DomainConfig, error) {
+	authURL := env("AUTH_SERVICE_URL", "http://auth-service:8083")
+	req, _ := http.NewRequest("GET", authURL+"/api/v1/auth/lookup?token="+url.QueryEscape(token), nil)
+	req.Header.Set("X-Internal-Token", internalToken)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, nil
+	}
+	var out DomainConfig
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 type EventPayload struct {
 	Domain                string  `json:"domain"`
+	SiteId                string  `json:"siteId,omitempty"`
 	Type                  string  `json:"type"`
 	Agent                 string  `json:"agent,omitempty"`
 	Category              string  `json:"category,omitempty"`
@@ -458,7 +545,7 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 	// on-chain into creator + platform. No `splitPayments` here — a spec client does
 	// ONE transfer; the split happens in the contract, not in the client TX.
 	// Requires USDC_CONTRACT_ID (SEP-41 Soroban USDC) and SOROBAN_PAYWALL_CONTRACT_ID.
-	sorobanUSDC := env("USDC_CONTRACT_ID", "")
+	sorobanUSDC := requireSorobanUSDC()
 	paywallContract := env("SOROBAN_PAYWALL_CONTRACT_ID", "")
 	if sorobanUSDC != "" && paywallContract != "" {
 		reqs = append(reqs, PaymentRequirement{
@@ -474,8 +561,10 @@ func buildRequirements(cfg *DomainConfig) []PaymentRequirement {
 				// Informational only — the on-chain split the contract will perform.
 				// Not "splitPayments" so the relayer doesn't expect 2 classic ops here.
 				"distribution": split,
-				// Settlement hints for the relayer's distribute() call.
-				"domain":          cfg.Domain,
+				// Settlement hints for the relayer's distribute() call. Use the
+				// stable on-chain key (domain for legacy sites, siteId for new ones)
+				// so register_by_keeper/distribute stay keyed consistently.
+				"domain":          onchainKeyFor(cfg),
 				"paywallContract": paywallContract,
 			},
 		})
@@ -604,6 +693,31 @@ var (
 // tests can inject a stub without a live auth-service.
 var lookupDomainFn = lookupDomain
 
+// lookupTokenFn is the token-config lookup, indirected through a package var so
+// tests can inject a stub without a live auth-service. Mirrors lookupDomainFn.
+var lookupTokenFn = lookupSiteByToken
+
+// resolveSite resolves a site config by token (primary) with domain as the legacy
+// fallback. If token is non-empty and yields a config, that config is used. When
+// the token lookup yields nil (not found) — or no token was supplied — it falls
+// back to the domain lookup. Returns nil,nil when neither source resolves a site.
+// Backward-compatible: domain-only callers behave exactly as before.
+func resolveSite(token, domain string) (*DomainConfig, error) {
+	if token != "" {
+		cfg, err := lookupTokenFn(token)
+		if err != nil {
+			return nil, err
+		}
+		if cfg != nil {
+			return cfg, nil
+		}
+	}
+	if domain != "" {
+		return lookupDomainFn(domain)
+	}
+	return nil, nil
+}
+
 // resolveRequirement returns the canonical PaymentRequirement to forward to the
 // facilitator, plus the derived domain/slug. Trusted callers (requirements carrying
 // Verivyx settlement extras) pass through unchanged. Generic x402 v2 callers are
@@ -658,6 +772,22 @@ func idempotencyKey(key string) string {
 	return "idem:settle:" + key
 }
 
+// proofHash returns the SHA-256 hex digest of an XDR/transaction string.
+// Used as the Redis key for the consumed-proof binding that stops cross-slug replay.
+func proofHash(xdr string) string {
+	sum := sha256.Sum256([]byte(xdr))
+	return hex.EncodeToString(sum[:])
+}
+
+// bindingDecision reports whether a proof may be used for the requested resource.
+// Returns "reuse" when the proof was already consumed for a DIFFERENT resource, "ok" otherwise.
+func bindingDecision(consumedVal, want string) string {
+	if consumedVal != "" && consumedVal != want {
+		return "reuse"
+	}
+	return "ok"
+}
+
 // idemRecord is what we cache against an Idempotency-Key.
 // Storing the body digest lets us reject a key reuse with a different body
 // (RFC draft "Idempotency-Key" §2.4) instead of silently returning the wrong tx.
@@ -707,11 +837,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 	r.GET("/api/v1/payment/requirements", func(c *gin.Context) {
 		domain := strings.TrimSpace(c.Query("domain"))
 		slug := strings.TrimSpace(c.Query("slug"))
-		if domain == "" {
+		token := strings.TrimSpace(c.Query("token"))
+		// Token (primary) or domain (legacy) must identify the site.
+		if token == "" && domain == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain required"})
 			return
 		}
-		cfg, err := lookupDomain(domain)
+		cfg, err := resolveSite(token, domain)
 		if err != nil || cfg == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 			return
@@ -819,6 +951,14 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "detail": err.Error()})
 			return
 		}
+		// Optional tenant token (Phase 2): identifies the site directly, so the
+		// caller need not embed a domain in the resource URL. Domain stays as the
+		// legacy fallback.
+		var tok struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal(bodyBytes, &tok)
+		token := strings.TrimSpace(tok.Token)
 		if req.X402Version != X402Version || req.PaymentPayload.X402Version != X402Version {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":  "unsupported_version",
@@ -876,6 +1016,60 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
+		// Resolve payer — prefer the verify response; fall back to the signed payload.
+		payer := verifyOut.Payer
+		if payer == "" {
+			if p, ok := req.PaymentPayload.Payload["payer"].(string); ok {
+				payer = strings.TrimSpace(p)
+			}
+		}
+		if payer == "" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payer_required"})
+			return
+		}
+
+		// Extract the submitted transaction XDR for anti-replay proof hashing.
+		txStr, _ := req.PaymentPayload.Payload["transaction"].(string)
+
+		// Resolve the site config so sessions + the consumed binding key on siteId
+		// (with a domain fallback for older data). Token is primary; domain is the
+		// legacy fallback. When a token resolves a site, domain may be empty — the
+		// siteKey comes from cfg.SiteId, so the session/binding logic still runs.
+		var cfg *DomainConfig
+		if token != "" || domain != "" {
+			cfg, _ = resolveSite(token, domain)
+		}
+		siteKey := siteKeyFor(cfg, domain)
+
+		if siteKey != "" {
+			want := siteKey + ":" + slug
+
+			// Session-first: if this (siteId,slug,payer) already has an active paid session,
+			// return the cached settlement without re-settling.
+			if tx, serr := rdb.Get(ctx, sessionKey(siteKey, slug, payer)).Result(); serr == nil && tx != "" {
+				sessResp := &SettlementResponse{Success: true, Transaction: tx, Payer: payer}
+				sessRaw, _ := json.Marshal(sessResp)
+				c.Header("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(sessRaw))
+				c.JSON(http.StatusOK, sessResp)
+				return
+			}
+
+			// Anti-replay binding: reject this proof if it was already consumed for a DIFFERENT resource.
+			if txStr != "" {
+				ph := proofHash(txStr)
+				consumed, cerr := rdb.Get(ctx, "consumed:"+ph).Result()
+				if cerr == redis.Nil {
+					// fresh — no prior binding, proceed
+				} else if cerr != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replay_check_unavailable"})
+					return
+				} else if bindingDecision(consumed, want) == "reuse" {
+					c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
+					return
+				}
+			}
+		}
+
 		out, err := facilitator.Settle(req.PaymentPayload, canonReq)
 		if err != nil {
 			log.Printf("facilitator unreachable: %v", err)
@@ -883,8 +1077,8 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
-		if out.Success && domain != "" {
-			key := sessionKey(domain, slug, out.Payer)
+		if out.Success && siteKey != "" {
+			key := sessionKey(siteKey, slug, out.Payer)
 			// Only open a session when we know who paid; an identity-less session
 			// would be a shared key any caller could ride on.
 			if out.Payer != "" {
@@ -892,7 +1086,10 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 					log.Printf("redis set failed: %v", err)
 				}
 			}
-			cfg, _ := lookupDomain(domain)
+			// Bind the proof to this (siteId,slug) so it cannot be replayed for a different resource.
+			if txStr != "" {
+				rdb.Set(ctx, "consumed:"+proofHash(txStr), siteKey+":"+slug, ConsumedTTL)
+			}
 			amt := 0.0
 			if cfg != nil {
 				amt = cfg.PricePerRequest
@@ -902,6 +1099,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			agentName, category := classifyAgent(c.GetHeader("User-Agent"))
 			go logEvent(EventPayload{
 				Domain:                domain,
+				SiteId:                siteIdOf(cfg),
 				Type:                  "payment_verified",
 				Agent:                 agentName,
 				Category:              category,
@@ -954,6 +1152,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 		var body struct {
+			Token    string `json:"token"`
 			Domain   string `json:"domain"`
 			Slug     string `json:"slug"`
 			Agent    string `json:"agent,omitempty"`
@@ -982,12 +1181,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_x402_version"})
 			return
 		}
-		if body.Domain == "" || body.XPayment.Payload.Transaction == "" {
+		// Token (primary) or domain (legacy) must identify the site.
+		if (body.Token == "" && body.Domain == "") || body.XPayment.Payload.Transaction == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "domain_and_transaction_required"})
 			return
 		}
 
-		cfg, err := lookupDomain(body.Domain)
+		cfg, err := resolveSite(body.Token, body.Domain)
 		if err != nil || cfg == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "domain_not_registered"})
 			return
@@ -1034,6 +1234,40 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 
+		// Resolve payer — prefer the verify response; fall back to the signed payload.
+		payer := verifyOut.Payer
+		if payer == "" {
+			payer = body.XPayment.Payload.Payer
+		}
+		if payer == "" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payer_required"})
+			return
+		}
+
+		// Sessions + the consumed binding key on siteId (domain fallback for older data).
+		siteKey := siteKeyFor(cfg, body.Domain)
+		want := siteKey + ":" + body.Slug
+
+		// Session-first: if this (siteId,slug,payer) already has an active paid session,
+		// return success immediately without calling Settle again.
+		if tx, err := rdb.Get(ctx, sessionKey(siteKey, body.Slug, payer)).Result(); err == nil && tx != "" {
+			c.JSON(http.StatusOK, gin.H{"success": true, "transaction": tx, "payer": payer})
+			return
+		}
+
+		// Anti-replay binding: reject this proof if it was already consumed for a DIFFERENT resource.
+		ph := proofHash(body.XPayment.Payload.Transaction)
+		consumed, cerr := rdb.Get(ctx, "consumed:"+ph).Result()
+		if cerr == redis.Nil {
+			// fresh — no prior binding, proceed
+		} else if cerr != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replay_check_unavailable"})
+			return
+		} else if bindingDecision(consumed, want) == "reuse" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": "invalid_payment", "invalidReason": "payment_used_for_other_resource"})
+			return
+		}
+
 		settleOut, err := facilitator.Settle(payload, req)
 		if err != nil {
 			log.Printf("facilitator unreachable: %v", err)
@@ -1041,16 +1275,17 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			return
 		}
 		if settleOut.Success {
-			payer := settleOut.Payer
-			if payer == "" {
-				payer = body.XPayment.Payload.Payer
+			// payer is guaranteed non-empty by the guard above; use settleOut.Payer if the
+			// relayer enriches it (e.g. resolves a federated address), else keep ours.
+			if settleOut.Payer != "" {
+				payer = settleOut.Payer
 			}
-			key := sessionKey(body.Domain, body.Slug, payer)
-			if payer != "" {
-				if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
-					log.Printf("redis set failed: %v", err)
-				}
+			key := sessionKey(siteKey, body.Slug, payer)
+			if err := rdb.Set(ctx, key, settleOut.Transaction, SessionTTL).Err(); err != nil {
+				log.Printf("redis set failed: %v", err)
 			}
+			// Bind the proof to this (siteId,slug) so it cannot be replayed for a different resource.
+			rdb.Set(ctx, "consumed:"+ph, want, ConsumedTTL)
 			agent, cat := body.Agent, body.Category
 			if agent == "" {
 				agent, cat = classifyAgent("")
@@ -1058,6 +1293,7 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			creatorAmt, platformAmt := paymentSplit(cfg)
 			go logEvent(EventPayload{
 				Domain:                body.Domain,
+				SiteId:                siteIdOf(cfg),
 				Type:                  "payment_verified",
 				Agent:                 agent,
 				Category:              cat,
@@ -1094,7 +1330,11 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return
 		}
-		v, err := rdb.Get(ctx, sessionKey(domain, slug, payer)).Result()
+		// Resolve the site config so the lookup key matches what settle wrote
+		// (siteId, with a domain fallback for older data).
+		cfg, _ := lookupDomainFn(domain)
+		siteKey := siteKeyFor(cfg, domain)
+		v, err := rdb.Get(ctx, sessionKey(siteKey, slug, payer)).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusOK, gin.H{"paid": false})
 			return
@@ -1112,6 +1352,13 @@ func setupRouter(facilitator *Facilitator) *gin.Engine {
 func main() {
 	internalToken = mustEnv("INTERNAL_TOKEN")
 	apiPublicBase = strings.TrimRight(mustEnv("API_PUBLIC_URL"), "/")
+	// Mainnet guard — USDC_CONTRACT_ID must be set explicitly when running on
+	// mainnet. The testnet convenience default must never silently be used where
+	// real funds are at stake. requireSorobanUSDC calls mustEnv on mainnet, which
+	// calls log.Fatalf if the var is missing/blank.
+	if env("STELLAR_NETWORK", "testnet") == "mainnet" {
+		mustEnv("USDC_CONTRACT_ID")
+	}
 
 	redisOpts := &redis.Options{Addr: env("REDIS_ADDR", "redis:6379")}
 	if pw := os.Getenv("REDIS_PASSWORD"); pw != "" {

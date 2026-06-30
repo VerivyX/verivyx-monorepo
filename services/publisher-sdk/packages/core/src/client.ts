@@ -8,7 +8,7 @@
  *      payment requirement envelope for the publisher to forward to the caller.
  *
  * The protected content body never leaves the publisher: this client only sends
- * domain + slug + proof and receives a decision back.
+ * token + slug + proof (and optional domain) and receives a decision back.
  *
  * fetch is injected via the `deps` constructor argument so tests can supply a
  * mock without network access. Defaults to the global `fetch` available in
@@ -73,7 +73,8 @@ export class VerivyxClient {
    * Request shape:
    *   - Headers: Content-Type, X-Verivyx-Mode: authorize
    *   - Optional: PAYMENT-SIGNATURE (x402 v2 proof) or Authorization: Bearer (human JWT)
-   *   - Body: { domain, slug }
+   *   - Body: { token, slug, domain? } — token is always sent; domain is
+   *     included only when configured (legacy/analytics label).
    *
    * Returns:
    *   - 200: { authorized, transaction?, paymentResponse? }
@@ -96,17 +97,22 @@ export class VerivyxClient {
       headers["Authorization"] = `Bearer ${bearer}`;
     }
 
-    // AbortController timeout — AbortSignal.timeout() is Node 17.3+ / modern
-    // runtimes; use AbortController for broader ES2020 compat.
+    // AbortController timeout — use settleTimeoutMs (default 60 s) so an agent
+    // that has already paid on-chain is not aborted while the backend awaits
+    // transaction confirmation (settle takes 14–35 s in production).
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), this.cfg.timeoutMs);
+    const timer = setTimeout(() => ac.abort(), this.cfg.settleTimeoutMs);
 
     let response: Response;
     try {
       response = await this._fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({ domain: this.cfg.domain, slug }),
+        body: JSON.stringify({
+          token: this.cfg.token,
+          ...(this.cfg.domain ? { domain: this.cfg.domain } : {}),
+          slug,
+        }),
         signal: ac.signal,
       });
     } catch (err) {
@@ -158,7 +164,7 @@ export class VerivyxClient {
   }
 
   /**
-   * GET /api/v1/payment/requirements?domain=<d>&slug=<s>.
+   * GET /api/v1/payment/requirements?token=<t>&slug=<s>[&domain=<d>].
    *
    * The gateway returns the x402 `PaymentRequired` envelope on both 200 and
    * 402. This method wraps `accepts[]` through `buildPaymentRequired` to
@@ -169,9 +175,13 @@ export class VerivyxClient {
    * Throws: BackendUnreachableError on network failure.
    */
   async requirements(slug: string): Promise<RequirementsResult> {
+    const domainParam = this.cfg.domain
+      ? `&domain=${encodeURIComponent(this.cfg.domain)}`
+      : "";
     const url =
       `${this.cfg.apiBase}/api/v1/payment/requirements` +
-      `?domain=${encodeURIComponent(this.cfg.domain)}&slug=${encodeURIComponent(slug)}`;
+      `?token=${encodeURIComponent(this.cfg.token)}&slug=${encodeURIComponent(slug)}` +
+      domainParam;
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.cfg.timeoutMs);

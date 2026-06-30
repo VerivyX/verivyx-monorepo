@@ -23,10 +23,21 @@ describe("verivyxProxy settling gate", () => {
     // instead of NextResponse.next() — the plain Response would serve an empty body to the agent.
     expect(out!.headers.get("x-middleware-next")).toBe("1");
   });
-  it("core throws → undefined (safe fail, don't break the site)", async () => {
+  it("core throws + failMode:open → undefined (explicit fail-open opt-in)", async () => {
     const core = { protect: async () => { throw new Error("boom"); } } as any;
-    const proxy = verivyxProxy({ domain: "web-test.verivyx.com", token: "t", _core: core });
+    const proxy = verivyxProxy({ domain: "web-test.verivyx.com", token: "t", failMode: "open", _core: core });
     expect(await proxy(new Request("https://x.com/articles/a", { headers: { "user-agent": "GPTBot" } }))).toBeUndefined();
+  });
+  it("fails CLOSED (503) on unexpected core error when failMode is not 'open'", async () => {
+    const core = { protect: async () => { throw new Error("boom"); } } as any;
+    const proxy = verivyxProxy({ domain: "web-test.verivyx.com", token: "t", _core: core }); // default failMode = teaser
+    const out = await proxy(new Request("https://x.com/a", { headers: { "user-agent": "Mozilla/5.0" } }));
+    expect(out?.status).toBe(503);
+  });
+  it("fails OPEN (undefined) on unexpected error only when failMode is 'open'", async () => {
+    const core = { protect: async () => { throw new Error("boom"); } } as any;
+    const proxy = verivyxProxy({ domain: "web-test.verivyx.com", token: "t", failMode: "open", _core: core });
+    expect(await proxy(new Request("https://x.com/a", { headers: { "user-agent": "Mozilla/5.0" } }))).toBeUndefined();
   });
   it("match: non-matching path → undefined, core not called", async () => {
     let called = false;

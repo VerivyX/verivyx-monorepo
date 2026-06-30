@@ -449,8 +449,9 @@ export function verivyxNext(opts?: NextAdapterOptions): {
         try {
           decision = await vx.protect(coreReq, { slug });
         } catch {
-          // Non-failMode error → don't hard-break the site.
-          return undefined;
+          // Unexpected error: fail closed unless the operator opted into fail-open.
+          if (cfg.failMode === "open") return undefined;
+          return new Response("Service Unavailable", { status: 503 });
         }
         if (decision.allowed) {
           if (decision.paymentResponse) {

@@ -64,6 +64,55 @@ export function assertAdapterAllowed(adapterId: string | undefined, allowed: Set
 }
 
 /**
+ * Convert a Stellar stroop value (integer string, 7 implied decimal places) to
+ * a fixed-7-decimal Stellar amount string WITHOUT float math.
+ *
+ * Pure string/integer arithmetic: left-pads the digit string to ≥8 chars, then
+ * inserts the decimal point 7 places from the right. The output shape is
+ * byte-identical to the old `(Number(atomic) / 1e7).toFixed(7)` for all values
+ * that fit in a JS safe integer, and is EXACT for values beyond Number.MAX_SAFE_INTEGER
+ * where float division would round incorrectly.
+ *
+ * Examples:
+ *   "0"       → "0.0000000"
+ *   "50000"   → "0.0050000"
+ *   "10000000"→ "1.0000000"
+ */
+export function atomicToStellar(atomic: string): string {
+  const negative = atomic.startsWith('-');
+  const digits = negative ? atomic.slice(1) : atomic;
+  if (!/^\d+$/.test(digits)) {
+    throw new Error(`Invalid atomic value: "${atomic}"`);
+  }
+  // Pad to at least 8 chars so there is always ≥1 integer digit + 7 fractional digits.
+  const padded = digits.padStart(8, '0');
+  const intRaw = padded.slice(0, padded.length - 7);
+  // Strip leading zeros from integer part, keep at least one digit.
+  const intPart = intRaw.replace(/^0+/, '') || '0';
+  const fracPart = padded.slice(padded.length - 7);
+  return (negative ? '-' : '') + intPart + '.' + fracPart;
+}
+
+/**
+ * Resolve and validate the STELLAR_NETWORK env value at startup.
+ * Accepts only "testnet" (default when unset), "public", or "mainnet".
+ * Any other non-empty value throws immediately — fail-fast to prevent a
+ * misconfigured relayer from accidentally operating on mainnet (real money).
+ *
+ * Returns the canonical two-value type used throughout the relayer:
+ *   "testnet" | "public"
+ */
+export function resolveNetworkName(raw: string | undefined): 'testnet' | 'public' {
+  // Default to testnet when the env var is unset (preserves existing behaviour).
+  if (raw === undefined) return 'testnet';
+  if (raw === 'testnet') return 'testnet';
+  if (raw === 'public' || raw === 'mainnet') return 'public';
+  throw new Error(
+    `Invalid STELLAR_NETWORK="${raw}": must be "testnet" or "public"/"mainnet"`,
+  );
+}
+
+/**
  * Map an arbitrary thrown error to a stable {status, reason} for the HTTP response.
  * Timeout (message ends with '_timeout') → {status:503, reason:'settlement_timeout'}.
  * Everything else → {status:500, reason:'settlement_failed'}.

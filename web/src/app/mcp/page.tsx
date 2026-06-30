@@ -125,7 +125,7 @@ export default function McpComingSoonPage() {
         <div className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-12 px-6 py-20 md:grid-cols-2 md:py-28">
           <div>
             <span className="tag-chip bg-[var(--color-stellar-violet-soft)] text-[var(--color-ink-900)]">
-              <Sparkles className="mr-1 inline h-3.5 w-3.5" /> Coming soon · early access
+              <Sparkles className="mr-1 inline h-3.5 w-3.5" /> Early access
             </span>
             <h1 className="mt-5 text-4xl font-semibold leading-[1.05] tracking-tight md:text-6xl">
               Pay for anything.{' '}

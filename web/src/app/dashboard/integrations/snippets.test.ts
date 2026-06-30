@@ -1,26 +1,28 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { snippetFor, FRAMEWORKS, envBlock } from "./snippets.js";
+import { snippetFor, FRAMEWORKS } from "./snippets.js";
 
 describe("snippetFor", () => {
   it("covers all three frameworks", () => assert.deepEqual(FRAMEWORKS, ["next", "express", "hono"]));
-  it("next snippet uses the next package + vx.protect", () => {
-    const s = snippetFor("next", "example.com");
+  it("next snippet uses the next package + verivyxProxy with the token inlined", () => {
+    const s = snippetFor("next", "vx_test_token");
     assert.equal(s.install, "npm i @verivyx/paywall-next");
-    assert.match(s.code, /verivyxNext/);
-    assert.match(s.code, /vx\.protect/);
+    assert.match(s.code, /verivyxProxy/);
+    assert.match(s.code, /token: "vx_test_token"/);
   });
-  it("express snippet uses the express package", () => {
-    assert.equal(snippetFor("express", "x.com").install, "npm i @verivyx/paywall-express");
-    assert.match(snippetFor("express", "x.com").code, /verivyxExpress/);
+  it("express snippet uses the express package + verivyxMiddleware", () => {
+    const s = snippetFor("express", "vx_test_token");
+    assert.equal(s.install, "npm i @verivyx/paywall-express");
+    assert.match(s.code, /verivyxMiddleware/);
+    assert.match(s.code, /token: "vx_test_token"/);
   });
-  it("hono snippet uses the hono package", () => {
-    assert.equal(snippetFor("hono", "x.com").install, "npm i @verivyx/paywall-hono");
-    assert.match(snippetFor("hono", "x.com").code, /verivyxHono/);
+  it("hono snippet uses the hono package + verivyxHonoMiddleware", () => {
+    const s = snippetFor("hono", "vx_test_token");
+    assert.equal(s.install, "npm i @verivyx/paywall-hono");
+    assert.match(s.code, /verivyxHonoMiddleware/);
+    assert.match(s.code, /token: "vx_test_token"/);
   });
-  it("envBlock includes the domain", () => {
-    const e = envBlock("example.com");
-    assert.match(e, /VERIVYX_TOKEN=/);
-    assert.match(e, /VERIVYX_DOMAIN=example\.com/);
+  it("falls back to a placeholder token when none is provided", () => {
+    assert.match(snippetFor("next", "").code, /token: "vx_live_/);
   });
 });

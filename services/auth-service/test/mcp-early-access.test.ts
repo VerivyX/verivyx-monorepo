@@ -138,3 +138,32 @@ test('POST /api/v1/admin/mcp/early-access → 401 with malformed Bearer token', 
   });
   assert.equal(res.status, 401, 'invalid token must be rejected with 401');
 });
+
+// ---- /api/v1/admin/mcp/grant boundary (no Prisma needed) ----
+// adminGuard rejects unauthenticated requests before any DB access, so the auth
+// boundary is testable without a live DB. The grant/revoke/pre-grant DB flows
+// (grant existing → flag on; grant unregistered → pre-grant row; revoke → flag
+// off + row deleted; bad email → 400) run after adminGuard and are covered by E2E.
+
+test('POST /api/v1/admin/mcp/grant → 401 with no Authorization header', async () => {
+  const res = await fetch(`${base}/api/v1/admin/mcp/grant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'pre@grant.com', granted: true }),
+  });
+  assert.equal(res.status, 401, 'unauthenticated grant must be rejected with 401');
+  const body = await res.json() as { error: string };
+  assert.ok(body.error, 'error field must be present in 401 response');
+});
+
+test('POST /api/v1/admin/mcp/grant → 401 with malformed Bearer token', async () => {
+  const res = await fetch(`${base}/api/v1/admin/mcp/grant`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer not-a-real-token',
+    },
+    body: JSON.stringify({ email: 'pre@grant.com', granted: true }),
+  });
+  assert.equal(res.status, 401, 'invalid token must be rejected with 401');
+});

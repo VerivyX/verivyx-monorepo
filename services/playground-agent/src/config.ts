@@ -41,11 +41,6 @@ export const config = {
   usdcIssuer: env("USDC_ISSUER", DEFAULT_TESTNET_USDC_ISSUER),
 
   hydrationUrl: env("HYDRATION_URL", "http://hydration-service:8082"),
-  // The demo resource settles directly against the gateway (the demo domain has no
-  // origin website, so there is no WordPress body to hydrate). The internal token
-  // gates the gateway's internal settle endpoint.
-  gatewayUrl: env("GATEWAY_URL", "http://x402-gateway:8081"),
-  internalToken: env("INTERNAL_TOKEN", ""),
 
   // Canonical Verivyx MCP server (Streamable HTTP). The playground drives it with
   // a per-session pooled wallet (X-Session-Stellar-Secret).
@@ -54,6 +49,15 @@ export const config = {
 
   openrouterApiKey: requireEnv("OPENROUTER_API_KEY"),
   openrouterModel: env("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
+  // Free fallbacks tried (in order) when the primary is rate-limited/busy (429) or errors.
+  // All free + tool-calling capable. Override via OPENROUTER_FALLBACK_MODELS (comma-separated).
+  openrouterFallbackModels: env(
+    "OPENROUTER_FALLBACK_MODELS",
+    "meta-llama/llama-3.3-70b-instruct:free,qwen/qwen-2.5-72b-instruct:free",
+  )
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   openrouterBaseUrl: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 
   // Empty secret → dev bypass (local only). In production this MUST be set.
@@ -63,12 +67,10 @@ export const config = {
   faucetUsdcPerWallet: env("PLAYGROUND_FAUCET_USDC_PER_WALLET", "0.5"),
   faucetDailyCap: num("PLAYGROUND_FAUCET_DAILY_CAP", 50),
 
-  demoDomain: env("PLAYGROUND_DEMO_DOMAIN", "playground.verivyx.com"),
-  demoSlug: env("PLAYGROUND_DEMO_SLUG", "article"),
-  demoResourceUrl: env("PLAYGROUND_DEMO_RESOURCE_URL", "http://127.0.0.1:8087/api/v1/playground/demo/article"),
-  // Base URL the (now external) MCP server uses to reach the demo resource.
-  // Must be reachable from the mcp-server container — use the docker service name.
-  demoBaseUrl: env("PLAYGROUND_DEMO_BASE", "http://playground-agent:8087"),
+  // Default target: a REAL Verivyx SDK-protected site (demo-sdk-next.verivyx.com).
+  // It returns HTTP 402 to machines, so the MCP agent pays its public URL the normal
+  // way — proving the SDK case end-to-end against a live site.
+  demoSdkUrl: env("PLAYGROUND_DEMO_SDK_URL", "https://demo-sdk-next.verivyx.com/seven-wonders"),
 
   // Second target: a REAL Verivyx-protected WordPress post on web-test.verivyx.com.
   // The agent pays its public URL directly (it returns HTTP 402 to bots), proving the
@@ -81,7 +83,7 @@ export const config = {
 
   allowedPaymentPrefixes: env(
     "ALLOWED_PAYMENT_PREFIXES",
-    "http://playground-agent:8087/api/v1/playground/demo,http://127.0.0.1:8087/api/v1/playground/demo,https://playground.verivyx.com/api/v1/playground/demo,https://web-test.verivyx.com/",
+    "https://demo-sdk-next.verivyx.com/,https://web-test.verivyx.com/",
   )
     .split(",")
     .map((s) => s.trim())

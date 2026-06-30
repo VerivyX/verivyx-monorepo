@@ -9,7 +9,14 @@ export interface VerivyxOptions {
   match?: string[];
   failMode?: "teaser" | "open" | "closed";
   price?: Price;
+  /** Timeout for the quick requirements/classify path (default 800 ms). */
   timeoutMs?: number;
+  /**
+   * Timeout for the authorize/settle path, which awaits an on-chain
+   * transaction (default 60 000 ms). Kept separate so a paying agent is
+   * not aborted mid-settle.
+   */
+  settleTimeoutMs?: number;
   logger?: Logger;
   onDecision?: (d: GateDecision) => void;
   /** Human-unlock options. Adapters use `buildUnlockHtml` with this config. */
@@ -18,18 +25,25 @@ export interface VerivyxOptions {
 
 /** Fully-resolved config — no optional fields except price and onDecision. */
 export interface ResolvedConfig {
+  /**
+   * Optional legacy/analytics label. Empty string when not provided.
+   * The SDK is now token-only; `token` alone identifies the tenant.
+   */
   domain: string;
   token: string;
   apiBase: string;
   match: string[];
   failMode: "teaser" | "open" | "closed";
   price?: Price;
+  /** Timeout for the quick requirements/classify path (ms). */
   timeoutMs: number;
+  /** Timeout for the authorize/settle path that awaits on-chain confirmation (ms). */
+  settleTimeoutMs: number;
   logger: Logger;
   onDecision?: (d: GateDecision) => void;
 }
 
-/** Thrown when required config values (domain, token) cannot be resolved. */
+/** Thrown when required config values (token) cannot be resolved. */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -63,15 +77,11 @@ export function resolveConfig(
   opts?: VerivyxOptions,
   env: Record<string, string | undefined> = {},
 ): ResolvedConfig {
-  // --- domain ---
+  // --- domain (optional: legacy/analytics label; token alone identifies the
+  //     tenant). Resolved when provided, defaults to "" when absent. ---
   const domain = (opts?.domain ?? env["VERIVYX_DOMAIN"] ?? "").trim();
-  if (!domain) {
-    throw new ConfigError(
-      "VERIVYX_DOMAIN is required (set via opts.domain or VERIVYX_DOMAIN env var)",
-    );
-  }
 
-  // --- token ---
+  // --- token (required) ---
   const token = (opts?.token ?? env["VERIVYX_TOKEN"] ?? "").trim();
   if (!token) {
     throw new ConfigError(
@@ -119,6 +129,24 @@ export function resolveConfig(
     timeoutMs = 800;
   }
 
+  // --- settleTimeoutMs ---
+  // Separate, longer timeout for the authorize/settle path (awaits on-chain tx).
+  // Default 60 000 ms; keeps a paying agent from being aborted mid-settle.
+  let settleTimeoutMs: number;
+  if (opts?.settleTimeoutMs !== undefined) {
+    settleTimeoutMs = opts.settleTimeoutMs;
+  } else if (env["VERIVYX_SETTLE_TIMEOUT_MS"] !== undefined) {
+    const parsed = parseInt(env["VERIVYX_SETTLE_TIMEOUT_MS"], 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new ConfigError(
+        `VERIVYX_SETTLE_TIMEOUT_MS must be a positive integer, got "${env["VERIVYX_SETTLE_TIMEOUT_MS"]}"`,
+      );
+    }
+    settleTimeoutMs = parsed;
+  } else {
+    settleTimeoutMs = 60_000;
+  }
+
   // --- logger ---
   const logger: Logger = opts?.logger ?? consoleLogger;
 
@@ -133,6 +161,7 @@ export function resolveConfig(
     match,
     failMode,
     timeoutMs,
+    settleTimeoutMs,
     logger,
   };
   return {

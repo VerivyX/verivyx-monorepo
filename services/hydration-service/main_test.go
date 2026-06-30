@@ -98,6 +98,91 @@ func TestSetPaymentRequiredHeaderIsBase64Decodable(t *testing.T) {
 	}
 }
 
+// TestResolveSite covers token-primary resolution with domain as legacy fallback.
+func TestResolveSite(t *testing.T) {
+	origDomain := lookupDomainFn
+	origToken := lookupTokenFn
+	defer func() { lookupDomainFn = origDomain; lookupTokenFn = origToken }()
+
+	tokenCfg := &DomainConfig{Domain: ""}
+	domainCfg := &DomainConfig{Domain: "ex.com"}
+
+	// 1) Token present + resolves → token config wins, domain lookup not consulted.
+	t.Run("token primary", func(t *testing.T) {
+		lookupTokenFn = func(tok string) (*DomainConfig, error) {
+			if tok != "tok_abc" {
+				t.Errorf("unexpected token %q", tok)
+			}
+			return tokenCfg, nil
+		}
+		lookupDomainFn = func(d string) (*DomainConfig, error) {
+			t.Errorf("domain lookup must not run when token resolves; got %q", d)
+			return nil, nil
+		}
+		got, err := resolveSite("tok_abc", "ex.com")
+		if err != nil || got != tokenCfg {
+			t.Fatalf("resolveSite token = %v, %v; want tokenCfg", got, err)
+		}
+	})
+
+	// 2) No token → domain fallback.
+	t.Run("domain fallback (no token)", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) {
+			t.Error("token lookup must not run when token is empty")
+			return nil, nil
+		}
+		lookupDomainFn = func(d string) (*DomainConfig, error) {
+			if d != "ex.com" {
+				t.Errorf("unexpected domain %q", d)
+			}
+			return domainCfg, nil
+		}
+		got, err := resolveSite("", "ex.com")
+		if err != nil || got != domainCfg {
+			t.Fatalf("resolveSite domain = %v, %v; want domainCfg", got, err)
+		}
+	})
+
+	// 3) Token miss (nil) → falls back to domain.
+	t.Run("token miss falls back to domain", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) { return nil, nil }
+		lookupDomainFn = func(string) (*DomainConfig, error) { return domainCfg, nil }
+		got, err := resolveSite("tok_missing", "ex.com")
+		if err != nil || got != domainCfg {
+			t.Fatalf("resolveSite token-miss = %v, %v; want domainCfg", got, err)
+		}
+	})
+
+	// 4) Token-only (no domain) resolves → token config, no domain lookup.
+	t.Run("token only no domain", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) { return tokenCfg, nil }
+		lookupDomainFn = func(d string) (*DomainConfig, error) {
+			t.Errorf("domain lookup must not run; got %q", d)
+			return nil, nil
+		}
+		got, err := resolveSite("tok_abc", "")
+		if err != nil || got != tokenCfg {
+			t.Fatalf("resolveSite token-only = %v, %v; want tokenCfg", got, err)
+		}
+	})
+
+	// 5) No token + no domain → nil,nil (neither lookup invoked).
+	t.Run("empty token and domain", func(t *testing.T) {
+		lookupTokenFn = func(string) (*DomainConfig, error) {
+			t.Error("token lookup must not run")
+			return nil, nil
+		}
+		lookupDomainFn = func(string) (*DomainConfig, error) {
+			t.Error("domain lookup must not run")
+			return nil, nil
+		}
+		got, err := resolveSite("", "")
+		if got != nil || err != nil {
+			t.Fatalf("resolveSite empty = %v, %v; want nil,nil", got, err)
+		}
+	})
+}
+
 // seedDomainCache pre-seeds the domain cache so hydrateHandler does not make
 // a real HTTP call to auth-service during tests.
 func seedDomainCache(cfg *DomainConfig) {

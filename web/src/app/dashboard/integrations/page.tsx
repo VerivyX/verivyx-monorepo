@@ -21,11 +21,10 @@ function isTab(v: string | null): v is Tab {
   return v === 'sdk' || v === 'wordpress' || v === 'embed';
 }
 
-function IntegrationsInner({ user, refreshing, onRefresh, onVerified }: {
+function IntegrationsInner({ user, refreshing, onRefresh }: {
   user: CreatorUser;
   refreshing: boolean;
   onRefresh: () => void;
-  onVerified: (domain: string) => void;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -119,9 +118,7 @@ function IntegrationsInner({ user, refreshing, onRefresh, onVerified }: {
         </div>
 
         {/* Tab panels */}
-        {activeTab === 'sdk' && (
-          <SdkPanel user={user} onVerified={onVerified} />
-        )}
+        {activeTab === 'sdk' && <SdkPanel />}
         {activeTab === 'wordpress' && <WordPressPanel user={user} />}
         {activeTab === 'embed' && <EmbedPanel user={user} />}
       </main>
@@ -203,15 +200,6 @@ export default function IntegrationsPage() {
         user={user}
         refreshing={refreshing}
         onRefresh={load}
-        onVerified={async (_domain) => {
-          // Refresh user from the server so domainVerified reflects the new state.
-          try {
-            const meRes = await api.me();
-            setUser(meRes.user);
-          } catch {
-            // Best-effort; the token is already shown — silently ignore.
-          }
-        }}
       />
     </Suspense>
   );

@@ -22,6 +22,7 @@ const app = express();
 app.set("trust proxy", true);
 
 app.use(verivyxMiddleware({
+  token: process.env.VERIVYX_TOKEN,   // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/*"],
   seoPreview: ({ slug }) => ({ title: titleFor(slug), excerpt: excerptFor(slug) }),
   humanUnlock: {},   // humans solve an in-page PoW → read full content free
@@ -31,7 +32,7 @@ app.get("/articles/:slug", (req, res) => res.send(renderArticle(req.params.slug)
 app.listen(3000);
 ```
 
-Reads `VERIVYX_TOKEN` + `VERIVYX_DOMAIN` from env.
+Reads `VERIVYX_TOKEN` from env when not passed inline.
 
 ## Per-route alternative
 
@@ -47,15 +48,18 @@ All options can be passed to `verivyxMiddleware(opts)` / `verivyxExpress(opts)` 
 
 | Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
-| `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
+| `VERIVYX_TOKEN` | yes (server-only) | Your site token from the Verivyx dashboard — it alone identifies your site |
+| `VERIVYX_DOMAIN` | no | Optional legacy/analytics label, e.g. `example.com`. Not required and not part of onboarding — the token identifies your site. |
 | `match` / `VERIVYX_MATCH` | no | Glob patterns to gate. Empty = nothing gated. Env accepts a comma-separated list. |
 | `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers, with anti-cloaking JSON-LD |
 | `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read full content free |
 | `failMode` / `VERIVYX_FAIL_MODE` | no | Backend unreachable: `teaser` (default) \| `open` \| `closed` |
-| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). **Raise to ~`30000` if you accept agent payments** (settle takes ~15s). |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Timeout in ms for the quick classify/requirements call (default `800`). |
+| `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits on-chain confirmation (default `60000`, ~15s settle). No need to raise `timeoutMs` for agent payments — the settle path uses this. |
 
 Also: `trustProxy` (default `true`), `clientIp`, `advertise` (RSL/AIPREF discovery headers).
+
+This adapter is **0.7.0** and depends on `@verivyx/paywall` **0.3.0** (token-only).
 
 ## Docs
 

@@ -30,7 +30,7 @@ import {
 } from '@/lib/playground';
 
 const TARGETS: { key: PlaygroundTarget; label: string; hint: string }[] = [
-  { key: 'demo', label: 'Demo resource', hint: 'Verivyx sandbox demo content' },
+  { key: 'demosdk', label: 'demo-sdk-next.verivyx.com', hint: 'A real Verivyx SDK-protected site' },
   { key: 'webtest', label: 'web-test.verivyx.com', hint: 'A real Verivyx-protected WordPress post' },
 ];
 
@@ -59,7 +59,7 @@ export default function PlaygroundPage() {
 
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState('');
-  const [target, setTarget] = useState<PlaygroundTarget>('demo');
+  const [target, setTarget] = useState<PlaygroundTarget>('demosdk');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -85,7 +85,7 @@ export default function PlaygroundPage() {
         {
           id: nextId(),
           kind: 'assistant',
-          text: "Hi! I'm a Verivyx x402 agent running in a sandboxed Stellar testnet. I control the wallet on the right. Ask me to unlock the demo content and I'll pay for it on-chain.",
+          text: "Hi! I'm a Verivyx x402 agent running on a sandboxed Stellar testnet wallet (on the right). Ask me to unlock a real Verivyx SDK-protected demo site and I'll pay for it on-chain.",
         },
       ]);
     } catch (e) {
@@ -251,7 +251,7 @@ export default function PlaygroundPage() {
             {/* Chat */}
             <div className="lg:col-span-2">
               <div className="surface-card flex h-[32rem] flex-col">
-                {/* Target selector: isolated demo vs a real protected WordPress post */}
+                {/* Target selector: a real SDK-protected site vs a real protected WordPress post */}
                 <div className="flex items-center gap-2 border-b border-[var(--color-cream-200)] p-3">
                   <span className="text-xs font-medium text-[var(--color-ink-500)]">Pay for:</span>
                   <div className="inline-flex rounded-lg border border-[var(--color-cream-200)] p-0.5">
@@ -311,7 +311,7 @@ export default function PlaygroundPage() {
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       disabled={busy}
-                      placeholder="Ask the agent to unlock the demo…"
+                      placeholder="Ask the agent to unlock the protected site…"
                       className="flex-1 rounded-lg border border-[var(--color-cream-200)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-300)] disabled:opacity-60"
                     />
                     <button

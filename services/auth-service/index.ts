@@ -11,6 +11,7 @@ import {
   checkPow,
   fingerprintReason,
   clientIp as _clientIp,
+  requireProductionSecrets,
   type Fingerprint,
 } from './lib.js';
 import {
@@ -20,6 +21,7 @@ import {
   type Tier,
 } from './reputation.js';
 import { isValidPublicHost } from './ssrf.js';
+import { newSiteId, onchainKey, siteLabel } from './site.js';
 import { newConnectId, newNonce, newCode, isPendingExpired, confirmOwnership } from './connect.js';
 import { verifyDomainTxt } from './domain-verify.js';
 import { getLoginRequest, acceptLogin, getConsentRequest, acceptConsent, rejectConsent, revokeUserSessions } from './hydra.js';
@@ -72,6 +74,25 @@ const RESEND_FROM = process.env.RESEND_FROM?.trim() || 'Verivyx <noreply@verivyx
 const APP_BASE_URL = requireEnv('APP_BASE_URL').replace(/\/$/, '');
 // Email verification token lifetime.
 const EMAIL_TOKEN_TTL_MS = 24 * 60 * 60_000;
+
+// Production fail-fast: the empty-secret dev bypasses above silently disable the
+// captcha gate (Turnstile) and the email hard-gate (Resend). That is acceptable
+// for local dev but MUST never happen in production, so refuse to boot.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+try {
+  requireProductionSecrets({
+    isProduction: IS_PRODUCTION,
+    TURNSTILE_SECRET_KEY: TURNSTILE_SECRET,
+    RESEND_API_KEY: RESEND_API_KEY,
+  });
+} catch (e) {
+  console.error(`[FATAL] ${(e as Error).message}`);
+  process.exit(1);
+}
+if (!IS_PRODUCTION) {
+  if (!TURNSTILE_SECRET) console.warn('[dev] TURNSTILE_SECRET_KEY empty — captcha verification is BYPASSED (dev only).');
+  if (!RESEND_API_KEY) console.warn('[dev] RESEND_API_KEY empty — email verification is BYPASSED, links logged to stdout (dev only).');
+}
 
 // Public frontend URL (e.g. https://verivyx.com) — used to redirect browser to
 // the dashboard login page when a Hydra login challenge requires interaction.
@@ -348,8 +369,9 @@ function shapeUser(u: {
     domain: u.domain,
     stellar_address: u.stellar_address,
     emailVerified: u.emailVerified,
-    // Onboarding is incomplete until both wallet and domain are set.
-    needsOnboarding: !u.domain || !u.stellar_address,
+    // Onboarding is token-only now: complete once the payout wallet is set.
+    // Domain is no longer required (the SDK is configured by site token).
+    needsOnboarding: !u.stellar_address,
     pricePerRequest: Number(u.pricePerRequest),
     platformFee: u.platformFee != null ? Number(u.platformFee) : null,
     apiKey: u.apiKey,
@@ -391,9 +413,25 @@ app.post('/api/v1/auth/register', async (req: Request, res: Response) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const normalizedEmail = email.trim().toLowerCase();
+    // Issue a stable siteId and a site token (the SDK's VERIVYX_TOKEN, stored in
+    // the same wpInternalToken column used by WP Connect / DNS provisioning) at
+    // signup so the account is SDK-ready with no DNS step required.
+    const siteToken = crypto.randomBytes(30).toString('base64url'); // 40-char url-safe secret
     const user = await prisma.user.create({
-      data: { email: email.trim().toLowerCase(), password: hashedPassword },
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        siteId: newSiteId(),
+        wpInternalToken: siteToken,
+      },
     });
+    // Apply any admin pre-grant for this email (case-insensitive) so a waitlisted
+    // creator gets MCP early access the moment they register.
+    const grant = await prisma.mcpEarlyAccessGrant.findUnique({ where: { email: normalizedEmail } });
+    if (grant) {
+      await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: true } });
+    }
     const rawToken = await createVerificationToken(user.id);
     try {
       await sendVerificationEmail(user.email, rawToken);
@@ -721,6 +759,31 @@ app.post('/api/v1/oauth/consent/reject', authGuard, async (req: Request, res: Re
 
 const PAYMENT_RELAYER_URL = process.env.PAYMENT_RELAYER_URL || 'http://payment-relayer:8084';
 
+// Best-effort: mirror the publisher's payout/price onto the paywall contract so
+// distribute() can pay them. Never throws into the request path; idempotent.
+async function syncCreatorOnChain(user: {
+  domain: string | null; siteId?: string | null; domainVerified?: boolean | null;
+  stellar_address: string | null; pricePerRequest: unknown; platformFee?: unknown;
+}): Promise<void> {
+  if (!user.domain || !user.domainVerified || !user.stellar_address) return;
+  const price = Number(user.pricePerRequest);
+  const platformFee = Number(user.platformFee ?? 0.001);
+  if (!(price > 0)) return;
+  // Register against the stable tenant key (domain → siteId fallback) so the
+  // on-chain creator record survives domain changes / re-keying.
+  const key = onchainKey({ domain: user.domain, siteId: user.siteId });
+  try {
+    const r = await fetch(`${PAYMENT_RELAYER_URL}/register-creator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Token': INTERNAL_TOKEN },
+      body: JSON.stringify({ domain: key, creator: user.stellar_address, price, platformFee }),
+    });
+    if (!r.ok) console.warn(`[register-creator] relayer ${r.status} for key=${key}`);
+  } catch (e) {
+    console.warn(`[register-creator] failed for key=${key}:`, (e as Error).message);
+  }
+}
+
 type TrustlineResp = {
   funded: boolean; hasTrustline: boolean; usdcBalance: string; xlmBalance: string;
   asset: { code: string; issuer: string }; network: string; networkPassphrase: string; horizonUrl: string;
@@ -750,7 +813,10 @@ app.get('/api/v1/auth/payout-status', authGuard, async (req: Request, res: Respo
 
 app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response) => {
   const { pricePerRequest, domain, stellar_address, paywallEnabled } = req.body ?? {};
-  const data: { pricePerRequest?: number; domain?: string; stellar_address?: string; paywallEnabled?: boolean } = {};
+  const data: {
+    pricePerRequest?: number; domain?: string; stellar_address?: string; paywallEnabled?: boolean;
+    domainVerified?: boolean; wpInternalToken?: null;
+  } = {};
 
   if (pricePerRequest !== undefined) {
     const n = Number(pricePerRequest);
@@ -783,8 +849,28 @@ app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response
     return res.status(400).json({ error: 'No valid fields to update' });
   }
 
+  // Fetch current user for cross-field guards (Fix 2 + Fix 3).
+  const currentUser = await prisma.user.findUnique({ where: { id: req.userId! } });
+  if (!currentUser) return res.status(404).json({ error: 'User not found' });
+
+  // Fix 3: price must strictly exceed the effective platform fee to prevent InvalidPrice on-chain.
+  if (data.pricePerRequest !== undefined) {
+    const effectiveFee = Number(currentUser.platformFee ?? 0.001);
+    if (data.pricePerRequest <= effectiveFee) {
+      return res.status(400).json({ error: 'price_must_exceed_platform_fee' });
+    }
+  }
+
+  // Fix 2: changing domain invalidates the existing verification so the provisioning wizard
+  // re-runs for the new domain — prevents squatting with a stale domainVerified=true.
+  if (data.domain !== undefined && data.domain !== currentUser.domain) {
+    data.domainVerified = false;
+    data.wpInternalToken = null;
+  }
+
   try {
     const user = await prisma.user.update({ where: { id: req.userId! }, data });
+    void syncCreatorOnChain(user);
     res.json({ user: shapeUser(user) });
   } catch (error: any) {
     if (error.code === 'P2002') {
@@ -947,13 +1033,21 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
 
 app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Response) => {
   const {
-    domain, type, agent, category, amountUsdc, sessionId, txHash, ip, powDurationMs, ja4,
+    siteId, domain, type, agent, category, amountUsdc, sessionId, txHash, ip, powDurationMs, ja4,
     distributeTransaction, creatorAmountUsdc, platformAmountUsdc, network, asset, payer, status,
   } = req.body ?? {};
-  if (!domain || !type) return res.status(400).json({ error: 'domain and type required' });
+  const reqSiteId = typeof siteId === 'string' && siteId.length > 0 ? siteId : undefined;
+  const reqDomain = typeof domain === 'string' && domain.length > 0 ? domain : undefined;
+  // Task 64: resolve the tenant by siteId (primary — token-only sites may have no
+  // domain) and fall back to domain for legacy sites. Either key must be present.
+  if ((!reqSiteId && !reqDomain) || !type) {
+    return res.status(400).json({ error: 'siteId or domain, and type, required' });
+  }
 
-  const user = await prisma.user.findFirst({ where: { domain } });
-  if (!user) return res.status(404).json({ error: 'No creator registered for this domain' });
+  const user = reqSiteId
+    ? await prisma.user.findFirst({ where: { siteId: reqSiteId } })
+    : await prisma.user.findFirst({ where: { domain: reqDomain } });
+  if (!user) return res.status(404).json({ error: 'No creator registered for this site' });
 
   const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v.slice(0, 256) : null);
   const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -961,6 +1055,9 @@ app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Respons
   const event = await prisma.event.create({
     data: {
       userId: user.id,
+      // Persist the stable tenant key: the payload's siteId, else the resolved
+      // user's siteId (so legacy domain-only emitters still tag the row).
+      siteId: reqSiteId ?? user.siteId ?? null,
       type,
       agent: agent ?? null,
       category: category ?? null,
@@ -988,23 +1085,30 @@ app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Respons
 const PLATFORM_STELLAR_ADDRESS = requireEnv('PLATFORM_STELLAR_ADDRESS');
 
 app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response) => {
+  // Resolve a tenant by site token (primary, Task 55) or by domain (legacy).
+  const token = req.query.token as string | undefined;
   const domain = req.query.domain as string | undefined;
-  if (!domain) return res.status(400).json({ error: 'domain required' });
-  const user = await prisma.user.findFirst({
-    where: { domain },
-    select: {
-      domain: true,
-      stellar_address: true,
-      pricePerRequest: true,
-      platformFee: true,
-      paywallEnabled: true,
-      wpInternalToken: true,
-      contentUrl: true,
-    },
-  });
+  if (!token && !domain) return res.status(400).json({ error: 'token or domain required' });
+  const select = {
+    domain: true,
+    siteId: true,
+    stellar_address: true,
+    pricePerRequest: true,
+    platformFee: true,
+    paywallEnabled: true,
+    wpInternalToken: true,
+    contentUrl: true,
+  } as const;
+  const user = token
+    ? await prisma.user.findFirst({ where: { wpInternalToken: token }, select })
+    : await prisma.user.findFirst({ where: { domain }, select });
   if (!user) return res.status(404).json({ error: 'Not found' });
+  // Stable tenant key (domain → siteId fallback). Guard against the impossible
+  // both-empty case so a malformed row degrades to onchainKey:null, not a 500.
+  const hasKey = !!(user.domain ?? '').trim() || !!(user.siteId ?? '').trim();
   res.json({
     domain: user.domain,
+    siteId: user.siteId ?? null,
     stellar_address: user.stellar_address,
     pricePerRequest: Number(user.pricePerRequest),
     platformFee: Number(user.platformFee || 0),
@@ -1012,6 +1116,7 @@ app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response
     paywallEnabled: user.paywallEnabled,
     wpInternalToken: user.wpInternalToken ?? null,
     contentUrl: user.contentUrl ?? null,
+    onchainKey: hasKey ? onchainKey({ domain: user.domain, siteId: user.siteId }) : null,
   });
 });
 
@@ -1349,6 +1454,19 @@ function pruneProvisionPending(): void {
   }
 }
 
+// GET /api/v1/sdk/site
+// Auth-guarded. Returns the caller's stable siteId and site token (the SDK's
+// VERIVYX_TOKEN). Both are issued at signup, so the dashboard/SDK wizard can
+// surface them without any DNS provisioning step.
+app.get('/api/v1/sdk/site', authGuard, async (req: AuthedRequest, res: Response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { siteId: true, wpInternalToken: true },
+  });
+  if (!user) return res.status(404).json({ error: 'user_not_found' });
+  return res.json({ siteId: user.siteId ?? null, token: user.wpInternalToken ?? null });
+});
+
 // POST /api/v1/sdk/provision/init
 // Auth-guarded. Issues a nonce the publisher must add as a DNS TXT record `verivyx-site-verification=<nonce>` to the domain apex.
 app.post('/api/v1/sdk/provision/init', authGuard, (req: AuthedRequest, res: Response) => {
@@ -1399,10 +1517,11 @@ app.post('/api/v1/sdk/provision/verify', authGuard, async (req: AuthedRequest, r
   if (conflict) return res.status(409).json({ error: 'domain_conflict' });
 
   const token = crypto.randomBytes(30).toString('base64url');
-  await prisma.user.update({
+  const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: { domain: site, wpInternalToken: token, domainVerified: true, domainVerifiedAt: new Date() },
   });
+  void syncCreatorOnChain(updatedUser);
   return res.json({ token });
 });
 
@@ -1607,12 +1726,17 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const cursor = Number(req.query.cursor) || undefined;
   const domain = typeof req.query.domain === 'string' && req.query.domain.length > 0 ? req.query.domain : undefined;
+  // Task 64: allow scoping a token-only tenant by its stable siteId. Matches the
+  // event's own siteId column (set on ingest) so it works even for rows whose
+  // creator has no domain.
+  const siteId = typeof req.query.siteId === 'string' && req.query.siteId.length > 0 ? req.query.siteId : undefined;
   const sinceRaw = typeof req.query.since === 'string' ? new Date(req.query.since) : undefined;
   const since = sinceRaw && !Number.isNaN(sinceRaw.getTime()) ? sinceRaw : undefined;
 
   const where: Prisma.EventWhereInput = {
     type: 'payment_verified',
     ...(since ? { createdAt: { gte: since } } : {}),
+    ...(siteId ? { siteId } : {}),
     ...(domain ? { user: { domain } } : {}),
   };
 
@@ -1621,14 +1745,16 @@ app.get('/api/v1/admin/transactions', adminGuard, async (req: AuthedRequest, res
     orderBy: { createdAt: 'desc' },
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    include: { user: { select: { domain: true, email: true } } },
+    include: { user: { select: { domain: true, siteId: true, email: true } } },
   });
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   res.json({
     transactions: page.map(e => ({
       ...shapeTxEvent(e),
-      domain: e.user.domain,
+      siteId: e.siteId ?? e.user.siteId ?? null,
+      // Legacy label: domain if present, else the siteId, else the creator email.
+      domain: siteLabel({ domain: e.user.domain, siteId: e.siteId ?? e.user.siteId, fallback: e.user.email }),
       creatorEmail: e.user.email,
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,
@@ -1675,13 +1801,57 @@ app.post('/api/v1/admin/mcp/early-access', adminGuard, async (req: AuthedRequest
   }
 });
 
-// Admin: MCP early-access waitlist.
+// Admin: grant/revoke MCP early-access by email, with pre-grant for emails that
+// are not yet registered. When the email belongs to an existing user we flip the
+// `mcpEarlyAccess` flag directly; in all grant cases we record an
+// McpEarlyAccessGrant row so a future registration with that email is auto-granted
+// (see registration handler). Emails are normalised to lowercase on write across
+// the codebase, so an exact lowercase lookup is the case-insensitive match.
+app.post('/api/v1/admin/mcp/grant', adminGuard, async (req: AuthedRequest, res: Response) => {
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const granted = req.body?.granted !== false; // default true
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid_email_required' });
+  try {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (granted) {
+      if (user) await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: true } });
+      await prisma.mcpEarlyAccessGrant.upsert({
+        where: { email },
+        create: { email, grantedByAdmin: req.userId! },
+        update: { grantedByAdmin: req.userId! },
+      });
+    } else {
+      if (user) await prisma.user.update({ where: { id: user.id }, data: { mcpEarlyAccess: false } });
+      await prisma.mcpEarlyAccessGrant.deleteMany({ where: { email } });
+    }
+    // Best-effort: keep the public waitlist's `invited` flag in sync.
+    await prisma.mcpWaitlist.updateMany({ where: { email }, data: { invited: granted } }).catch(() => {});
+    await logAdminAction(req.userId!, granted ? 'mcp_early_access_grant' : 'mcp_early_access_revoke', email, { granted, userExisted: !!user });
+    res.json({ ok: true, email, granted, applied: !!user, preGranted: !user && granted });
+  } catch (err) {
+    console.error('mcp/grant error:', err instanceof Error ? err.message : err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Admin: MCP early-access waitlist. Each row is enriched with whether the email
+// belongs to a registered user and that user's current early-access flag.
 app.get('/api/v1/admin/mcp-waitlist', adminGuard, async (_req: AuthedRequest, res: Response) => {
   const [rows, total] = await Promise.all([
     prisma.mcpWaitlist.findMany({ orderBy: { createdAt: 'desc' }, take: 500 }),
     prisma.mcpWaitlist.count(),
   ]);
-  res.json({ total, waitlist: rows });
+  const emails = rows.map((r) => r.email);
+  const users = emails.length
+    ? await prisma.user.findMany({ where: { email: { in: emails } }, select: { email: true, mcpEarlyAccess: true } })
+    : [];
+  const byEmail = new Map(users.map((u) => [u.email, u.mcpEarlyAccess]));
+  const waitlist = rows.map((r) => ({
+    ...r,
+    registered: byEmail.has(r.email),
+    mcpEarlyAccess: byEmail.get(r.email) ?? false,
+  }));
+  res.json({ total, waitlist });
 });
 
 // Admin: MCP server health/overview (proxied from mcp-server's internal endpoint).

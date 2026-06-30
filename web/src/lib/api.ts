@@ -123,7 +123,9 @@ export type TxRecord = {
   ja4: string | null;
 };
 
-export type AdminTxRecord = TxRecord & { domain: string; creatorEmail: string };
+// `domain` is a human-readable tenant label (domain, else siteId, else email);
+// `siteId` is the stable tenant key for token-only sites (Task 64).
+export type AdminTxRecord = TxRecord & { domain: string; siteId: string | null; creatorEmail: string };
 
 // Payout readiness — whether the creator's wallet can receive USDC yet.
 // Includes the asset + network config the frontend uses to build the changeTrust.
@@ -200,6 +202,8 @@ export type McpWaitlistEntry = {
   source: string;
   invited: boolean;
   createdAt: string;
+  registered?: boolean;
+  mcpEarlyAccess?: boolean;
 };
 
 export type McpChain = {
@@ -258,6 +262,14 @@ export const api = {
 
   adminMcpOverview: () => request<McpOverview>(`/api/v1/admin/mcp-overview`),
 
+  // Grant (or revoke) MCP early-access by email. Works for unregistered emails too
+  // (pre-grant: auto-applied when that email registers).
+  adminMcpGrant: (email: string, granted: boolean) =>
+    request<{ ok: boolean; email: string; granted: boolean; applied: boolean; preGranted: boolean }>(
+      `/api/v1/admin/mcp/grant`,
+      { method: 'POST', body: JSON.stringify({ email, granted }) },
+    ),
+
   // Consume an email verification token → marks verified and returns a session.
   verifyEmail: (token: string) =>
     request<{ token: string; user: CreatorUser }>(`/api/v1/auth/verify-email`, {
@@ -296,7 +308,7 @@ export const api = {
   creatorTransactions: (opts?: { limit?: number; cursor?: number }) =>
     request<TxPage<TxRecord>>(`/api/v1/auth/transactions${qs(opts)}`),
 
-  adminTransactions: (opts?: { limit?: number; cursor?: number; domain?: string; since?: string }) =>
+  adminTransactions: (opts?: { limit?: number; cursor?: number; domain?: string; siteId?: string; since?: string }) =>
     request<TxPage<AdminTxRecord>>(`/api/v1/admin/transactions${qs(opts)}`),
 
   adminStats: () => request<AdminStats>(`/api/v1/admin/stats`),
@@ -340,14 +352,10 @@ export const api = {
       body: JSON.stringify({ consent_challenge }),
     }),
 
-  sdkProvisionInit: () =>
-    request<{ nonce: string }>(`/api/v1/sdk/provision/init`, { method: "POST" }),
-
-  sdkProvisionVerify: (site: string, nonce: string) =>
-    request<{ token: string }>(`/api/v1/sdk/provision/verify`, {
-      method: "POST",
-      body: JSON.stringify({ site, nonce }),
-    }),
+  // Returns the caller's stable siteId + site token (the SDK's VERIVYX_TOKEN).
+  // Both are issued at signup — no domain or DNS verification required.
+  sdkSite: () =>
+    request<{ siteId: string | null; token: string | null }>(`/api/v1/sdk/site`),
 };
 
 // ── Wallet API (non-custodial MCP binding) ────────────────────────────────────

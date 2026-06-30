@@ -19,6 +19,7 @@ Add a `proxy.ts` at your project root. This single file gates every matched rout
 import { verivyxProxy } from "@verivyx/paywall-next";
 
 export const proxy = verivyxProxy({
+  token: process.env.VERIVYX_TOKEN,                  // required — your site token (or set VERIVYX_TOKEN env)
   match: ["/articles/:path*"],                       // paths to gate
   seoPreview: ({ slug }) => ({                        // teaser for crawlers (+ humans without humanUnlock)
     title: titleFor(slug),
@@ -30,7 +31,7 @@ export const proxy = verivyxProxy({
 export const config = { matcher: ["/((?!_next/|favicon.ico).*)"] };
 ```
 
-The middleware is the authoritative gate — reads `VERIVYX_TOKEN` + `VERIVYX_DOMAIN` from env.
+The middleware is the authoritative gate — reads `VERIVYX_TOKEN` from env when not passed inline.
 
 ## Per-route alternative
 
@@ -51,15 +52,18 @@ All options can be passed to `verivyxProxy(opts)` / `verivyxNext(opts)` or set v
 
 | Option / env var | Required | Description |
 |---|---|---|
-| `VERIVYX_TOKEN` | yes (server-only) | Domain token from the Verivyx dashboard |
-| `VERIVYX_DOMAIN` | yes | Your site domain, e.g. `example.com` |
+| `VERIVYX_TOKEN` | yes (server-only) | Your site token from the Verivyx dashboard — it alone identifies your site |
+| `VERIVYX_DOMAIN` | no | Optional legacy/analytics label, e.g. `example.com`. Not required and not part of onboarding — the token identifies your site. |
 | `match` / `VERIVYX_MATCH` | no | Glob patterns to gate (e.g. `/articles/**`). Empty = nothing gated. Env accepts a comma-separated list. |
 | `seoPreview` | no | `({ slug }) => { title, excerpt }` — teaser for crawlers (+ unverified humans without `humanUnlock`), wrapped in anti-cloaking JSON-LD |
 | `humanUnlock` | no | `{ authBase? }` — unverified human browsers get an in-page PoW unlock to read the full content free |
 | `failMode` / `VERIVYX_FAIL_MODE` | no | When the backend is unreachable: `teaser` (default) \| `open` \| `closed` |
-| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Backend timeout in ms (default `800`). **Raise to ~`30000` if you accept agent payments** — on-chain settlement can take ~15s. |
+| `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Timeout in ms for the quick classify/requirements call (default `800`). |
+| `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits on-chain confirmation (default `60000`, ~15s settle). No need to raise `timeoutMs` for agent payments — the settle path uses this. |
 
 Also: `trustProxy` (default `true`), `advertise` (RSL/AIPREF discovery headers).
+
+This adapter is **0.7.0** and depends on `@verivyx/paywall` **0.3.0** (token-only).
 
 ## Docs
 

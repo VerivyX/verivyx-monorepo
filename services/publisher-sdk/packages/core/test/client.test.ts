@@ -127,12 +127,11 @@ describe("VerivyxClient.authorize — 402 payment required", () => {
 // ---------------------------------------------------------------------------
 
 describe("VerivyxClient.authorize — timeout", () => {
-  it("throws BackendUnreachableError when fetch never resolves (aborted)", async () => {
-    // Simulate a fetch that hangs until the AbortSignal fires, then rejects
-    // with an AbortError — the same behaviour as real fetch on timeout.
-    const mockFetch = vi.fn().mockImplementation(
-      (_url: string, init?: RequestInit) => {
-        return new Promise<Response>((_resolve, reject) => {
+  /** Returns a mock fetch that hangs until the AbortSignal fires. */
+  function hangingFetch() {
+    return vi.fn().mockImplementation(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
           const signal = init?.signal;
           if (signal) {
             if (signal.aborted) {
@@ -144,19 +143,41 @@ describe("VerivyxClient.authorize — timeout", () => {
             }
           }
           // Never resolves on its own — waits for abort
-        });
-      },
+        }),
     );
+  }
 
+  it("throws BackendUnreachableError when fetch never resolves (settleTimeoutMs expires)", async () => {
+    // authorize() uses settleTimeoutMs — a tiny value causes an abort.
     const shortCfg = resolveConfig(
-      { domain: "example.com", token: "tok", timeoutMs: 10 },
+      { domain: "example.com", token: "tok", settleTimeoutMs: 10 },
       {},
     );
-    const client = new VerivyxClient(shortCfg, { fetch: mockFetch });
+    const client = new VerivyxClient(shortCfg, { fetch: hangingFetch() });
 
     await expect(client.authorize({ slug: "my-article" })).rejects.toThrow(
       BackendUnreachableError,
     );
+  });
+
+  it("does NOT abort when settleTimeoutMs is generous and fetch resolves immediately", async () => {
+    // timeoutMs is intentionally tiny (1 ms) — if authorize() mistakenly used
+    // timeoutMs it would abort before the microtask queue drains. settleTimeoutMs
+    // is 60 000 ms so there is plenty of headroom for an immediate resolve.
+    const cfg2 = resolveConfig(
+      { domain: "example.com", token: "tok", timeoutMs: 1, settleTimeoutMs: 60_000 },
+      {},
+    );
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ authorized: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const client = new VerivyxClient(cfg2, { fetch: mockFetch });
+
+    const result = await client.authorize({ slug: "article" });
+    expect(result).toMatchObject({ authorized: true });
   });
 
   it("throws BackendUnreachableError on network error (fetch rejects)", async () => {
@@ -240,7 +261,7 @@ describe("VerivyxClient.authorize — header forwarding", () => {
     expect(headers["X-Verivyx-Mode"]).toBe("authorize");
   });
 
-  it("POSTs domain+slug in body", async () => {
+  it("POSTs token+domain+slug in body", async () => {
     const mockFetch = vi.fn().mockResolvedValueOnce(
       mockResponse(200, { authorized: true }),
     );
@@ -252,8 +273,25 @@ describe("VerivyxClient.authorize — header forwarding", () => {
     expect(url).toContain("/api/v1/content/hydrate");
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as Record<string, string>;
+    expect(body.token).toBe("test-token");
     expect(body.domain).toBe("example.com");
     expect(body.slug).toBe("test-slug");
+  });
+
+  it("POSTs token+slug and omits domain when domain is unset (token-only)", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      mockResponse(200, { authorized: true }),
+    );
+
+    const tokenOnlyCfg = resolveConfig({ token: "tok-only", timeoutMs: 500 }, {});
+    const client = new VerivyxClient(tokenOnlyCfg, { fetch: mockFetch });
+    await client.authorize({ slug: "test-slug" });
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, string>;
+    expect(body.token).toBe("tok-only");
+    expect(body.slug).toBe("test-slug");
+    expect("domain" in body).toBe(false);
   });
 
   it("does NOT forward cfg.token to any outbound header", async () => {
