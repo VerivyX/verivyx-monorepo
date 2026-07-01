@@ -351,7 +351,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
             const seo = o.seoPreview({ slug });
             if (isHU && opts?.humanUnlock !== undefined) {
               const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-              const html = buildUnlockHtml({ slug, url: publicUrl(raw, trustProxy), authBase, domain: cfg.domain, seo });
+              const html = buildUnlockHtml({ slug, url: publicUrl(raw, trustProxy), authBase, domain: cfg.domain, token: cfg.token, seo });
               return withAdvertiseHeaders(
                 new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
                 opts?.advertise,
@@ -419,7 +419,7 @@ export function verivyxHono(opts?: HonoAdapterOptions): {
           const seo = opts.seoPreview({ slug });
           if (isHU && opts?.humanUnlock !== undefined) {
             const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-            const html = buildUnlockHtml({ slug, url: publicUrl(c.req.raw, trustProxy), authBase, domain: cfg.domain, seo });
+            const html = buildUnlockHtml({ slug, url: publicUrl(c.req.raw, trustProxy), authBase, domain: cfg.domain, token: cfg.token, seo });
             return withAdvertiseHeaders(
               new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
               opts?.advertise,

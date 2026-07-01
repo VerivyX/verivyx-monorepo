@@ -386,7 +386,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
             const seo = o.seoPreview({ slug: resolvedSlug });
             if (isHU && opts?.humanUnlock !== undefined) {
               const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-              const html = buildUnlockHtml({ slug: resolvedSlug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, seo });
+              const html = buildUnlockHtml({ slug: resolvedSlug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, token: cfg.token, seo });
               return withAdvertiseHeaders(
                 new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
                 opts?.advertise,
@@ -475,7 +475,7 @@ export function verivyxNext(opts?: NextAdapterOptions): {
           const seo = opts.seoPreview({ slug });
           if (isHU && opts?.humanUnlock !== undefined) {
             const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-            const html = buildUnlockHtml({ slug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, seo });
+            const html = buildUnlockHtml({ slug, url: publicUrl(req, trustProxy), authBase, domain: cfg.domain, token: cfg.token, seo });
             return withAdvertiseHeaders(
               new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
               opts.advertise,

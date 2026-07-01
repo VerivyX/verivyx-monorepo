@@ -426,7 +426,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
               const seo = o.seoPreview({ slug });
               if (isHU && opts?.humanUnlock !== undefined) {
                 const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-                const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, seo });
+                const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, token: cfg.token, seo });
                 attachAdvertiseHeaders(res, opts?.advertise);
                 await sendWebResponse(res, new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
                 return;
@@ -492,7 +492,7 @@ export function verivyxExpress(opts?: ExpressAdapterOptions): {
             const seo = opts.seoPreview({ slug });
             if (isHU && opts?.humanUnlock !== undefined) {
               const authBase = opts.humanUnlock.authBase ?? cfg.apiBase;
-              const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, seo });
+              const html = buildUnlockHtml({ slug, url: webReq.url, authBase, domain: cfg.domain, token: cfg.token, seo });
               attachAdvertiseHeaders(res, opts?.advertise);
               await sendWebResponse(res, new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
               return;

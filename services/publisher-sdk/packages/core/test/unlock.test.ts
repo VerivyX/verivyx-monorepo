@@ -15,6 +15,7 @@ describe("buildUnlockHtml", () => {
   const html = buildUnlockHtml({
     slug: "seven-wonders", url: "https://pub.com/seven-wonders",
     authBase: "https://api.verivyx.com", domain: "web-test.verivyx.com",
+    token: "vx_tok_abc123",
     seo: { title: "Seven Wonders", excerpt: "Preview." },
   });
   it("includes the teaser + JSON-LD (anti-cloaking)", () => {
@@ -26,6 +27,13 @@ describe("buildUnlockHtml", () => {
     expect(html).toContain("https://api.verivyx.com/api/v1/auth/verify-human");
     expect(html).toContain("crypto.subtle.digest");
     expect(html).toContain("vx_session=");
+  });
+  it("sends the site token to /challenge (token-only sites can unlock)", () => {
+    // token embedded in the config + posted in the challenge request body
+    expect(html).toContain("vx_tok_abc123");
+    expect(html).toContain("token:'vx_tok_abc123'");
+    expect(html).toContain("token:C.token");
+    expect(html).toContain("domain:C.domain||undefined");
   });
   it("fingerprint uses server-expected field names (not old short aliases)", () => {
     expect(html).toContain("userAgent");
@@ -39,7 +47,7 @@ describe("buildUnlockHtml", () => {
     expect(html).not.toContain("hc:");
   });
   it("does not allow </script> breakout from injected values", () => {
-    const evil = buildUnlockHtml({ slug: "</script><x>", url: "https://p/x", authBase: "https://api.verivyx.com", domain: "d" });
+    const evil = buildUnlockHtml({ slug: "</script><x>", url: "https://p/x", authBase: "https://api.verivyx.com", domain: "d", token: "t" });
     expect(evil).not.toContain("</script><x>");
   });
 });
