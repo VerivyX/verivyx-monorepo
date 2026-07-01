@@ -67,7 +67,21 @@ setInterval(() => {
 }, 60_000);
 
 const app = express();
-app.use(cors());
+// CORS is configurable via CORS_ALLOWED_ORIGINS (comma-separated). If unset/empty,
+// keep the current permissive behavior (reflect any origin) so nothing breaks;
+// if set, restrict to the allowlist while still permitting no-origin requests.
+function corsFromEnv() {
+  const raw = (process.env.CORS_ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (raw.length === 0) return cors({ origin: true });
+  const allow = new Set(raw);
+  return cors({
+    origin(origin, cb) {
+      if (!origin || allow.has(origin)) return cb(null, true);
+      cb(null, false);
+    },
+  });
+}
+app.use(corsFromEnv());
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/api/v1/playground/health", (_req, res) => {

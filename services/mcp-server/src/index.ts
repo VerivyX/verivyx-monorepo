@@ -12,7 +12,7 @@ import { getConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildProtectedResourceMetadata } from "./oauth.js";
-import { ipLimiter, userLimiter } from "./rateLimit.js";
+import { initRateLimitStore, ipLimiter, userLimiter } from "./rateLimit.js";
 import { buildWalletRouter } from "./wallet/endpoints.js";
 import {
   bindWallet,
@@ -59,6 +59,8 @@ async function mcpEarlyAccessGate(req: Request, res: Response, next: () => void)
 
 async function main(): Promise<void> {
   const cfg = getConfig();
+  // Select the rate-limit store from env (in-memory default; Redis when configured).
+  await initRateLimitStore();
   const payments = await createPaymentService();
 
   const app = express();
