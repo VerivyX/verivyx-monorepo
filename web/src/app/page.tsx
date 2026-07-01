@@ -9,9 +9,6 @@ import {
   Globe,
   Cpu,
   ChevronRight,
-  Bot,
-  Code2,
-  Boxes,
   Lock,
   Check,
 } from 'lucide-react';
@@ -37,7 +34,6 @@ export default function LandingPage() {
       {/* HERO */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 hero-mesh" aria-hidden />
-        <div className="absolute inset-0 grid-backdrop" aria-hidden />
         <div className="relative mx-auto grid max-w-7xl grid-cols-1 items-center gap-12 px-6 pb-20 pt-24 md:grid-cols-12 md:pt-32">
           <div className="md:col-span-7">
             <div className="tag-chip">
@@ -157,8 +153,7 @@ export default function LandingPage() {
             <p className="mt-5 max-w-lg text-white/70">
               The Verivyx Playground hands a sandboxed agent a funded testnet wallet. Ask it to open a
               paywalled page — it hits a 402, settles USDC over x402 on Stellar, and unlocks the
-              content, every step on-chain and visible. Or tell it to access without paying and watch
-              the paywall block it cold.
+              content, every step on-chain and visible.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a href="https://playground.verivyx.com" className="btn-yellow">
@@ -167,20 +162,6 @@ export default function LandingPage() {
               <a href="#how-it-works" className="inline-flex items-center gap-1 text-sm text-white/70 hover:text-white">
                 How it works <ChevronRight size={15} />
               </a>
-            </div>
-            <div className="mt-10 grid max-w-md grid-cols-3 gap-6 border-t border-white/10 pt-8 text-xs text-white/60">
-              <div>
-                <p className="font-mono text-lg font-semibold text-[var(--color-stellar-yellow)]">402 → pay</p>
-                <p>real x402 flow</p>
-              </div>
-              <div>
-                <p className="font-mono text-lg font-semibold text-[var(--color-stellar-yellow)]">on-chain</p>
-                <p>settles on Stellar</p>
-              </div>
-              <div>
-                <p className="font-mono text-lg font-semibold text-[var(--color-stellar-yellow)]">no signup</p>
-                <p>just open & try</p>
-              </div>
             </div>
           </div>
 
@@ -355,7 +336,7 @@ export default function LandingPage() {
               {
                 icon: <ShieldCheck className="h-5 w-5" />,
                 title: 'No mocks. Real verification.',
-                body: 'Every payment is verified on Stellar (Horizon for classic, Soroban RPC for spec) before unlocking. No trust-the-client shortcuts.',
+                body: 'Every payment is verified on Stellar before unlocking. No trust-the-client shortcuts.',
               },
               {
                 icon: <EyeOff className="h-5 w-5" />,
@@ -388,8 +369,7 @@ export default function LandingPage() {
           </h2>
           <p className="mt-4 text-base text-[var(--color-ink-500)]">
             You set the price an agent pays. A small fixed platform fee comes out of each settled
-            payment — you keep the rest. No subscriptions, no minimums. You only earn when an agent
-            pays you.
+            payment — you keep the rest. No subscriptions, no minimums.
           </p>
         </div>
 
@@ -435,91 +415,6 @@ export default function LandingPage() {
               <li>· Stellar Testnet + Mainnet</li>
             </ul>
           </div>
-        </div>
-      </section>
-
-      {/* Developer surface — MCP (agents) + Publisher SDK */}
-      <section id="build" className="border-y border-[var(--color-cream-200)] bg-[var(--color-cream-50)] py-24">
-        <div className="mx-auto max-w-7xl px-6">
-          <div className="max-w-2xl">
-            <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
-              The other side of x402 · early access
-            </p>
-            <h2 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">
-              Built for the agents that{' '}
-              <span className="bg-[var(--color-stellar-violet-soft)] px-2">pay you.</span>
-            </h2>
-            <p className="mt-4 text-base text-[var(--color-ink-500)]">
-              Verivyx is two-sided. Creators get paid through the paywall — and with the{' '}
-              <strong>Verivyx x402 MCP</strong>, any AI agent can pay for any x402 resource across
-              Stellar, Base, and Solana, non-custodially, from a single connection. One flat
-              $0.001 fee per payment.
-            </p>
-            <a
-              href="https://mcp.verivyx.com"
-              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[var(--color-ink-900)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90"
-            >
-              Explore the Verivyx MCP <ArrowUpRight size={15} />
-            </a>
-          </div>
-
-          <div className="mt-12 grid grid-cols-1 gap-6 md:grid-cols-2">
-            {[
-              {
-                icon: <Boxes className="h-5 w-5" />,
-                title: 'Verivyx MCP Server',
-                body: 'A first-party Model Context Protocol server so agents like Claude can discover Verivyx-protected resources and settle payments natively — no glue code.',
-                href: 'https://mcp.verivyx.com' as string | undefined,
-                tag: 'Early access',
-              },
-              {
-                icon: <Code2 className="h-5 w-5" />,
-                title: 'Publisher SDK',
-                body: 'A drop-in TypeScript SDK to put any site, app, or API behind x402 — add one middleware: humans read free, search crawlers get a preview, and AI agents pay per request.',
-                href: '/docs/sdk' as string | undefined,
-                tag: 'Live',
-              },
-            ].map((c) => {
-              const inner = (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-ink-900)] text-[var(--color-stellar-yellow)]">
-                      {c.icon}
-                    </span>
-                    <span className="tag-chip bg-[var(--color-stellar-violet-soft)] text-[var(--color-ink-900)]">
-                      {c.tag}
-                    </span>
-                  </div>
-                  <h3 className="mt-6 text-xl font-semibold">{c.title}</h3>
-                  <p className="mt-2 text-sm text-[var(--color-ink-500)]">{c.body}</p>
-                </>
-              );
-              return c.href ? (
-                <a
-                  key={c.title}
-                  href={c.href}
-                  className="surface-card relative block overflow-hidden p-7 transition hover:shadow-lg"
-                >
-                  {inner}
-                </a>
-              ) : (
-                <div key={c.title} className="surface-card relative overflow-hidden p-7">
-                  {inner}
-                </div>
-              );
-            })}
-          </div>
-
-          <p className="mt-8 flex items-center gap-2 text-sm text-[var(--color-ink-500)]">
-            <Bot size={15} />
-            Building an agent today?{' '}
-            <a
-              href="https://playground.verivyx.com"
-              className="inline-flex items-center gap-1 font-medium text-[var(--color-ink-900)] underline decoration-[var(--color-stellar-yellow)] decoration-2 underline-offset-4"
-            >
-              Try paying a paywall in the Playground <ArrowUpRight size={13} />
-            </a>
-          </p>
         </div>
       </section>
 
