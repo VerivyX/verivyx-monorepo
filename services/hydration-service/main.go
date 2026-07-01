@@ -579,8 +579,7 @@ func hydrateHandler(c *gin.Context) {
 		return
 	}
 
-	// Step 2: Human session JWT (domain-scoped)
-	// Step 2.5: Standard X402 payment header.
+	// Step 2: Standard X402 payment header (checked before the human session).
 	// Accept PAYMENT-SIGNATURE (x402 v2 spec) and X-PAYMENT (legacy/backward compat).
 	// Agent retries the same URL with the header attached after building+signing TX.
 	xPayment := c.GetHeader("PAYMENT-SIGNATURE")
@@ -646,6 +645,7 @@ func hydrateHandler(c *gin.Context) {
 		return
 	}
 
+	// Step 3: Human session JWT (domain-scoped), checked after the payment header.
 	auth := c.GetHeader("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		token := strings.TrimPrefix(auth, "Bearer ")
@@ -682,7 +682,7 @@ func hydrateHandler(c *gin.Context) {
 		}
 	}
 
-	// Step 3: no payment header and no human session → blocked.
+	// Step 4: no payment header and no human session → blocked.
 	// (There is deliberately no shared "(domain, slug) is paid" lookup here: a
 	// payment only ever authorizes the request that carries it, so one caller's
 	// payment can never unlock the resource for another, anonymous caller.)
@@ -761,10 +761,14 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// /hydrate now requires either:
-	//  - Authorization: Bearer <human session JWT>   (issued by /verify-human),  OR
-	//  - The (domain, slug) pair has a paid gateway session (set by /payment/settle)
-	// If neither, returns 402 + the spec PaymentRequired body via gateway redirect URL.
+	// /hydrate authorizes a request via one of two gates (checked in this order):
+	//  - An X-PAYMENT / PAYMENT-SIGNATURE header → verified + settled inline via the
+	//    gateway. A payment authorizes ONLY the request that carries it; there is no
+	//    shared "(domain, slug) is paid" session, so it never unlocks the resource for
+	//    any other caller (see the note near the "Step 4" blocked branch), OR
+	//  - Authorization: Bearer <human session JWT> (domain-scoped, issued by /verify-human).
+	// If neither is present/valid, returns 402 + the spec PaymentRequired body via the
+	// gateway requirements URL.
 	r.POST("/api/v1/content/hydrate", hydrateHandler)
 
 	log.Println("Hydration Service running on port 8082")

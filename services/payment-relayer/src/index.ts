@@ -745,7 +745,9 @@ app.post('/settle', requireInternalToken, async (req, res) => {
       success: false,
       errorReason: reason,
       transaction: '',
-      network: paymentRequirements.network,
+      // The gateway always supplies paymentRequirements; guard with ?. anyway so an
+      // early/malformed-body failure reports the error instead of throwing in this catch.
+      network: paymentRequirements?.network,
     });
   }
 });
