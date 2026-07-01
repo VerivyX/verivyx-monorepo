@@ -91,7 +91,7 @@ export default function OnboardingPage() {
       <SiteHeader variant="auth" />
       <main className="relative flex min-h-[calc(100vh-4rem)] items-center justify-center overflow-hidden px-6 py-16">
         <div className="absolute inset-0 hero-mesh" aria-hidden />
-        <div className="relative w-full max-w-xl surface-card p-8 md:p-10">
+        <div className="relative w-full max-w-[560px] surface-card p-8 md:p-10">
           <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
             Almost there
           </p>
@@ -129,10 +129,10 @@ export default function OnboardingPage() {
               </p>
             )}
             {secretKey && (
-              <div className="mt-2 flex items-start gap-2 rounded-xl border border-[var(--color-stellar-yellow)] bg-[var(--color-stellar-yellow-soft)]/50 p-3 text-xs text-[var(--color-ink-700)]">
+              <div className="mt-2 flex items-start gap-2 rounded-xl border border-[var(--color-stellar-yellow)] bg-[var(--color-stellar-yellow-soft)] p-3 text-xs text-[var(--color-ink-900)]">
                 <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                <div className="flex-1">
-                  <p className="font-semibold">Save this secret key — shown once:</p>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold">Save this secret key — shown once:</p>
                   <code className="mt-1 block break-all font-mono text-[11px] text-[var(--color-ink-900)]">
                     {secretKey}
                   </code>
