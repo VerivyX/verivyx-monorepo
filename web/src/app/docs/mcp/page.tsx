@@ -17,7 +17,7 @@ const CONFIG_EXAMPLE = `{
 
 const TOOL_CALL = `→ pay_for_resource("https://api.example.com/report")
 
-  chain         solana:devnet
+  chain         stellar:testnet
   resource      0.010 USDC
   service fee   0.001 USDC  → Verivyx
   status        200 OK · paid ✓`;
@@ -28,8 +28,8 @@ export default function McpDocs() {
       <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">For AI agents</p>
       <h1 className="mt-2 text-4xl font-semibold tracking-tight">x402 MCP server</h1>
       <Lead>
-        One MCP connection that lets any AI agent pay for any x402-protected resource — across Stellar,
-        Base, and Solana — without ever holding a private key.
+        One MCP connection that lets any AI agent pay for any x402-protected resource on Stellar —
+        non-custodially, without ever holding a private key.
       </Lead>
 
       <Note>
@@ -57,10 +57,14 @@ export default function McpDocs() {
       <H2 id="chains">Supported chains</H2>
       <P>Payments settle in USDC. The MCP auto-selects the chain the resource advertises.</P>
       <Ul>
-        <Li><strong>Stellar</strong> — Soroban USDC, ~5s settlement.</Li>
-        <Li><strong>Base</strong> — EVM USDC via EIP-3009 (gasless for the payer).</Li>
-        <Li><strong>Solana</strong> — SPL USDC, sub-second settlement.</Li>
+        <Li><strong>Stellar</strong> — Soroban USDC, ~5s settlement. The live, non-custodial rail today.</Li>
+        <Li><strong>Base</strong> — EVM USDC via EIP-3009 (gasless for the payer). Planned / opt-in.</Li>
+        <Li><strong>Solana</strong> — SPL USDC, sub-second settlement. Planned / opt-in.</Li>
       </Ul>
+      <P>
+        Stellar is the default and only non-custodial rail enabled by default. Base and Solana are
+        implemented but disabled unless explicitly opted in, and run custodially for now.
+      </P>
 
       <H2 id="tools">Tools</H2>
       <Ul>

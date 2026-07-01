@@ -16,16 +16,16 @@ export default function Quickstart() {
       <H2 id="account">1. Create your account</H2>
       <P>
         <A href="/register">Register</A> with your email and a password. We send a verification link —
-        click it to activate your account, then log in. (Wallet and domain come next, not at signup.)
+        click it to activate your account, then log in. (Wallet and pricing come next, not at signup.)
       </P>
 
-      <H2 id="onboarding">2. Connect your domain and wallet</H2>
+      <H2 id="onboarding">2. Set your payout wallet and price</H2>
       <P>
-        On first login you&apos;ll complete a short setup wizard:
+        On first login you&apos;ll complete a short setup wizard — no domain, no DNS:
       </P>
       <Ul>
-        <Li><strong>Domain</strong> — the site whose content agents will pay to access, e.g. <C>your-blog.com</C>.</Li>
-        <Li><strong>Stellar wallet</strong> — paste an existing <C>G…</C> address or generate a fresh testnet one. USDC from agents settles straight here.</Li>
+        <Li><strong>Payout wallet</strong> — paste an existing Stellar <C>G…</C> address or generate a fresh testnet one. USDC from agents settles straight here.</Li>
+        <Li><strong>Price</strong> — set the USDC amount an agent pays per request. You can change it any time.</Li>
       </Ul>
 
       <H2 id="trustline">3. Activate your USDC wallet</H2>
@@ -40,8 +40,8 @@ export default function Quickstart() {
 
       <H2 id="embed">4. Add the script tag</H2>
       <P>
-        In the dashboard, open <strong>Get Script</strong> and copy your pre-configured tag. It looks like
-        this — paste it once per domain, just before <C>{'</body>'}</C>:
+        In the dashboard, open <A href="/dashboard/integrations">Set up integration</A> and copy your
+        pre-configured tag. It looks like this — paste it once per site, just before <C>{'</body>'}</C>:
       </P>
       <CodeBlock
         lang="html"

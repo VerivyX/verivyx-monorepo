@@ -11,22 +11,32 @@ export default function WordPressDocs() {
       <p className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">Guides</p>
       <h1 className="mt-2 text-4xl font-semibold tracking-tight">WordPress plugin</h1>
       <Lead>
-        Run WordPress? Skip the script tag entirely. Install the Verivyx Paywall plugin, activate it, and
-        you&apos;re done — no code, nothing to configure. Humans read free, AI agents pay.
+        Run WordPress? Install the Verivyx Paywall plugin, activate it, and connect your account. Once the
+        paywall is on, add the small embed gate snippet so human visitors get the in-browser unlock — AI
+        agents get a <C>402</C> and pay.
       </Lead>
 
       <H2 id="install">Install</H2>
       <Ul>
-        <Li><strong>Create your Verivyx account</strong> and finish onboarding (domain + wallet) — <A href="/register">register here</A>.</Li>
-        <Li><strong>Download the plugin</strong> from your dashboard: <strong>Get Script → Download WordPress plugin</strong>. The download lives in your account.</Li>
+        <Li><strong>Create your Verivyx account</strong> and finish onboarding (wallet + token) — <A href="/register">register here</A>.</Li>
+        <Li><strong>Download the plugin</strong> from your dashboard: <A href="/dashboard/integrations">Set up integration</A> → <strong>Download WordPress plugin</strong>. The download lives in your account.</Li>
         <Li>In WordPress: <strong>Plugins → Add New → Upload Plugin</strong>, choose <C>verivyx-paywall.zip</C>, then <strong>Install</strong> and <strong>Activate</strong>.</Li>
       </Ul>
 
-      <H2 id="done">That&apos;s it</H2>
+      <H2 id="done">Turn on the paywall</H2>
       <P>
-        On activation the plugin auto-detects your site&apos;s domain and points at Verivyx — no API keys, no
-        IDs to paste. From that moment, AI agents hitting your posts and pages must settle a USDC
-        micropayment, while real readers see no difference.
+        On activation the plugin auto-detects your site and points at Verivyx — no API keys or IDs to paste.
+        Once the paywall is enabled, the plugin withholds the article body from unverified clients: AI agents
+        hitting your posts and pages receive a <C>402</C> and must settle a USDC micropayment.
+      </P>
+
+      <H2 id="human-gate">Let human visitors in</H2>
+      <P>
+        Content withholding turns on with the paywall, so real readers won&apos;t see the article until they
+        pass the in-browser proof-of-work. Add the Verivyx embed gate snippet to your theme (from{' '}
+        <A href="/dashboard/integrations">Set up integration</A>) so human visitors get the silent PoW unlock.
+        See the <A href="/docs/embed">embed script guide</A> for the exact tag and the required content
+        container.
       </P>
 
       <H2 id="optional">Optional settings</H2>
@@ -40,8 +50,10 @@ export default function WordPressDocs() {
       </Ul>
 
       <Note>
-        The plugin injects the same Verivyx gate the script tag would — so the underlying behavior (silent
-        human check, 402 for agents, on-chain settlement) is identical. See <A href="/docs/x402">How agents pay</A>.
+        The plugin handles server-side content withholding and the <C>402</C> for agents, but it does not
+        inject the client gate script — it shows you the embed snippet to copy into your theme. Add that
+        snippet so human visitors get the silent PoW unlock. See <A href="/docs/embed">the embed script guide</A>{' '}
+        and <A href="/docs/x402">How agents pay</A>.
       </Note>
 
       <div className="mt-12 border-t border-[var(--color-cream-200)] pt-6">
