@@ -51,8 +51,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* Brand */}
         <div className="px-6 py-8 border-b border-[var(--color-cream-100)]">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
-              <Shield size={16} className="text-white" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-ink-900)]">
+              <Shield size={16} className="text-[var(--color-stellar-yellow)]" />
             </div>
             <span className="text-[var(--color-ink-900)] font-bold text-lg tracking-tight">
               Verivyx Admin
@@ -71,14 +71,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 href={href}
                 className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                   active
-                    ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                    ? 'bg-[var(--color-stellar-yellow-soft)] text-[var(--color-ink-900)] font-semibold'
                     : 'text-[var(--color-ink-500)] hover:bg-[var(--color-cream-100)] hover:text-[var(--color-ink-900)]'
                 }`}
               >
                 <Icon
                   size={18}
                   strokeWidth={active ? 2.5 : 2}
-                  className={active ? 'text-indigo-600' : ''}
+                  className={active ? 'text-[var(--color-ink-900)]' : ''}
                 />
                 {label}
               </Link>
@@ -96,7 +96,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </Link>
           <button
             onClick={logout}
-            className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm text-red-500 hover:bg-red-50 hover:text-red-600 transition-colors font-semibold w-full text-left"
+            className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm text-[var(--color-stellar-rose)] hover:bg-[var(--color-stellar-rose)]/10 transition-colors font-semibold w-full text-left"
           >
             <LogOut size={16} />
             Logout
