@@ -66,9 +66,9 @@ export default function RegisterPage() {
       <main className="relative flex min-h-[calc(100vh-4rem)] items-center justify-center overflow-hidden px-6 py-16">
         <div className="absolute inset-0 hero-mesh" aria-hidden />
 
-        <div className="relative grid w-full max-w-5xl grid-cols-1 overflow-hidden rounded-3xl border border-[var(--color-cream-200)] bg-white shadow-[0_24px_64px_-32px_rgba(10,10,10,0.18)] md:grid-cols-2">
+        <div className="relative grid w-full max-w-5xl grid-cols-1 overflow-hidden rounded-3xl border border-[var(--color-cream-200)] bg-white shadow-[0_24px_64px_-32px_rgba(10,10,10,0.22)] md:grid-cols-2">
           {/* Left panel */}
-          <div className="hidden flex-col justify-between bg-[var(--color-cream-100)] p-10 md:flex">
+          <div className="hidden flex-col justify-between bg-[var(--color-cream-100)] p-11 md:flex">
             <div>
               <Logo />
               <h2 className="mt-12 text-3xl font-semibold tracking-tight md:text-4xl">
@@ -95,7 +95,7 @@ export default function RegisterPage() {
           </div>
 
           {/* Form / sent state */}
-          <div className="p-10 md:p-14">
+          <div className="p-10 md:p-12">
             {sent ? (
               <div className="flex flex-col items-start">
                 <span className="grid h-12 w-12 place-items-center rounded-full bg-[var(--color-stellar-yellow)] text-[var(--color-ink-900)]">
@@ -135,7 +135,7 @@ export default function RegisterPage() {
 
                 <form onSubmit={handleSubmit} className="mt-8 flex flex-col gap-5">
                   <label className="flex flex-col gap-2">
-                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-ink-500)]">
                       <Mail size={14} /> Email
                     </span>
                     <input
@@ -153,7 +153,7 @@ export default function RegisterPage() {
                   </label>
 
                   <label className="flex flex-col gap-2">
-                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-ink-500)]">
                       <Lock size={14} /> Password
                     </span>
                     <input
