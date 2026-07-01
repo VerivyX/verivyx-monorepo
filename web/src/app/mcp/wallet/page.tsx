@@ -67,7 +67,6 @@ import {
   revoke,
 } from '@/lib/smartAccount';
 import { validateDelegation, toAtomicUsdc, expiryToLedger } from '@/lib/delegation';
-import { LogoMark } from '@/components/Logo';
 import { rpc as StellarRpc } from '@stellar/stellar-sdk';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
@@ -581,20 +580,21 @@ export default function WalletPage() {
     return (
       <div className="min-h-screen bg-[var(--color-cream-50)]">
         {/* Top bar (same as granted flow) */}
-        <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
+        <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/85 backdrop-blur">
           <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-            <div className="flex items-center gap-3">
-              <LogoMark size={32} />
-              <div>
-                <p className="text-sm font-semibold tracking-tight">Verivyx</p>
-                <p className="text-xs text-[var(--color-ink-500)]">MCP wallet</p>
-              </div>
-            </div>
             <div className="flex items-center gap-3">
               <Link href="/dashboard" className="btn-ghost text-sm">
                 <ArrowLeft size={14} /> Dashboard
               </Link>
-              <button onClick={handleLogout} className="btn-primary text-sm">
+              <span className="text-sm text-[var(--color-ink-300)]">/</span>
+              <span className="text-sm font-semibold tracking-tight">Agent Wallet</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="tag-chip">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-stellar-mint)]" />
+                Stellar testnet
+              </span>
+              <button onClick={handleLogout} className="btn-ghost text-sm">
                 <LogOut size={14} /> Logout
               </button>
             </div>
@@ -697,20 +697,21 @@ export default function WalletPage() {
   return (
     <div className="min-h-screen bg-[var(--color-cream-50)]">
       {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/85 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <LogoMark size={32} />
-            <div>
-              <p className="text-sm font-semibold tracking-tight">Verivyx</p>
-              <p className="text-xs text-[var(--color-ink-500)]">MCP wallet</p>
-            </div>
-          </div>
           <div className="flex items-center gap-3">
             <Link href="/dashboard" className="btn-ghost text-sm">
               <ArrowLeft size={14} /> Dashboard
             </Link>
-            <button onClick={handleLogout} className="btn-primary text-sm">
+            <span className="text-sm text-[var(--color-ink-300)]">/</span>
+            <span className="text-sm font-semibold tracking-tight">Agent Wallet</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="tag-chip">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-stellar-mint)]" />
+              Stellar testnet
+            </span>
+            <button onClick={handleLogout} className="btn-ghost text-sm">
               <LogOut size={14} /> Logout
             </button>
           </div>
@@ -1312,29 +1313,39 @@ export default function WalletPage() {
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function StepBar({ view }: { view: PageView }) {
-  const steps: { key: PageView; label: string }[] = [
-    { key: 'connect', label: '1 · Connect' },
-    { key: 'delegate', label: '2 · Delegate' },
-    { key: 'manage', label: '3 · Manage' },
+  const steps: { key: PageView; num: string; label: string }[] = [
+    { key: 'connect', num: '1', label: 'Connect' },
+    { key: 'delegate', num: '2', label: 'Delegate' },
+    { key: 'manage', num: '3', label: 'Manage' },
   ];
   return (
-    <div className="mt-8 flex items-center gap-2">
-      {steps.map((s, i) => (
-        <React.Fragment key={s.key}>
-          {i > 0 && (
-            <div className="h-px flex-1 bg-[var(--color-cream-200)]" />
-          )}
-          <span
-            className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${
-              view === s.key
-                ? 'bg-[var(--color-ink-900)] text-[var(--color-stellar-yellow)]'
-                : 'bg-[var(--color-cream-200)] text-[var(--color-ink-500)]'
-            }`}
-          >
-            {s.label}
-          </span>
-        </React.Fragment>
-      ))}
+    <div className="mt-8 flex flex-wrap items-center gap-2.5">
+      {steps.map((s, i) => {
+        const active = view === s.key;
+        return (
+          <React.Fragment key={s.key}>
+            {i > 0 && <span className="h-px w-6 shrink-0 bg-[var(--color-cream-200)]" />}
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] ${
+                active
+                  ? 'bg-[var(--color-ink-900)] font-semibold text-[var(--color-stellar-yellow)]'
+                  : 'border border-[var(--color-cream-200)] bg-[var(--color-cream-100)] font-medium text-[var(--color-ink-500)]'
+              }`}
+            >
+              <span
+                className={`grid h-[18px] w-[18px] place-items-center rounded-full font-mono text-[10px] font-bold ${
+                  active
+                    ? 'bg-[var(--color-stellar-yellow)] text-[var(--color-ink-900)]'
+                    : 'bg-[var(--color-cream-200)] text-[var(--color-ink-500)]'
+                }`}
+              >
+                {s.num}
+              </span>
+              {s.label}
+            </span>
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
