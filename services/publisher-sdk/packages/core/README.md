@@ -45,7 +45,7 @@ All options can be passed to `verivyx(opts)` or set via environment variables (c
 | `timeoutMs` / `VERIVYX_TIMEOUT_MS` | no | Timeout in ms for the quick classify/requirements call (default `800`). |
 | `settleTimeoutMs` / `VERIVYX_SETTLE_TIMEOUT_MS` | no | Timeout in ms for the authorize/settle call that awaits the on-chain payment (default `60000`). Kept separate so a paying agent is never aborted mid-settle. |
 
-This package is `@verivyx/paywall` **0.3.0** (token-only). The framework adapters are **0.7.0**.
+This package is `@verivyx/paywall` **0.3.1** (token-only). The framework adapters are **0.7.0**.
 
 ## Docs
 

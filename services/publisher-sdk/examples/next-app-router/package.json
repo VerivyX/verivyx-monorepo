@@ -7,8 +7,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@verivyx/paywall-next": "^0.1.0",
-    "@verivyx/paywall": "^0.1.0"
+    "@verivyx/paywall-next": "^0.7.0",
+    "@verivyx/paywall": "^0.3.0"
   },
   "devDependencies": {
     "next": "^15.0.0",

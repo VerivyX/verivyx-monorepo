@@ -63,7 +63,7 @@ All options can be passed to `verivyxProxy(opts)` / `verivyxNext(opts)` or set v
 
 Also: `trustProxy` (default `true`), `advertise` (RSL/AIPREF discovery headers).
 
-This adapter is **0.7.0** and depends on `@verivyx/paywall` **0.3.0** (token-only).
+This adapter is **0.7.0** and depends on `@verivyx/paywall` **0.3.1** (token-only).
 
 ## Docs
 
