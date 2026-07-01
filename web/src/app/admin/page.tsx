@@ -15,13 +15,13 @@ import {
 } from 'lucide-react';
 import { api, type AdminStats } from '@/lib/api';
 
-type AccentKey = 'emerald' | 'blue' | 'violet' | 'amber';
+type AccentKey = 'mint' | 'yellow' | 'violet' | 'rose';
 
 const accentClasses: Record<AccentKey, { bg: string; icon: string }> = {
-  emerald: { bg: 'bg-emerald-100', icon: 'text-emerald-600' },
-  blue: { bg: 'bg-blue-100', icon: 'text-blue-600' },
-  violet: { bg: 'bg-violet-100', icon: 'text-violet-600' },
-  amber: { bg: 'bg-amber-100', icon: 'text-amber-600' },
+  mint: { bg: 'bg-[var(--color-stellar-mint)]/20', icon: 'text-[var(--color-ink-900)]' },
+  yellow: { bg: 'bg-[var(--color-stellar-yellow)]', icon: 'text-[var(--color-ink-900)]' },
+  violet: { bg: 'bg-[var(--color-stellar-violet-soft)]', icon: 'text-[var(--color-stellar-violet)]' },
+  rose: { bg: 'bg-[var(--color-stellar-rose)]/15', icon: 'text-[var(--color-stellar-rose)]' },
 };
 
 function StatCard({
@@ -131,14 +131,14 @@ export default function AdminPage() {
           value={`$${financial.gmvAllTime.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}
           sub="Total volume"
           icon={Coins}
-          accent="emerald"
+          accent="mint"
         />
         <StatCard
           label="GMV Last 7d"
           value={`$${financial.gmv7d.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}
           sub="Last 7 days"
           icon={TrendingUp}
-          accent="blue"
+          accent="yellow"
         />
         <StatCard
           label="Profit All Time"
@@ -152,7 +152,7 @@ export default function AdminPage() {
           value={`$${financial.platformProfit7d.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}
           sub="Last 7 days"
           icon={Zap}
-          accent="amber"
+          accent="rose"
         />
       </div>
 
@@ -161,8 +161,8 @@ export default function AdminPage() {
         {/* Ecosystem Growth */}
         <div className="surface-card p-6">
           <div className="flex items-center gap-3 mb-6">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100">
-              <Users size={18} className="text-violet-600" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-stellar-violet-soft)]">
+              <Users size={18} className="text-[var(--color-stellar-violet)]" />
             </div>
             <span className="text-base font-semibold text-[var(--color-ink-900)]">
               Ecosystem Growth
@@ -189,8 +189,8 @@ export default function AdminPage() {
         {/* Network Activity */}
         <div className="surface-card p-6">
           <div className="flex items-center gap-3 mb-6">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
-              <Activity size={18} className="text-blue-600" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-stellar-mint)]/20">
+              <Activity size={18} className="text-[var(--color-ink-900)]" />
             </div>
             <span className="text-base font-semibold text-[var(--color-ink-900)]">
               Network Activity (7d)
@@ -198,10 +198,10 @@ export default function AdminPage() {
           </div>
           <div className="grid grid-cols-2 gap-6">
             {[
-              { label: 'Verified', value: traffic.paymentsVerified7d, colorClass: 'text-emerald-600' },
-              { label: 'Humans', value: traffic.humansServed7d, colorClass: 'text-blue-600' },
-              { label: 'Bots Blocked', value: traffic.botsBlocked7d, colorClass: 'text-red-500' },
-              { label: 'Anomalies', value: traffic.powAnomalies7d, colorClass: 'text-amber-600' },
+              { label: 'Verified', value: traffic.paymentsVerified7d, colorClass: 'text-[#0a9e76]' },
+              { label: 'Humans', value: traffic.humansServed7d, colorClass: 'text-[var(--color-stellar-violet)]' },
+              { label: 'Bots Blocked', value: traffic.botsBlocked7d, colorClass: 'text-[var(--color-stellar-rose)]' },
+              { label: 'Anomalies', value: traffic.powAnomalies7d, colorClass: 'text-[var(--color-ink-900)]' },
             ].map(({ label, value, colorClass }) => (
               <div key={label}>
                 <div className={`font-mono text-2xl font-bold ${colorClass}`}>{value}</div>
@@ -217,8 +217,8 @@ export default function AdminPage() {
       {/* Top Agents table */}
       <div className="surface-card p-6 mb-6">
         <div className="flex items-center gap-3 mb-6">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-100">
-            <Bot size={18} className="text-amber-600" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-stellar-yellow)]">
+            <Bot size={18} className="text-[var(--color-ink-900)]" />
           </div>
           <span className="text-base font-semibold text-[var(--color-ink-900)]">
             Revenue by AI Agent
@@ -257,7 +257,7 @@ export default function AdminPage() {
                     <td className="py-4 text-right font-mono text-[var(--color-ink-500)]">
                       {a.intercepts.toLocaleString()}
                     </td>
-                    <td className="py-4 text-right font-mono font-semibold text-emerald-600">
+                    <td className="py-4 text-right font-mono font-semibold text-[#0a9e76]">
                       ${a.revenue.toFixed(4)}
                     </td>
                   </tr>
@@ -270,11 +270,11 @@ export default function AdminPage() {
 
       {/* PoW anomaly banner */}
       {traffic.powAnomalies7d > 0 && (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 mt-0.5">
-            <AlertTriangle size={13} className="text-white" />
+        <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-stellar-yellow)]/50 bg-[var(--color-stellar-yellow-soft)] px-5 py-4">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-stellar-yellow)] mt-0.5">
+            <AlertTriangle size={13} className="text-[var(--color-ink-900)]" />
           </div>
-          <p className="text-sm text-amber-800">
+          <p className="text-sm text-[var(--color-ink-700)]">
             <strong className="font-bold">{traffic.powAnomalies7d} Anomalies Found.</strong>{' '}
             Unusual PoW solve speeds detected. Investigate potential replay attacks.
           </p>

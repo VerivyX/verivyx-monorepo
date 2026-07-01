@@ -24,8 +24,10 @@ app.listen(3000);
 
 ## Run live
 
-Set `VERIVYX_TOKEN` and `VERIVYX_DOMAIN` before starting:
+Set `VERIVYX_TOKEN` before starting (token-only config):
 
 ```
-VERIVYX_TOKEN=<your-token> VERIVYX_DOMAIN=<your-domain> node src/server.js
+VERIVYX_TOKEN=<your-token> node src/server.js
 ```
+
+`VERIVYX_DOMAIN` is optional (a legacy analytics label) and not required.

@@ -172,18 +172,18 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-[var(--color-cream-50)]">
       {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+      <header className="sticky top-0 z-40 border-b border-[var(--color-cream-200)] bg-white/85 backdrop-blur">
+        <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-x-5 gap-y-3 px-6 py-3">
           <div className="flex items-center gap-3">
             <LogoMark size={32} />
             <div>
               <p className="text-sm font-semibold tracking-tight">Verivyx</p>
               <p className="text-xs text-[var(--color-ink-500)]">Creator dashboard</p>
             </div>
+            <PaywallStatusPill enabled={paywallOn} />
           </div>
 
-          <div className="flex items-center gap-3">
-            <PaywallStatusPill enabled={paywallOn} />
+          <div className="flex flex-wrap items-center gap-2">
             <Link href="/dashboard/integrations" className="btn-yellow text-sm">
               <Zap size={14} /> Set up integration
             </Link>
@@ -197,12 +197,19 @@ export default function DashboardPage() {
               <Wallet size={14} /> Agent Wallet
             </Link>
             {user?.role === 'ADMIN' && (
-              <Link href="/admin" className="btn-ghost text-sm" style={{ color: '#a78bfa' }}>
+              <Link href="/admin" className="btn-ghost text-sm" style={{ color: '#7e5afe' }}>
                 <Shield size={14} /> Admin
               </Link>
             )}
-            <button onClick={refresh} disabled={refreshing} className="btn-ghost text-sm">
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
+            <span className="mx-1 hidden h-6 w-px bg-[var(--color-cream-200)] sm:block" />
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              title="Refresh"
+              aria-label="Refresh"
+              className="grid h-9 w-9 place-items-center rounded-full border border-[var(--color-cream-200)] text-[var(--color-ink-500)] transition-colors hover:bg-[var(--color-cream-50)] disabled:opacity-60"
+            >
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             </button>
             <button onClick={handleLogout} className="btn-primary text-sm">
               <LogOut size={14} /> Logout
@@ -238,7 +245,7 @@ export default function DashboardPage() {
 
         {/* Master toggle */}
         <section
-          className={`mt-8 flex flex-col gap-4 rounded-3xl border p-6 md:flex-row md:items-center md:justify-between md:p-8 ${
+          className={`mt-8 flex flex-col gap-4 rounded-[20px] border p-6 md:flex-row md:items-center md:justify-between md:p-7 ${
             paywallOn
               ? 'border-[var(--color-cream-200)] bg-white'
               : 'border-[var(--color-stellar-rose)]/20 bg-[var(--color-stellar-rose)]/5'
@@ -283,6 +290,13 @@ export default function DashboardPage() {
               totals && totals.earnedDeltaPct !== 0
                 ? `${totals.earnedDeltaPct > 0 ? '↑' : '↓'} ${Math.abs(totals.earnedDeltaPct)}% vs prior week`
                 : 'No prior data yet'
+            }
+            subTone={
+              totals && totals.earnedDeltaPct > 0
+                ? 'up'
+                : totals && totals.earnedDeltaPct < 0
+                  ? 'down'
+                  : 'muted'
             }
             accent="yellow"
           />
@@ -641,12 +655,14 @@ function KpiCard({
   value,
   sub,
   accent,
+  subTone = 'muted',
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   sub: string;
   accent: 'yellow' | 'violet' | 'mint' | 'rose';
+  subTone?: 'up' | 'down' | 'muted';
 }) {
   const accentBg = {
     yellow: 'bg-[var(--color-stellar-yellow)] text-[var(--color-ink-900)]',
@@ -655,16 +671,22 @@ function KpiCard({
     rose: 'bg-[var(--color-stellar-rose)]/15 text-[var(--color-stellar-rose)]',
   }[accent];
 
+  const subColor = {
+    up: 'text-[#0a9e76]',
+    down: 'text-[var(--color-stellar-rose)]',
+    muted: 'text-[var(--color-ink-500)]',
+  }[subTone];
+
   return (
     <div className="surface-card surface-card-hover p-5">
       <div className="flex items-center justify-between">
         <span className={`grid h-9 w-9 place-items-center rounded-full ${accentBg}`}>{icon}</span>
-        <span className="text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
+        <span className="text-right text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
           {label}
         </span>
       </div>
       <p className="mt-6 font-mono text-3xl font-semibold tracking-tight">{value}</p>
-      <p className="mt-1 text-xs text-[var(--color-ink-500)]">{sub}</p>
+      <p className={`mt-1 text-xs ${subColor}`}>{sub}</p>
     </div>
   );
 }

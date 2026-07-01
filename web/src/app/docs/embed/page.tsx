@@ -42,8 +42,25 @@ export default function EmbedDocs() {
       <Ul>
         <Li>Add the tag <strong>once per domain</strong>, not once per page — it applies to your whole property.</Li>
         <Li>Place it just before the closing <C>{'</body>'}</C> tag.</Li>
-        <Li>Get the exact, pre-filled snippet from <strong>Dashboard → Get Script</strong>.</Li>
+        <Li>Get the exact, pre-filled snippet from <A href="/dashboard/integrations">Set up integration</A>.</Li>
       </Ul>
+
+      <H2 id="container">Required content container</H2>
+      <P>
+        The gate hydrates the real article into an element with the id <C>vx-article</C>. Wrap the content
+        you want to protect in that container — if no element with <C>id=&quot;vx-article&quot;</C> exists,
+        the hydrate script silently no-ops and verified humans never see the body.
+      </P>
+      <CodeBlock
+        lang="html"
+        code={`<article id="vx-article">
+  <!-- your article body -->
+</article>`}
+      />
+      <Note>
+        Only one <C>#vx-article</C> element is needed, on the pages you protect. The server fills it in for
+        verified humans; for agents it stays withheld and the origin returns <C>402</C>.
+      </Note>
 
       <H2 id="behavior">What it does</H2>
       <Ul>

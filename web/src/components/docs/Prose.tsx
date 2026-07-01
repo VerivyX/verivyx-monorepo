@@ -1,6 +1,30 @@
 import React from 'react';
+import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 
 // Typography primitives for docs pages — Tailwind-only, server-renderable.
+
+// Bordered link card used in "Next steps" grids.
+export function NextCard({ href, children }: { href: string; children: React.ReactNode }) {
+  const external = href.startsWith('http');
+  const cls =
+    'flex items-center justify-between rounded-xl border border-[var(--color-cream-200)] px-4 py-3.5 text-sm font-medium text-[var(--color-ink-900)] transition hover:border-[#d6d4c8] hover:bg-[var(--color-cream-50)]';
+  const inner = (
+    <>
+      {children}
+      <ArrowRight size={15} className="text-[var(--color-ink-300)]" />
+    </>
+  );
+  return external ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={cls}>
+      {inner}
+    </a>
+  ) : (
+    <Link href={href} className={cls}>
+      {inner}
+    </Link>
+  );
+}
 
 export function Lead({ children }: { children: React.ReactNode }) {
   return <p className="mt-4 text-lg leading-relaxed text-[var(--color-ink-500)]">{children}</p>;

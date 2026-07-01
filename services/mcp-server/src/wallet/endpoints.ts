@@ -1,8 +1,9 @@
 /**
  * Wallet lifecycle HTTP endpoints (Plan 3 T1).
  *
- * Mounted at /wallet, behind requireMcpAuth. All endpoints require an OAuth caller
- * (kind:"oauth"); static-key callers receive 403.
+ * Mounted at /wallet, behind requireUserAuth (see index.ts). All endpoints require a
+ * real user subject — kind:"oauth" (Hydra JWT) OR kind:"dashboard" (auth-service HS256
+ * token); static-key callers (kind:"key") receive 403 via requireOAuthSub.
  *
  * Lifecycle:
  *   POST /wallet/session-signer  — issue (or retrieve existing) ed25519 session pubkey

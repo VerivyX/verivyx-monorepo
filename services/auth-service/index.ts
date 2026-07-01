@@ -651,7 +651,7 @@ app.post('/api/v1/oauth/logout', authGuard, async (req: Request, res: Response) 
 });
 
 // MCP resource URI that every issued access token must carry as audience.
-// Defaults to the production value; wired into docker-compose in T7.
+// Defaults to the production value; overridable via docker-compose env.
 const MCP_RESOURCE_URI = (process.env.MCP_RESOURCE_URI ?? 'https://mcp.verivyx.com/mcp').replace(/\/$/, '');
 
 // --- Hydra OAuth2 consent challenge ---
@@ -990,7 +990,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
   if (powAnomaly) {
     void repUpdate(repKey, { outcome: 'bot', powDurationMs: powMs, anomaly: true });
     void prisma.user
-      .findFirst({ where: { domain: claims.domain }, select: { id: true } })
+      .findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } })
       .then((u: { id: number } | null) => {
         if (u) {
           return prisma.event.create({
@@ -1006,7 +1006,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
   if (fpReason) {
     void repUpdate(repKey, { outcome: 'bot', powDurationMs: powMs, anomaly: true });
     void prisma.user
-      .findFirst({ where: { domain: claims.domain }, select: { id: true } })
+      .findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } })
       .then((u: { id: number } | null) => {
         if (u) {
           return prisma.event.create({
@@ -1034,7 +1034,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
 
   void repUpdate(repKey, { outcome: 'human', powDurationMs: powMs, anomaly: false });
 
-  const user = await prisma.user.findFirst({ where: { domain: claims.domain }, select: { id: true } });
+  const user = await prisma.user.findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } });
   if (user) {
     void prisma.event
       .create({
@@ -1071,7 +1071,7 @@ app.post('/api/v1/auth/events', internalGuard, async (req: Request, res: Respons
 
   const user = reqSiteId
     ? await prisma.user.findFirst({ where: { siteId: reqSiteId } })
-    : await prisma.user.findFirst({ where: { domain: reqDomain } });
+    : await prisma.user.findFirst({ where: { domain: reqDomain, domainVerified: true } });
   if (!user) return res.status(404).json({ error: 'No creator registered for this site' });
 
   const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v.slice(0, 256) : null);
@@ -1126,7 +1126,7 @@ app.get('/api/v1/auth/lookup', internalGuard, async (req: Request, res: Response
   } as const;
   const user = token
     ? await prisma.user.findFirst({ where: { wpInternalToken: token }, select })
-    : await prisma.user.findFirst({ where: { domain }, select });
+    : await prisma.user.findFirst({ where: { domain, domainVerified: true }, select });
   if (!user) return res.status(404).json({ error: 'Not found' });
   // Stable tenant key (domain → siteId fallback). Guard against the impossible
   // both-empty case so a malformed row degrades to onchainKey:null, not a 500.
@@ -1214,7 +1214,7 @@ app.get('/api/v1/auth/content/get', internalGuard, async (req: Request, res: Res
   const domain = req.query.domain as string | undefined;
   const slug = req.query.slug as string | undefined;
   if (!domain || !slug) return res.status(400).json({ error: 'domain and slug required' });
-  const user = await prisma.user.findFirst({ where: { domain }, select: { id: true } });
+  const user = await prisma.user.findFirst({ where: { domain, domainVerified: true }, select: { id: true } });
   if (!user) return res.status(404).json({ error: 'creator_not_found' });
   const content = await prisma.content.findFirst({ where: { userId: user.id, slug } });
   if (!content) return res.status(404).json({ error: 'content_not_found' });

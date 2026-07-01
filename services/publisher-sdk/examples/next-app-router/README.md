@@ -24,11 +24,12 @@ export const GET = vx.protect(async (_req, ctx) => {
 
 ## Run live
 
-Set `VERIVYX_TOKEN` and `VERIVYX_DOMAIN` in your `.env.local` before starting:
+Set `VERIVYX_TOKEN` in your `.env.local` before starting (token-only config):
 
 ```
 VERIVYX_TOKEN=<your-token>
-VERIVYX_DOMAIN=<your-domain>
 ```
+
+`VERIVYX_DOMAIN` is optional (a legacy analytics label) and not required.
 
 Then run `next dev` or `next build && next start`.

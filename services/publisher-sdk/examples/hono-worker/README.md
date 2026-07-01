@@ -24,11 +24,12 @@ export default app;
 
 ## Run live
 
-Set `VERIVYX_TOKEN` and `VERIVYX_DOMAIN` as Cloudflare Workers secrets:
+Set `VERIVYX_TOKEN` as a Cloudflare Workers secret (token-only config):
 
 ```
 wrangler secret put VERIVYX_TOKEN
-wrangler secret put VERIVYX_DOMAIN
 ```
+
+`VERIVYX_DOMAIN` is optional (a legacy analytics label) and not required.
 
 Then deploy with `wrangler deploy`.

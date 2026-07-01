@@ -7,9 +7,10 @@
  *   The adapter performs the 3-way split atomically inside itself.
  *   Relayer must ONLY fee-sponsor; it must NOT call distribute.
  *
- * LEGACY — paywall_core.transfer(from, to, amount)
- *   The classic x402 path: agent transfers USDC to paywall_core,
- *   relayer sponsors + then calls keeper.distribute() to split.
+ * LEGACY (enum name) — the classic x402 path, and the CURRENT LIVE path.
+ *   USDC.transfer(agent -> paywall_core, amount): the agent transfers USDC to
+ *   the paywall_core contract on the USDC token, then the relayer sponsors +
+ *   calls keeper.distribute() to split it to creator + platform.
  *
  * classifySettlePath is a pure function — no I/O, easily unit-tested.
  */

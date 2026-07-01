@@ -19,11 +19,13 @@ export default function RoadmapDocs() {
           {
             icon: <Boxes className="h-5 w-5" />,
             title: 'Verivyx MCP Server',
+            status: 'Live (early access)',
             body: 'A first-party Model Context Protocol server so agents like Claude can discover Verivyx-protected resources and settle payments natively — no glue code.',
           },
           {
             icon: <Code2 className="h-5 w-5" />,
             title: 'Developer SDK',
+            status: 'Coming soon',
             body: 'A drop-in TypeScript SDK to add x402 payments to your own agent in a few lines — handle the 402, sign the USDC transfer, retry, done.',
           },
         ].map((c) => (
@@ -33,7 +35,7 @@ export default function RoadmapDocs() {
                 {c.icon}
               </span>
               <span className="tag-chip bg-[var(--color-stellar-violet-soft)] text-[var(--color-ink-900)]">
-                Coming soon
+                {c.status}
               </span>
             </div>
             <h3 className="mt-5 text-lg font-semibold">{c.title}</h3>
