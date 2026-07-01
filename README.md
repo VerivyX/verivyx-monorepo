@@ -101,7 +101,8 @@ For local development without a funded Stellar wallet, set `FACILITATOR_MODE=stu
 The domain registry and settlement logic run trustlessly on Stellar Soroban — anyone can verify the
 live deployment on-chain:
 
-- **`paywall_core`** — [`CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH`](https://stellar.expert/explorer/testnet/contract/CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH)
+- **`paywall_core`** — [`CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH`](https://stellar.expert/explorer/testnet/contract/CAERLWHD47NXIAWNPXUF726BNHPFCYSFU3BVVMWQ2G4LBPWG7GXUTGXH) — domain registry + settlement split (`register` / `distribute`); the live settlement path.
+- **`verivyx_pay_adapter`** — [`CADDPCS2CAP4O66GBHRNO6G4SUJ6S6PCLM25Q5WAZ4Q43MACYMUITUC5`](https://stellar.expert/explorer/testnet/contract/CADDPCS2CAP4O66GBHRNO6G4SUJ6S6PCLM25Q5WAZ4Q43MACYMUITUC5) — trustless single-TX atomic 3-way split (deployed + tested; not yet the live path).
 
 Full deployment evidence (deploy / init / upgrade transactions, WASM hash) is in
 [`services/soroban-contracts/README.md`](services/soroban-contracts/README.md).
