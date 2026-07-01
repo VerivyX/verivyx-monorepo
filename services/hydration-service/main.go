@@ -210,6 +210,7 @@ type EventPayload struct {
 // ----------------- session JWT verification -----------------
 
 type humanClaims struct {
+	SiteId string `json:"siteId"`
 	Domain string `json:"domain"`
 	IP     string `json:"ip"`
 	UA     string `json:"ua"`
@@ -650,7 +651,7 @@ func hydrateHandler(c *gin.Context) {
 	if strings.HasPrefix(auth, "Bearer ") {
 		token := strings.TrimPrefix(auth, "Bearer ")
 		claims, err := verifyHumanSession(token)
-		if err == nil && claims.Domain == req.Domain {
+		if err == nil && ((claims.SiteId != "" && cfg != nil && claims.SiteId == cfg.SiteId) || (claims.Domain != "" && claims.Domain == req.Domain)) {
 			go logEvent(EventPayload{
 				Domain:    req.Domain,
 				SiteId:    cfg.SiteId,
