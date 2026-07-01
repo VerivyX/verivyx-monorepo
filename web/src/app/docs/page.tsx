@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
-import { Lead, H2, P, Ul, Li, A, C } from '@/components/docs/Prose';
+import { Lead, H2, P, Ul, Li, C, NextCard } from '@/components/docs/Prose';
 
 export const metadata: Metadata = { title: 'Introduction — Verivyx Docs' };
 
@@ -38,14 +38,14 @@ export default function DocsIntro() {
       </Ul>
 
       <H2 id="next">Next steps</H2>
-      <Ul>
-        <Li><A href="/docs/quickstart">Quickstart</A> — create an account and go live in minutes.</Li>
-        <Li><A href="/docs/embed">Embed script</A> — the one tag and its options.</Li>
-        <Li><A href="/docs/wordpress">WordPress plugin</A> — one-click install, no code.</Li>
-        <Li><A href="/docs/x402">How agents pay</A> — the x402 flow for agent developers.</Li>
-        <Li><A href="/docs/api-overview">API</A> — REST endpoints for payments, content, and creators.</Li>
-        <Li><A href="https://playground.verivyx.com">Playground</A> — watch an agent pay a paywall live.</Li>
-      </Ul>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <NextCard href="/docs/quickstart">Quickstart</NextCard>
+        <NextCard href="/docs/embed">Embed script</NextCard>
+        <NextCard href="/docs/wordpress">WordPress plugin</NextCard>
+        <NextCard href="/docs/x402">How agents pay</NextCard>
+        <NextCard href="/docs/api-overview">API</NextCard>
+        <NextCard href="https://playground.verivyx.com">Playground</NextCard>
+      </div>
 
       <div className="mt-12 border-t border-[var(--color-cream-200)] pt-6">
         <Link href="/docs/quickstart" className="btn-yellow text-sm">

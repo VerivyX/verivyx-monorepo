@@ -155,7 +155,7 @@ export default function CreatorTransactionsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full min-w-[820px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-[var(--color-cream-200)] text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-500)]">
                     <th className="pb-3">Time</th>
@@ -163,41 +163,51 @@ export default function CreatorTransactionsPage() {
                     <th className="pb-3 text-right">Agent pays</th>
                     <th className="pb-3 text-right">You receive</th>
                     <th className="pb-3 text-right">Platform fee</th>
-                    <th className="pb-3">Rail</th>
-                    <th className="pb-3">Transfer</th>
-                    <th className="pb-3">Distribute</th>
+                    <th className="px-3 pb-3">Rail</th>
+                    <th className="px-3 pb-3">Transfer</th>
+                    <th className="px-3 pb-3">Distribute</th>
                     <th className="pb-3">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((e) => (
+                  {rows.map((e) => {
+                    const status = e.status ?? 'confirmed';
+                    const isConfirmed = status.toLowerCase() === 'confirmed';
+                    return (
                     <tr key={e.id} className="border-b border-[var(--color-cream-200)]/70 text-sm">
-                      <td className="py-4 font-mono text-xs text-[var(--color-ink-500)]">{fmtTime(e.createdAt)}</td>
-                      <td className="py-4">
+                      <td className="py-3.5 font-mono text-xs text-[var(--color-ink-500)]">{fmtTime(e.createdAt)}</td>
+                      <td className="py-3.5">
                         <div className="font-medium">{e.agent ?? 'Unknown'}</div>
                         {e.category && <span className="tag-chip mt-1 text-[11px]">{e.category}</span>}
                       </td>
-                      <td className="py-4 text-right font-mono">${e.amountUsdc.toFixed(4)}</td>
-                      <td className="py-4 text-right font-mono text-emerald-600">
+                      <td className="py-3.5 text-right font-mono">${e.amountUsdc.toFixed(4)}</td>
+                      <td className="py-3.5 text-right font-mono text-[#0a7d5e]">
                         {e.creatorAmountUsdc != null ? `$${e.creatorAmountUsdc.toFixed(4)}` : '—'}
                       </td>
-                      <td className="py-4 text-right font-mono text-[var(--color-ink-500)]">
+                      <td className="py-3.5 text-right font-mono text-[var(--color-ink-500)]">
                         {e.platformAmountUsdc != null ? `$${e.platformAmountUsdc.toFixed(4)}` : '—'}
                       </td>
-                      <td className="py-4">
+                      <td className="px-3 py-3.5">
                         <span className="tag-chip text-[11px]">{railLabel(e.asset)}</span>
                       </td>
-                      <td className="py-4">
+                      <td className="px-3 py-3.5">
                         <HashLink hash={e.txHash} network={e.network} label="Transfer" />
                       </td>
-                      <td className="py-4">
+                      <td className="px-3 py-3.5">
                         <HashLink hash={e.distributeTransaction} network={e.network} label="Distribute" />
                       </td>
-                      <td className="py-4">
-                        <span className="tag-chip text-[11px] capitalize">{e.status ?? 'confirmed'}</span>
+                      <td className="py-3.5">
+                        {isConfirmed ? (
+                          <span className="inline-flex items-center rounded-full bg-[rgba(29,233,182,0.18)] px-2.5 py-0.5 text-[11px] font-medium capitalize text-[#0a7d5e]">
+                            {status}
+                          </span>
+                        ) : (
+                          <span className="tag-chip text-[11px] capitalize">{status}</span>
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
 
