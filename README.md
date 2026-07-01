@@ -116,8 +116,8 @@ Full deployment evidence (deploy / init / upgrade transactions, WASM hash) is in
   missing. Secrets never fall back to a hardcoded default. Keep `.env.example` in sync.
 - On testnet, network constants (USDC issuer, RPC endpoints) have safe defaults; on **mainnet** they
   must be set explicitly.
-- The multi-operation payment transaction contains exactly two payment operations: the creator and
-  the platform wallet.
+- On the classic `distribute` path, the split is two payment operations: the creator and the
+  platform wallet. (The `verivyx_pay_adapter` path does a 3-way split, adding the flat MCP fee.)
 - TypeScript: no `any` (use `unknown` + narrowing). Go: structured `log.Printf`. No secrets in logs.
 
 ---
