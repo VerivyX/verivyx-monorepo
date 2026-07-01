@@ -250,9 +250,9 @@ export default function PlaygroundPage() {
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
             {/* Chat */}
             <div className="lg:col-span-2">
-              <div className="surface-card flex h-[32rem] flex-col">
+              <div className="surface-card flex h-[35rem] flex-col overflow-hidden">
                 {/* Target selector: a real SDK-protected site vs a real protected WordPress post */}
-                <div className="flex items-center gap-2 border-b border-[var(--color-cream-200)] p-3">
+                <div className="flex items-center gap-2 border-b border-[var(--color-cream-200)] px-4 py-3">
                   <span className="text-xs font-medium text-[var(--color-ink-500)]">Pay for:</span>
                   <div className="inline-flex rounded-lg border border-[var(--color-cream-200)] p-0.5">
                     {TARGETS.map((t) => (
@@ -317,7 +317,7 @@ export default function PlaygroundPage() {
                     <button
                       type="submit"
                       disabled={busy || !input.trim()}
-                      className="btn-yellow text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[var(--color-stellar-yellow)] text-[var(--color-ink-900)] transition hover:bg-[#ffe653] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                     </button>
