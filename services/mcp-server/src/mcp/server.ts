@@ -6,6 +6,23 @@ import type { PaymentService } from "../chains/payments.js";
 import { logger } from "../logger.js";
 import { mapSettlementError } from "../wallet/errorMap.js";
 
+/**
+ * Actionable hints keyed by the stable error code from mapSettlementError.
+ * The real fix for delegation/balance failures is on the Agent Wallet page —
+ * NOT re-authorizing the OAuth connector — so we spell that out for the agent.
+ * `settlement_failed` (catch-all) has no hint on purpose.
+ */
+const ERROR_HINTS: Record<string, string> = {
+  delegation_expired:
+    "Your Verivyx wallet delegation has expired or run out of budget. Re-delegate on the Agent Wallet page (dashboard → Agent Wallet, or https://mcp.verivyx.com/mcp/wallet) — this is NOT an OAuth/connector issue.",
+  delegation_budget_exhausted:
+    "Your Verivyx wallet delegation has run out of budget. Re-delegate with a higher budget on the Agent Wallet page (dashboard → Agent Wallet, or https://mcp.verivyx.com/mcp/wallet) — this is NOT an OAuth/connector issue.",
+  insufficient_balance:
+    "Top up your agent smart account on the Agent Wallet page (dashboard → Agent Wallet).",
+  no_wallet_linked:
+    "No agent wallet is linked. Set one up on the Agent Wallet page (dashboard → Agent Wallet).",
+};
+
 const fetchInputShape = {
   url: z.string().url().describe("Full URL of the x402-protected resource to fetch"),
   method: z.enum(["GET", "POST"]).default("GET").describe("HTTP method"),
@@ -37,7 +54,8 @@ function asNonCustodialError(error: unknown) {
   // Pull diagnostics attached by the simulate-error path in sessionPayment.ts (best-effort).
   const diagnostics = (error as { diagnostics?: string[] }).diagnostics;
   const code = mapSettlementError({ message, diagnostics });
-  const payload = { error: message, code };
+  const hint = ERROR_HINTS[code];
+  const payload = hint ? { error: message, code, hint } : { error: message, code };
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
