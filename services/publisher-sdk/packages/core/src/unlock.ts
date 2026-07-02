@@ -24,7 +24,7 @@ function jsStr(s: string): string {
  * for them. No external deps; uses Web Crypto.
  */
 export function buildUnlockHtml(args: {
-  slug: string; url: string; authBase: string; domain: string;
+  slug: string; url: string; authBase: string; domain: string; token: string;
   seo?: { title: string; excerpt: string };
 }): string {
   const seo = args.seo ?? { title: "Protected content", excerpt: "Verify to read the full article." };
@@ -32,13 +32,13 @@ export function buildUnlockHtml(args: {
   const teaser = buildPreviewHtml({ title: seo.title, excerpt: seo.excerpt, url: args.url, jsonLd });
   const challengeUrl = jsStr(args.authBase) + "/api/v1/auth/challenge";
   const verifyUrl = jsStr(args.authBase) + "/api/v1/auth/verify-human";
-  const cfg = `{challengeUrl:'${challengeUrl}',verifyUrl:'${verifyUrl}',domain:'${jsStr(args.domain)}',slug:'${jsStr(args.slug)}'}`;
+  const cfg = `{challengeUrl:'${challengeUrl}',verifyUrl:'${verifyUrl}',token:'${jsStr(args.token)}',domain:'${jsStr(args.domain)}',slug:'${jsStr(args.slug)}'}`;
   const script = `<script>(function(){var C=${cfg};
 function lz(b){var n=0;for(var i=0;i<b.length;i++){var x=b[i];if(x===0){n+=8;continue;}for(var j=7;j>=0;j--){if((x>>j)&1)return n;n++;}return n;}return n;}
 async function sha(s){var d=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return new Uint8Array(d);}
 async function solve(ch,sa,df){var n=0;for(;;){if((lz(await sha(ch+':'+sa+':'+n)))>=df)return ''+n;n++;}}
 async function go(){try{
-var r=await fetch(C.challengeUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({domain:C.domain,slug:C.slug})});
+var r=await fetch(C.challengeUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:C.token,domain:C.domain||undefined,slug:C.slug})});
 if(!r.ok)throw 0;var c=await r.json();var t0=Date.now();var nonce=await solve(c.challenge,c.salt,c.difficulty);var dur=Date.now()-t0;
 var fp={userAgent:navigator.userAgent,languages:(navigator.languages&&navigator.languages.length)?Array.prototype.slice.call(navigator.languages):[navigator.language],hardwareConcurrency:navigator.hardwareConcurrency||1,screenWidth:screen.width,screenHeight:screen.height};
 var v=await fetch(C.verifyUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({challenge:c.challenge,nonce:nonce,fingerprint:fp,powDurationMs:dur})});

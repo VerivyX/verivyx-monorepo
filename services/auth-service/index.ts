@@ -133,6 +133,7 @@ function clientJa4(req: Request): string {
 
 type CreatorClaims = { id: number; email: string };
 type ChallengeClaims = {
+  siteId?: string;
   domain: string;
   slug: string;
   salt: string;
@@ -142,7 +143,7 @@ type ChallengeClaims = {
   ja4?: string;
   tier?: Tier;
 };
-type HumanClaims = { domain: string; ip: string; ua: string };
+type HumanClaims = { siteId?: string; domain: string; ip: string; ua: string };
 
 function signCreator(c: CreatorClaims): string {
   return jwt.sign(c, JWT_SECRET, { expiresIn: '7d', audience: 'creator' });
@@ -909,12 +910,24 @@ app.patch('/api/v1/auth/settings', authGuard, async (req: Request, res: Response
 // --- Humanity challenge / verification ---
 
 app.post('/api/v1/auth/challenge', async (req: Request, res: Response) => {
-  const { domain, slug } = req.body ?? {};
-  const cleanDomain = normalizeDomain(domain);
+  const { token, domain, slug } = req.body ?? {};
   const cleanSlug = validateSlug(slug);
-  if (!cleanDomain || !cleanSlug) {
-    return res.status(400).json({ error: 'domain and slug required' });
+  const hasToken = typeof token === 'string' && token.length > 0;
+  // Token-only sites have no domain; only normalize/validate domain on the domain branch.
+  const cleanDomain = hasToken ? null : normalizeDomain(domain);
+  if (!cleanSlug || (!hasToken && !cleanDomain)) {
+    return res.status(400).json({ error: 'slug and (token or domain) required' });
   }
+
+  // Resolve the site: token is primary (unfiltered), domain requires verification.
+  const site = hasToken
+    ? await prisma.user.findFirst({ where: { wpInternalToken: token }, select: { siteId: true, domain: true } })
+    : await prisma.user.findFirst({ where: { domain: cleanDomain!, domainVerified: true }, select: { siteId: true, domain: true } });
+  if (!site) {
+    return res.status(400).json({ error: 'unknown_site' });
+  }
+  const resolvedSiteId = site.siteId ?? undefined;
+  const resolvedDomain = site.domain ?? cleanDomain ?? '';
 
   const ip = reqIp(req);
   if (!rateLimit(ip + ':challenge', 10, 60_000)) {
@@ -928,7 +941,8 @@ app.post('/api/v1/auth/challenge', async (req: Request, res: Response) => {
   const difficulty = adaptDifficulty(POW_DIFFICULTY, rep.tier);
 
   const challenge = signChallenge({
-    domain: cleanDomain,
+    siteId: resolvedSiteId,
+    domain: resolvedDomain,
     slug: cleanSlug,
     salt,
     difficulty,
@@ -990,7 +1004,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
   if (powAnomaly) {
     void repUpdate(repKey, { outcome: 'bot', powDurationMs: powMs, anomaly: true });
     void prisma.user
-      .findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } })
+      .findFirst({ where: claims.siteId ? { siteId: claims.siteId } : { domain: claims.domain, domainVerified: true }, select: { id: true } })
       .then((u: { id: number } | null) => {
         if (u) {
           return prisma.event.create({
@@ -1006,7 +1020,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
   if (fpReason) {
     void repUpdate(repKey, { outcome: 'bot', powDurationMs: powMs, anomaly: true });
     void prisma.user
-      .findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } })
+      .findFirst({ where: claims.siteId ? { siteId: claims.siteId } : { domain: claims.domain, domainVerified: true }, select: { id: true } })
       .then((u: { id: number } | null) => {
         if (u) {
           return prisma.event.create({
@@ -1027,6 +1041,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
   }
 
   const sessionToken = signHumanSession({
+    siteId: claims.siteId,
     domain: claims.domain,
     ip,
     ua,
@@ -1034,7 +1049,7 @@ app.post('/api/v1/auth/verify-human', async (req: Request, res: Response) => {
 
   void repUpdate(repKey, { outcome: 'human', powDurationMs: powMs, anomaly: false });
 
-  const user = await prisma.user.findFirst({ where: { domain: claims.domain, domainVerified: true }, select: { id: true } });
+  const user = await prisma.user.findFirst({ where: claims.siteId ? { siteId: claims.siteId } : { domain: claims.domain, domainVerified: true }, select: { id: true } });
   if (user) {
     void prisma.event
       .create({

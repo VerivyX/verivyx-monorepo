@@ -22,7 +22,7 @@ The simplest integration is **one middleware file** that gates a whole app. Ever
 - **Verified search crawlers** (Googlebot/Bingbot, IP-range checked) → an SEO preview with anti-cloaking JSON-LD.
 - **Everyone else unverified** → the preview teaser, or a `402` — the protected body is never served.
 
-Setup is token-only: sign up, set your payout wallet and price, copy your site token, and add the middleware — there is no domain entry and no DNS verification step. The SDK only ever sends your site token, the route slug, and proof-of-payment/verification to the Verivyx API — the content body stays on your server (authorize-only model). The core SDK is **0.3.1** (token-only); the framework adapters are **0.7.0**.
+Setup is token-only: sign up, set your payout wallet and price, copy your site token, and add the middleware — there is no domain entry and no DNS verification step. The SDK only ever sends your site token, the route slug, and proof-of-payment/verification to the Verivyx API — the content body stays on your server (authorize-only model). The core SDK is **0.3.2** (token-only); the framework adapters are **0.7.1**.
 
 See each package README for framework-specific quickstarts, and the full guide at
 [docs.verivyx.com/docs/sdk](https://docs.verivyx.com/docs/sdk). Live demos:
